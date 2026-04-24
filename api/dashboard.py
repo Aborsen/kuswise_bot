@@ -312,6 +312,8 @@ _BOOTSTRAP_HTML = """<!DOCTYPE html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>KusWise Bot</title>
+<link rel="icon" type="image/png" href="/logo.png">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
 <style>
   :root { color-scheme: light dark; }
@@ -438,6 +440,7 @@ def _unauthorized_html() -> str:
 <html lang="uk"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>KusWise Bot</title>
+<link rel="icon" type="image/png" href="/logo.png">
 <style>
   :root { color-scheme: light dark; }
   body { margin: 0; padding: 40px 20px;
@@ -558,6 +561,8 @@ _DASHBOARD_HTML = r"""<!DOCTYPE html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>KusWise Bot</title>
+<link rel="icon" type="image/png" href="/logo.png">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <meta http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate">
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
 <style>

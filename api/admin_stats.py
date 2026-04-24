@@ -452,10 +452,13 @@ def build_html() -> str:
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>KusWise Bot — Admin</title>
+<link rel="icon" type="image/png" href="/logo.png">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <style>
   * {{ box-sizing: border-box; }}
   body {{ font-family: -apple-system, system-ui, 'Segoe UI', sans-serif; background: #0f0f1a; color: #e0e0e0; margin: 0; padding: 20px; }}
-  h1 {{ color: #e94560; margin-bottom: 4px; }}
+  h1 {{ color: #e94560; margin-bottom: 4px; display:flex; align-items:center; gap:14px; }}
+  h1 img.logo {{ width: 48px; height: 48px; border-radius: 50%; object-fit: cover; background:#000; }}
   h2 {{ background: #16213e; padding: 10px 16px; border-radius: 8px; color: #e0e0e0; margin-top: 30px; display:flex; align-items:center; gap:10px; }}
   h2 .h2-actions {{ margin-left: auto; display:flex; gap:8px; }}
   .subtitle {{ color: #888; margin-top: 0; }}
@@ -598,7 +601,7 @@ def build_html() -> str:
   </div>
 </div>
 
-<h1>🥗 KusWise Bot — Admin</h1>
+<h1><img class="logo" src="/logo.png" alt=""> KusWise Bot — Admin</h1>
 <p class="subtitle">Повна статистика та керування ботом <span class="refresh-info">↻ авто-оновлення кожні 60 с</span></p>
 
 <nav class="admin-tabs" id="adminTabs">

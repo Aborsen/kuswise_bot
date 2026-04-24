@@ -309,7 +309,10 @@ def profile_edit_keyboard() -> dict:
                 {"text": "🎯 Змінити мету", "callback_data": "prof:goal"},
             ],
             [
+                {"text": "🏁 Цільова вага", "callback_data": "prof:target_weight"},
                 {"text": "💧 Ціль води", "callback_data": "prof:water"},
+            ],
+            [
                 {"text": "✏️ Все спочатку", "callback_data": "onb:restart"},
             ],
         ]

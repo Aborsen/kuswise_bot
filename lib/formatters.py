@@ -377,6 +377,23 @@ def format_profile(profile: dict) -> str:
         f"📏 Зріст: <b>{profile.get('height_cm', '—')} см</b>",
         f"🏋️ Тренування: <b>{_gym_ua(profile.get('gym_per_week', ''))} / тиждень</b>",
         f"🎯 Мета: <b>{_goal_ua(profile.get('goal', ''))}</b>",
+    ]
+    tw = profile.get("target_weight_kg")
+    if tw and goal in ("lose", "gain") and weight:
+        delta = float(weight) - float(tw)  # positive = need to lose; negative = need to gain
+        if goal == "lose":
+            togo = max(0.0, delta)
+            arrow = "—" if togo <= 0.05 else f"−{togo:.1f} кг"
+        else:  # gain
+            togo = max(0.0, -delta)
+            arrow = "—" if togo <= 0.05 else f"+{togo:.1f} кг"
+        if togo <= 0.05:
+            lines.append(f"🏁 Цільова вага: <b>{tw} кг</b> (досягнуто 🎉)")
+        else:
+            lines.append(f"🏁 Цільова вага: <b>{tw} кг</b> ({arrow} до мети)")
+    elif tw:
+        lines.append(f"🏁 Цільова вага: <b>{tw} кг</b>")
+    lines += [
         "━━━━━━━━━━━━━━━━━━━━━",
         f"🔥 Денна норма: <b>{target} ккал</b>" + (f" (рекомендовано: {rec})" if rec and rec != target else ""),
         f"🥩 Білки: <b>{macros['protein']}г</b> | 🍚 Вуглеводи: <b>{macros['carbs']}г</b> | 🧈 Жири: <b>{macros['fat']}г</b>",
@@ -638,6 +655,14 @@ WEIGHT_INVALID = "Вага має бути від 30 до 300 кг. Спробу
 WEIGHT_NOT_A_NUMBER = "Хм, це не схоже на число. Спробуй так: 82.5 🙂"
 GOAL_UPDATE_PROMPT = "🎯 Яка твоя ціль на зараз?"
 GOAL_UPDATED = "🎯 Ціль оновив: <b>{goal}</b>."
+
+TARGET_WEIGHT_ASK_LOSE = "🎯 <b>До якої ваги хочеш схуднути?</b>\nНапиши в кілограмах (наприклад: 75):"
+TARGET_WEIGHT_ASK_GAIN = "🎯 <b>Яку вагу хочеш набрати?</b>\nНапиши в кілограмах (наприклад: 80):"
+TARGET_WEIGHT_INVALID = "Цільова вага має бути від 30 до 300 кг. Спробуй ще раз 🙂"
+TARGET_WEIGHT_LOSE_MISMATCH = "Ціль схуднення, але цільова вага ≥ поточної ({current} кг). Напиши меншу цифру або зміни мету через /profile."
+TARGET_WEIGHT_GAIN_MISMATCH = "Ціль набору, але цільова вага ≤ поточної ({current} кг). Напиши більшу цифру або зміни мету через /profile."
+TARGET_WEIGHT_SAVED = "🎯 Цільова вага: <b>{target} кг</b>."
+TARGET_WEIGHT_CLEARED = "🎯 Для мети «Підтримувати вагу» цільова вага не потрібна — очистив."
 
 # --- Reply-keyboard button labels (must match the strings used in main_menu_keyboard) ---
 # When a user taps one of these buttons, Telegram sends its label as a message.

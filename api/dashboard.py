@@ -516,13 +516,15 @@ def _render_dashboard(user: dict) -> str:
             ),
         }
 
+    target_weight_kg = profile.get("target_weight_kg")
     profile_blob = {
-        "age":          profile.get("age"),
-        "sex":          profile.get("sex") or "",
-        "weight_kg":    float(weight_kg) if weight_kg else None,
-        "height_cm":    profile.get("height_cm"),
-        "gym_per_week": profile.get("gym_per_week"),
-        "goal":         goal or "",
+        "age":              profile.get("age"),
+        "sex":              profile.get("sex") or "",
+        "weight_kg":        float(weight_kg) if weight_kg else None,
+        "height_cm":        profile.get("height_cm"),
+        "gym_per_week":     profile.get("gym_per_week"),
+        "goal":             goal or "",
+        "target_weight_kg": float(target_weight_kg) if target_weight_kg else None,
     }
     targets_blob = {
         "calories":  cal_target,
@@ -1279,7 +1281,7 @@ _DASHBOARD_HTML = r"""<!DOCTYPE html>
   function renderProfile() {
     var p = DATA.profile || {}, t = DATA.targets || {}, a = DATA.adherence || {};
     var grid = document.getElementById('profileGrid');
-    grid.innerHTML =
+    var rows =
       idRow('Імʼя', DATA.user.first_name || '—') +
       idRow('Вік', p.age != null ? p.age + ' р.' : '—') +
       idRow('Стать', SEX_UA[p.sex] || '—') +
@@ -1287,6 +1289,24 @@ _DASHBOARD_HTML = r"""<!DOCTYPE html>
       idRow('Зріст', p.height_cm != null ? p.height_cm + ' см' : '—') +
       idRow('Зал/тиждень', p.gym_per_week != null ? p.gym_per_week + '×' : '—') +
       idRow('Ціль', GOAL_UA[p.goal] || '—');
+
+    if (p.target_weight_kg != null && (p.goal === 'lose' || p.goal === 'gain')) {
+      var togoTxt;
+      if (p.weight_kg != null) {
+        var delta = Number(p.weight_kg) - Number(p.target_weight_kg);
+        var rem = p.goal === 'lose' ? Math.max(0, delta) : Math.max(0, -delta);
+        if (rem <= 0.05) {
+          togoTxt = p.target_weight_kg + ' кг (🎉)';
+        } else {
+          var sign = p.goal === 'lose' ? '−' : '+';
+          togoTxt = p.target_weight_kg + ' кг (' + sign + rem.toFixed(1) + ' кг)';
+        }
+      } else {
+        togoTxt = p.target_weight_kg + ' кг';
+      }
+      rows += idRow('Цільова вага', togoTxt);
+    }
+    grid.innerHTML = rows;
 
     var tg = document.getElementById('targetsGrid');
     tg.innerHTML =

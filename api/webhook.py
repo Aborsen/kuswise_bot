@@ -169,6 +169,13 @@ from lib.formatters import (
     WEIGHT_NOT_A_NUMBER,
     GOAL_UPDATE_PROMPT,
     GOAL_UPDATED,
+    TARGET_WEIGHT_ASK_LOSE,
+    TARGET_WEIGHT_ASK_GAIN,
+    TARGET_WEIGHT_INVALID,
+    TARGET_WEIGHT_LOSE_MISMATCH,
+    TARGET_WEIGHT_GAIN_MISMATCH,
+    TARGET_WEIGHT_SAVED,
+    TARGET_WEIGHT_CLEARED,
 )
 
 
@@ -356,6 +363,16 @@ def process_update(update: dict) -> None:
             handle_water_target_input(conn, chat_id, user_id, text)
             return
 
+        # Motivation target-weight entry from /profile → 🏁 Цільова вага.
+        if (
+            user_id
+            and profile
+            and profile.get("awaiting_input_type") == "target_weight"
+            and text.lower().strip() != "/cancel"
+        ):
+            handle_target_weight_input(conn, chat_id, user_id, text, profile)
+            return
+
         if text.startswith("/"):
             if user_id and text.lower().strip() == "/cancel":
                 pending = get_pending_analysis(conn, user_id)
@@ -479,6 +496,38 @@ def handle_onboarding_text(conn, chat_id: int, user_id: int, first_name: str | N
     elif step == "awaiting_goal":
         send_message(chat_id, ONBOARDING_NEED_BUTTON, reply_markup=goal_keyboard())
 
+    elif step == "awaiting_target_weight":
+        tw = _parse_float(text)
+        if tw is None:
+            send_message(chat_id, WEIGHT_NOT_A_NUMBER)
+            return
+        if not (30 <= tw <= 300):
+            send_message(chat_id, TARGET_WEIGHT_INVALID)
+            return
+        current_w = profile.get("weight_kg")
+        goal = profile.get("goal") or "maintain"
+        if current_w is not None:
+            if goal == "lose" and tw >= float(current_w):
+                send_message(chat_id, TARGET_WEIGHT_LOSE_MISMATCH.format(current=current_w))
+                return
+            if goal == "gain" and tw <= float(current_w):
+                send_message(chat_id, TARGET_WEIGHT_GAIN_MISMATCH.format(current=current_w))
+                return
+        rec = calorie_target_from_profile(float(current_w or 70), goal)
+        update_profile(
+            conn, user_id,
+            target_weight_kg=float(tw),
+            recommended_calorie_target=rec,
+            onboarding_step="awaiting_confirm",
+        )
+        profile_after = get_profile(conn, user_id) or {}
+        send_message(chat_id, TARGET_WEIGHT_SAVED.format(target=tw))
+        send_message(
+            chat_id,
+            format_recommendation(profile_after, rec),
+            reply_markup=confirm_calories_keyboard(),
+        )
+
     elif step == "awaiting_confirm":
         send_message(chat_id, ONBOARDING_NEED_BUTTON, reply_markup=confirm_calories_keyboard())
 
@@ -567,19 +616,32 @@ def handle_onboarding_callback(conn, cb: dict) -> None:
         if goal not in _VALID_GOALS:
             answer_callback_query(cb_id, "Невірна відповідь")
             return
-        # Compute recommendation from the new weight × goal formula.
         updated = get_profile(conn, user_id) or {}
-        try:
-            rec = calorie_target_from_profile(float(updated["weight_kg"]), goal)
-        except (KeyError, TypeError, ValueError):
-            # Weight missing or unparseable — restart safely.
+        if not updated.get("weight_kg"):
             reset_onboarding(conn, user_id)
             answer_callback_query(cb_id, "Щось пішло не так, починаємо заново")
             send_message(chat_id, ONBOARDING_ASK_AGE)
             return
+
+        # lose / gain → ask the motivation target weight first, then recommendation.
+        if goal in ("lose", "gain"):
+            update_profile(
+                conn, user_id,
+                goal=goal,
+                target_weight_kg=None,
+                onboarding_step="awaiting_target_weight",
+            )
+            answer_callback_query(cb_id, "Записав")
+            prompt = TARGET_WEIGHT_ASK_LOSE if goal == "lose" else TARGET_WEIGHT_ASK_GAIN
+            send_message(chat_id, prompt)
+            return
+
+        # maintain → straight to the calorie recommendation (no target weight needed).
+        rec = calorie_target_from_profile(float(updated["weight_kg"]), goal)
         update_profile(
             conn, user_id,
             goal=goal,
+            target_weight_kg=None,
             recommended_calorie_target=rec,
             onboarding_step="awaiting_confirm",
         )
@@ -1317,6 +1379,8 @@ def _weight_change_reply(
     old_weight: float | None,
     new_cal: int,
     macros: dict,
+    goal: str | None = None,
+    target_weight: float | None = None,
 ) -> str:
     lines = []
     if old_weight:
@@ -1329,6 +1393,19 @@ def _weight_change_reply(
         lines.append(f"✅ Записав: <b>{new_weight} кг</b> ({delta_txt}).")
     else:
         lines.append(f"✅ Записав: <b>{new_weight} кг</b>.")
+
+    if target_weight and goal in ("lose", "gain"):
+        delta = float(new_weight) - float(target_weight)  # + = need to lose, − = need to gain
+        if goal == "lose":
+            togo = max(0.0, delta)
+            reached = togo <= 0.05
+            tail = "досягнуто 🎉" if reached else f"залишилось −{togo:.1f} кг"
+        else:
+            togo = max(0.0, -delta)
+            reached = togo <= 0.05
+            tail = "досягнуто 🎉" if reached else f"залишилось +{togo:.1f} кг"
+        lines.append(f"🏁 Ціль <b>{target_weight} кг</b> — {tail}")
+
     lines.append(f"🎯 Нова норма калорій: <b>{new_cal} ккал/день</b>")
     lines.append(
         f"🥩 Білки {macros['protein']}г · 🍚 Вуглеводи {macros['carbs']}г · 🧈 Жири {macros['fat']}г"
@@ -1361,6 +1438,7 @@ def handle_weight_input(
 
     old_weight = profile.get("weight_kg")
     goal = profile.get("goal") or "maintain"
+    target_weight = profile.get("target_weight_kg")
     source = "checkin"  # cron + /profile edit both call us; treat as checkin by default
 
     result = _apply_new_weight(conn, user_id, float(new_weight), goal, source)
@@ -1368,7 +1446,11 @@ def handle_weight_input(
 
     send_message(
         chat_id,
-        _weight_change_reply(float(new_weight), old_weight, result["calories"], result["macros"]),
+        _weight_change_reply(
+            float(new_weight), old_weight,
+            result["calories"], result["macros"],
+            goal=goal, target_weight=target_weight,
+        ),
         reply_markup=main_menu_keyboard(),
     )
 
@@ -1404,6 +1486,46 @@ def handle_water_target_input(
     )
 
 
+def handle_target_weight_input(
+    conn,
+    chat_id: int,
+    user_id: int,
+    text: str,
+    profile: dict,
+) -> None:
+    """Process a target-weight reply from the /profile → 🏁 Цільова вага flow."""
+    cleaned = text.strip().lower().replace("кг", "").replace("kg", "").strip()
+    if cleaned in ("/skip", "skip", "/cancel", "cancel"):
+        set_awaiting_input(conn, user_id, None)
+        send_message(chat_id, "👌 Скасовано.", reply_markup=main_menu_keyboard())
+        return
+
+    tw = _parse_float(cleaned)
+    if tw is None:
+        send_message(chat_id, WEIGHT_NOT_A_NUMBER)
+        return
+    if not (30 <= tw <= 300):
+        send_message(chat_id, TARGET_WEIGHT_INVALID)
+        return
+    current_w = profile.get("weight_kg")
+    goal = profile.get("goal") or "maintain"
+    if current_w is not None:
+        if goal == "lose" and tw >= float(current_w):
+            send_message(chat_id, TARGET_WEIGHT_LOSE_MISMATCH.format(current=current_w))
+            return
+        if goal == "gain" and tw <= float(current_w):
+            send_message(chat_id, TARGET_WEIGHT_GAIN_MISMATCH.format(current=current_w))
+            return
+
+    update_profile(conn, user_id, target_weight_kg=float(tw))
+    set_awaiting_input(conn, user_id, None)
+    send_message(
+        chat_id,
+        TARGET_WEIGHT_SAVED.format(target=tw),
+        reply_markup=main_menu_keyboard(),
+    )
+
+
 def handle_profile_edit_callback(conn, cb: dict, profile: dict) -> None:
     """Handle inline buttons from the /profile screen: weight / goal / water edit."""
     cb_id = cb["id"]
@@ -1433,11 +1555,14 @@ def handle_profile_edit_callback(conn, cb: dict, profile: dict) -> None:
             return
         weight = profile.get("weight_kg") or 70
         new_cal = calorie_target_from_profile(float(weight), new_goal)
+        # Any goal change invalidates the motivation target — clear it.
+        # For lose/gain we'll prompt for a fresh one right after.
         update_profile(
             conn, user_id,
             goal=new_goal,
             daily_calorie_target=new_cal,
             recommended_calorie_target=new_cal,
+            target_weight_kg=None,
         )
         answer_callback_query(cb_id, "🎯 Оновив")
         macros = macro_gram_targets_from_profile(float(weight), new_goal)
@@ -1448,6 +1573,25 @@ def handle_profile_edit_callback(conn, cb: dict, profile: dict) -> None:
             f"🥩 Білки {macros['protein']}г · 🍚 Вуглеводи {macros['carbs']}г · 🧈 Жири {macros['fat']}г",
             reply_markup=main_menu_keyboard(),
         )
+        if new_goal in ("lose", "gain"):
+            set_awaiting_input(conn, user_id, "target_weight")
+            prompt = TARGET_WEIGHT_ASK_LOSE if new_goal == "lose" else TARGET_WEIGHT_ASK_GAIN
+            send_message(chat_id, prompt)
+        else:
+            send_message(chat_id, TARGET_WEIGHT_CLEARED)
+        return
+
+    # prof:target_weight → prompt for the motivation target.
+    if data == "prof:target_weight":
+        goal = profile.get("goal") or "maintain"
+        if goal == "maintain":
+            answer_callback_query(cb_id, "Для цієї мети не потрібна")
+            send_message(chat_id, TARGET_WEIGHT_CLEARED, reply_markup=main_menu_keyboard())
+            return
+        answer_callback_query(cb_id, "🎯 Чекаю на число")
+        set_awaiting_input(conn, user_id, "target_weight")
+        send_message(chat_id,
+                     TARGET_WEIGHT_ASK_LOSE if goal == "lose" else TARGET_WEIGHT_ASK_GAIN)
         return
 
     # prof:water → show preset picker (reuses the existing water_goal_keyboard).

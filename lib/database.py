@@ -166,6 +166,9 @@ def init_db(conn=None) -> None:
         cur.execute(
             "ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS weekly_checkin_sent_at TEXT"
         )
+        cur.execute(
+            "ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS target_weight_kg DOUBLE PRECISION"
+        )
         cur.execute("""
             CREATE TABLE IF NOT EXISTS weight_history (
                 id BIGSERIAL PRIMARY KEY,
@@ -205,7 +208,7 @@ PROFILE_COLUMNS = [
     "user_id", "age", "sex", "weight_kg", "height_cm", "gym_per_week",
     "goal", "daily_calorie_target", "recommended_calorie_target",
     "onboarding_step", "created_at", "updated_at",
-    "awaiting_input_type", "weekly_checkin_sent_at",
+    "awaiting_input_type", "weekly_checkin_sent_at", "target_weight_kg",
 ]
 
 
@@ -243,7 +246,7 @@ def ensure_profile_row(conn, user_id: int) -> dict:
 _ALLOWED_PROFILE_FIELDS = {
     "age", "sex", "weight_kg", "height_cm", "gym_per_week", "goal",
     "daily_calorie_target", "recommended_calorie_target", "onboarding_step",
-    "awaiting_input_type", "weekly_checkin_sent_at",
+    "awaiting_input_type", "weekly_checkin_sent_at", "target_weight_kg",
 }
 
 

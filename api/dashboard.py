@@ -128,6 +128,22 @@ def _esc(s) -> str:
     return html.escape(str(s), quote=True)
 
 
+def _json_for_script(value) -> str:
+    """Serialize for embedding inside a <script> tag.
+
+    Script content is 'script data' — HTML entities are NOT decoded there,
+    so we can't html-escape the JSON. Instead, unicode-escape the three chars
+    that could break out of or confuse the tag: <, >, &. JSON parsers handle
+    \\u00XX fine. This is the same trick Django's `json_script` filter uses.
+    """
+    s = json.dumps(value, ensure_ascii=False)
+    return (
+        s.replace("<", "\\u003c")
+         .replace(">", "\\u003e")
+         .replace("&", "\\u0026")
+    )
+
+
 def _today_str() -> str:
     return datetime.now(LOCAL_TZ).strftime("%Y-%m-%d")
 
@@ -531,9 +547,7 @@ def _render_dashboard(user: dict) -> str:
         "sex_ua":            _SEX_UA.get(profile.get("sex") or "", ""),
         "bot_url":           f"https://t.me/{TELEGRAM_BOT_USERNAME}" if TELEGRAM_BOT_USERNAME else "",
     }
-    data_json = json.dumps(data, ensure_ascii=False)
-
-    return _DASHBOARD_HTML.replace("__DATA_JSON__", _esc(data_json))
+    return _DASHBOARD_HTML.replace("__DATA_JSON__", _json_for_script(data))
 
 
 _DASHBOARD_HTML = r"""<!DOCTYPE html>

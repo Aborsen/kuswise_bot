@@ -149,12 +149,6 @@ def format_meal_preview(meal_type: str, analysis: dict) -> str:
         lines.append(gi_line)
     lines.extend(_format_warnings(analysis))
 
-    # Show the AI's portion reasoning so the user can sanity-check the grams
-    portion_reasoning = (analysis.get("portion_reasoning") or "").strip()
-    if portion_reasoning:
-        lines.append("")
-        lines.append(f"📏 <i>{portion_reasoning}</i>")
-
     assessment = analysis.get("overall_assessment")
     if assessment:
         lines.append("")

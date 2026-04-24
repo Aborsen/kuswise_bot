@@ -266,33 +266,50 @@ def build_html() -> str:
         n_with_profile = cur.fetchone()[0]
         n_without_profile = n_users - n_with_profile
 
-        # Calorie adherence: days where actual calories within ±15% of target, per user
+        cur.execute("SELECT COALESCE(SUM(amount_ml), 0) FROM water_logs")
+        total_water_ml = cur.fetchone()[0] or 0
+
+        cur.execute("SELECT COUNT(*) FROM user_profiles WHERE target_weight_kg IS NOT NULL")
+        n_with_target = cur.fetchone()[0]
+
+        cur.execute(
+            "SELECT COUNT(*) FROM daily_logs WHERE summary_sent = 1"
+        )
+        n_summaries_sent = cur.fetchone()[0]
+
+        # Adherence (±15% of target) AND average daily calories, per user.
         cur.execute("""
             SELECT dl.user_id,
                    COUNT(*) FILTER (WHERE p.daily_calorie_target IS NOT NULL
                      AND dl.total_calories BETWEEN p.daily_calorie_target * 0.85
                      AND p.daily_calorie_target * 1.15) AS adherent_days,
-                   COUNT(*) AS total_days
+                   COUNT(*) AS total_days,
+                   AVG(dl.total_calories) FILTER (WHERE dl.total_calories > 0) AS avg_cal
             FROM daily_logs dl
             LEFT JOIN user_profiles p ON p.user_id = dl.user_id
             GROUP BY dl.user_id
         """)
         adherence_map = {}
-        for uid, adh, tot in cur.fetchall():
+        avg_cal_map = {}
+        for uid, adh, tot, avg_cal in cur.fetchall():
             if tot:
                 adherence_map[uid] = round(adh / tot * 100)
+            if avg_cal is not None:
+                avg_cal_map[uid] = round(float(avg_cal))
 
         cur.execute("""
             SELECT u.user_id, COALESCE(u.username, ''), u.created_at,
                    COUNT(m.id) AS meals, MAX(m.created_at) AS last_meal,
                    p.age, p.sex, p.weight_kg, p.height_cm,
-                   p.gym_per_week, p.goal, p.daily_calorie_target
+                   p.gym_per_week, p.goal, p.daily_calorie_target,
+                   p.target_weight_kg
             FROM users u
             LEFT JOIN meals m ON m.user_id = u.user_id
             LEFT JOIN user_profiles p ON p.user_id = u.user_id
             GROUP BY u.user_id, u.username, u.created_at,
                      p.age, p.sex, p.weight_kg, p.height_cm,
-                     p.gym_per_week, p.goal, p.daily_calorie_target
+                     p.gym_per_week, p.goal, p.daily_calorie_target,
+                     p.target_weight_kg
             ORDER BY meals DESC, u.created_at DESC
         """)
         user_rows = cur.fetchall()
@@ -333,12 +350,22 @@ def build_html() -> str:
     # Users table
     user_tbody = ""
     for r in user_rows:
-        uid, uname, joined, meals, last, age, sex, weight, height, gym, goal, cal_target = r
+        (uid, uname, joined, meals, last, age, sex, weight, height,
+         gym, goal, cal_target, target_weight) = r
         adh = adherence_map.get(uid)
         adh_cell = f"{adh}%" if adh is not None else "—"
         adh_color = ""
         if adh is not None:
             adh_color = "color:#4caf50" if adh >= 70 else ("color:#ff9800" if adh >= 40 else "color:#e94560")
+        if target_weight and weight and goal in ("lose", "gain"):
+            delta = float(weight) - float(target_weight)
+            rem = max(0.0, delta) if goal == "lose" else max(0.0, -delta)
+            sign = "−" if goal == "lose" else "+"
+            tw_cell = f"{target_weight} ({sign}{rem:.1f})"
+        elif target_weight:
+            tw_cell = f"{target_weight}"
+        else:
+            tw_cell = "—"
         user_tbody += (
             f'<tr data-uid="{_esc(uid)}">'
             f'<td class="clickable">{_esc(uid)}</td>'
@@ -349,7 +376,9 @@ def build_html() -> str:
             f"<td class='num clickable'>{_esc(height) if height else '—'}</td>"
             f"<td class='clickable'>{_GYM_UA.get(gym or '', gym or '—')}</td>"
             f"<td class='clickable'>{_GOAL_UA.get(goal or '', goal or '—')}</td>"
+            f"<td class='num clickable'>{tw_cell}</td>"
             f"<td class='num clickable'>{_esc(cal_target) if cal_target else '—'}</td>"
+            f"<td class='num clickable'>{avg_cal_map.get(uid, '—')}</td>"
             f"<td class='num clickable'>{_esc(meals)}</td>"
             f"<td class='num clickable' style='{adh_color}'>{adh_cell}</td>"
             f"<td class='clickable'>{_esc((last or '—')[:10])}</td>"
@@ -399,7 +428,8 @@ def build_html() -> str:
     # Build modal user data as JSON for JS lookup
     user_modal_data = {}
     for r in user_rows:
-        uid, uname, joined, meals, last, age, sex, weight, height, gym, goal, cal_target = r
+        (uid, uname, joined, meals, last, age, sex, weight, height,
+         gym, goal, cal_target, target_weight) = r
         user_modal_data[str(uid)] = {
             "uid": uid, "uname": uname or "—",
             "joined": str(joined or "")[:10],
@@ -410,6 +440,8 @@ def build_html() -> str:
             "gym": _GYM_UA.get(gym or "", gym or "—"),
             "goal": _GOAL_UA.get(goal or "", goal or "—"),
             "cal_target": cal_target,
+            "target_weight": target_weight,
+            "avg_cal": avg_cal_map.get(uid),
             "adherence": adherence_map.get(uid),
         }
     user_modal_json = json.dumps(user_modal_data, ensure_ascii=False, default=str)
@@ -428,6 +460,19 @@ def build_html() -> str:
   h2 .h2-actions {{ margin-left: auto; display:flex; gap:8px; }}
   .subtitle {{ color: #888; margin-top: 0; }}
   .refresh-info {{ color: #555; font-size: 0.8em; float: right; }}
+
+  /* Top-level admin tabs */
+  .admin-tabs {{ display:flex; gap:8px; margin: 16px 0 8px; flex-wrap:wrap; }}
+  .admin-tabs button {{
+    background: #16213e; color: #ccc; border: 1px solid #2a2a4a;
+    padding: 9px 18px; border-radius: 10px; font-size: 0.95em;
+    cursor: pointer; font-family: inherit; font-weight: 500;
+  }}
+  .admin-tabs button:hover {{ border-color: #e94560; color: #e94560; }}
+  .admin-tabs button.active {{
+    background: #e94560; border-color: #e94560; color: #fff; font-weight: 600;
+  }}
+  section[hidden] {{ display: none !important; }}
 
   /* Stat cards */
   .cards {{ display: flex; gap: 16px; flex-wrap: wrap; margin: 20px 0; }}
@@ -556,13 +601,22 @@ def build_html() -> str:
 <h1>🥗 KusWise Bot — Admin</h1>
 <p class="subtitle">Повна статистика та керування ботом <span class="refresh-info">↻ авто-оновлення кожні 60 с</span></p>
 
+<nav class="admin-tabs" id="adminTabs">
+  <button type="button" class="active" data-tab="overview">📊 Огляд</button>
+  <button type="button" data-tab="meals">🍽️ Страви</button>
+</nav>
+
+<section id="tab-overview">
 <div class="cards">
   <div class="card"><div class="num">{n_users}</div><div class="label">Всього юзерів</div></div>
   <div class="card"><div class="num green">{active_today}</div><div class="label">Активні сьогодні</div></div>
   <div class="card"><div class="num">{active_week}</div><div class="label">Активні за тиждень</div></div>
   <div class="card"><div class="num">{n_meals}</div><div class="label">Страв записано</div></div>
   <div class="card"><div class="num">{n_days}</div><div class="label">Днів з даними</div></div>
-  <div class="card"><div class="num">{n_recs}</div><div class="label">Нічних підсумків</div></div>
+  <div class="card"><div class="num">{n_recs}</div><div class="label">Рекомендацій</div></div>
+  <div class="card"><div class="num">{n_summaries_sent}</div><div class="label">Нічних підсумків надіслано</div></div>
+  <div class="card"><div class="num">{round(total_water_ml / 1000)}</div><div class="label">Літрів води записано</div></div>
+  <div class="card"><div class="num">{n_with_target}</div><div class="label">З цільовою вагою</div></div>
 </div>
 
 <h2>🚀 Онбординг</h2>
@@ -587,13 +641,6 @@ def build_html() -> str:
     <div class="f-label">Конверсія онбордингу</div>
     <div class="funnel-bar"><div class="funnel-fill" style="width:{round(n_with_profile / max(n_users, 1) * 100)}%; background:#9c27b0"></div></div>
   </div>
-</div>
-
-<h2>🏆 Топ-20 страв
-  <div class="h2-actions"></div>
-</h2>
-<div style="background:#16213e; border-radius:10px; padding:16px 20px; margin-bottom:20px;">
-{top_foods_html or '<p style="color:#666">Немає даних</p>'}
 </div>
 
 <h2>👥 Користувачі
@@ -629,15 +676,27 @@ def build_html() -> str:
   <th data-col="5" data-type="num">Зріст <span class="arrow">▲</span></th>
   <th data-col="6" data-type="str">Зал/тиж <span class="arrow">▲</span></th>
   <th data-col="7" data-type="str">Мета <span class="arrow">▲</span></th>
-  <th data-col="8" data-type="num">ккал/день <span class="arrow">▲</span></th>
-  <th data-col="9" data-type="num">Страв <span class="arrow">▲</span></th>
-  <th data-col="10" data-type="num">Адгер% <span class="arrow">▲</span></th>
-  <th data-col="11" data-type="str">Остання страва <span class="arrow">▲</span></th>
-  <th data-col="12" data-type="str">Приєднався <span class="arrow">▲</span></th>
+  <th data-col="8" data-type="num">Ціль ваги <span class="arrow">▲</span></th>
+  <th data-col="9" data-type="num">ккал/день <span class="arrow">▲</span></th>
+  <th data-col="10" data-type="num">Сер. ккал <span class="arrow">▲</span></th>
+  <th data-col="11" data-type="num">Страв <span class="arrow">▲</span></th>
+  <th data-col="12" data-type="num">Адгер% <span class="arrow">▲</span></th>
+  <th data-col="13" data-type="str">Остання страва <span class="arrow">▲</span></th>
+  <th data-col="14" data-type="str">Приєднався <span class="arrow">▲</span></th>
   <th class="no-sort">Дія</th>
 </tr></thead>
 <tbody>{user_tbody}</tbody>
 </table>
+</div>
+</section>
+
+<section id="tab-meals" hidden>
+
+<h2>🏆 Топ-20 страв
+  <div class="h2-actions"></div>
+</h2>
+<div style="background:#16213e; border-radius:10px; padding:16px 20px; margin-bottom:20px;">
+{top_foods_html or '<p style="color:#666">Немає даних</p>'}
 </div>
 
 <h2>🍽️ Вся історія страв
@@ -682,9 +741,26 @@ def build_html() -> str:
 <tbody>{meals_tbody}</tbody>
 </table>
 </div>
+</section>
 
 <script>
 const USER_DATA = {user_modal_json};
+
+/* --- Top-level tab switcher --- */
+(function(){{
+  const tabs = document.querySelectorAll('#adminTabs button');
+  const sections = ['overview', 'meals'];
+  function setTab(name) {{
+    tabs.forEach(b => b.classList.toggle('active', b.dataset.tab === name));
+    sections.forEach(s => {{
+      const el = document.getElementById('tab-' + s);
+      if (el) el.hidden = (s !== name);
+    }});
+    try {{ history.replaceState(null, '', '#' + name); }} catch(e) {{}}
+  }}
+  tabs.forEach(b => b.addEventListener('click', () => setTab(b.dataset.tab)));
+  if (location.hash === '#meals') setTab('meals');
+}})();
 
 /* --- Auto-refresh every 60s --- */
 setTimeout(() => location.reload(), 60000);
@@ -854,7 +930,9 @@ function showUserModal(row) {{
     ['Зріст', d.height ? d.height + ' см' : '—'],
     ['Зал/тиж', d.gym],
     ['Мета', d.goal],
-    ['ккал/день', d.cal_target ? d.cal_target + ' ккал' : '—'],
+    ['Цільова вага', d.target_weight ? d.target_weight + ' кг' : '—'],
+    ['ккал/день (ціль)', d.cal_target ? d.cal_target + ' ккал' : '—'],
+    ['Сер. ккал/день', d.avg_cal != null ? d.avg_cal + ' ккал' : '—'],
   ];
   document.getElementById('modalGrid').innerHTML = fields.map(([label, val]) =>
     `<div class="modal-field"><div class="mf-label">${{label}}</div><div class="mf-val">${{val ?? '—'}}</div></div>`

@@ -1078,3 +1078,115 @@ def get_users_due_weekly_checkin(conn, min_days_since_last: int = 6) -> list[int
         )
         rows = cur.fetchall()
     return [r[0] for r in rows]
+
+
+def get_history_range(conn, user_id: int, start_date: str, end_date: str) -> list[dict]:
+    """Daily log aggregates + meal_count for each date in [start, end] (inclusive), ASC."""
+    with conn.cursor() as cur:
+        cur.execute(
+            """SELECT dl.date, dl.total_calories, dl.total_protein_g,
+                      dl.total_carbs_g, dl.total_fat_g,
+                      (SELECT COUNT(*) FROM meals m
+                       WHERE m.user_id = dl.user_id AND m.date = dl.date) AS mc
+               FROM daily_logs dl
+               WHERE dl.user_id = %s AND dl.date BETWEEN %s AND %s
+               ORDER BY dl.date ASC""",
+            (user_id, start_date, end_date),
+        )
+        rows = cur.fetchall()
+    return [
+        {
+            "date": str(r[0]),
+            "calories": r[1] or 0,
+            "protein": r[2] or 0,
+            "carbs": r[3] or 0,
+            "fat": r[4] or 0,
+            "meal_count": r[5] or 0,
+        }
+        for r in rows
+    ]
+
+
+def get_adherence_stats(conn, user_id: int, tolerance: float = 0.15) -> dict:
+    """All-time averages + hit% per macro + current streak, over days with meal_count > 0."""
+    from datetime import date as _date, timedelta as _td
+    from lib.config import (
+        macro_gram_targets,
+        macro_gram_targets_from_profile,
+    )
+
+    profile = get_profile(conn, user_id) or {}
+    cal_target = int(profile.get("daily_calorie_target") or 2000)
+    weight = profile.get("weight_kg")
+    goal = profile.get("goal")
+    if weight and goal:
+        macros = macro_gram_targets_from_profile(float(weight), goal)
+    else:
+        macros = macro_gram_targets(cal_target)
+    p_target = macros.get("protein") or 1
+    c_target = macros.get("carbs") or 1
+    f_target = macros.get("fat") or 1
+
+    with conn.cursor() as cur:
+        cur.execute(
+            """SELECT dl.date, dl.total_calories, dl.total_protein_g,
+                      dl.total_carbs_g, dl.total_fat_g,
+                      (SELECT COUNT(*) FROM meals m
+                       WHERE m.user_id = dl.user_id AND m.date = dl.date) AS mc
+               FROM daily_logs dl
+               WHERE dl.user_id = %s
+               ORDER BY dl.date DESC""",
+            (user_id,),
+        )
+        rows = cur.fetchall()
+
+    logged = [r for r in rows if (r[5] or 0) > 0]
+    n = len(logged)
+    if n == 0:
+        return {
+            "logged_days": 0,
+            "avg_calories": None, "avg_protein_g": None,
+            "avg_carbs_g": None, "avg_fat_g": None,
+            "calories_hit_pct": None, "protein_hit_pct": None,
+            "carbs_hit_pct": None, "fat_hit_pct": None,
+            "current_streak": 0,
+            "cal_target": cal_target,
+            "p_target": p_target, "c_target": c_target, "f_target": f_target,
+        }
+
+    def _avg(col_idx):
+        return round(sum((r[col_idx] or 0) for r in logged) / n, 1)
+
+    def _hit_pct(col_idx, target):
+        if not target:
+            return 0
+        lo, hi = target * (1 - tolerance), target * (1 + tolerance)
+        hits = sum(1 for r in logged if lo <= (r[col_idx] or 0) <= hi)
+        return round(hits / n * 100)
+
+    logged_dates = {str(r[0]) for r in logged}
+    today_str = _today_str()
+    d = _date.fromisoformat(today_str)
+    if str(d) not in logged_dates:
+        d = d - _td(days=1)
+    streak = 0
+    while str(d) in logged_dates:
+        streak += 1
+        d = d - _td(days=1)
+
+    return {
+        "logged_days": n,
+        "avg_calories": _avg(1),
+        "avg_protein_g": _avg(2),
+        "avg_carbs_g": _avg(3),
+        "avg_fat_g": _avg(4),
+        "calories_hit_pct": _hit_pct(1, cal_target),
+        "protein_hit_pct": _hit_pct(2, p_target),
+        "carbs_hit_pct": _hit_pct(3, c_target),
+        "fat_hit_pct": _hit_pct(4, f_target),
+        "current_streak": streak,
+        "cal_target": cal_target,
+        "p_target": p_target,
+        "c_target": c_target,
+        "f_target": f_target,
+    }

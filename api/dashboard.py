@@ -586,59 +586,41 @@ _DASHBOARD_HTML = r"""<!DOCTYPE html>
   .spinner-wrap {
     position: sticky; top: 0; z-index: 5;
     background: var(--bg);
-    padding: 8px 8px 10px;
+    padding: 10px 10px 12px;
     border-bottom: 1px solid var(--separator);
-  }
-  .spinner-head {
-    display: flex; align-items: center; justify-content: space-between;
-    padding: 0 8px 6px;
-  }
-  .spinner-month {
-    font-weight: 600; font-size: 0.95em; color: var(--text);
-  }
-  .spinner-nav {
-    display: flex; gap: 4px;
-  }
-  .spinner-nav button {
-    background: var(--bg-secondary); color: var(--text);
-    border: none; border-radius: 10px;
-    width: 32px; height: 32px; font-size: 1.1em;
-    cursor: pointer; font-family: inherit;
-  }
-  .spinner-nav button:disabled {
-    opacity: 0.35; cursor: default;
+    touch-action: pan-y;
+    user-select: none;
   }
   .spinner-row {
     display: grid; grid-template-columns: repeat(7, 1fr);
-    gap: 6px;
+    gap: 4px;
   }
   .day-cell {
-    display: flex; flex-direction: column; align-items: center; gap: 4px;
-    padding: 6px 0 8px; border-radius: 12px;
+    display: flex; flex-direction: column; align-items: center; gap: 5px;
+    padding: 4px 0; border-radius: 12px;
     background: transparent; color: var(--hint);
     border: none; cursor: pointer; font-family: inherit;
   }
-  .day-cell:disabled {
-    opacity: 0.35; cursor: default;
-  }
+  .day-cell:disabled { opacity: 0.3; cursor: default; }
   .day-cell .dow {
-    font-size: 0.7em; text-transform: uppercase; letter-spacing: 0.04em;
+    font-size: 0.72em; font-weight: 500;
+  }
+  .day-cell.today .dow {
+    color: var(--text); font-weight: 600;
   }
   .day-cell .num {
     width: 34px; height: 34px; display: grid; place-items: center;
     border-radius: 50%; font-weight: 600; font-size: 0.95em;
-    background: transparent; color: inherit;
-  }
-  .day-cell.has-data .num {
     background: var(--bg-secondary); color: var(--text);
   }
   .day-cell.today .num {
-    outline: 2px solid var(--accent); outline-offset: -2px;
+    background: transparent;
+    outline: 2px solid var(--text); outline-offset: -2px;
   }
-  .day-cell.selected .num {
+  .day-cell.selected:not(.today) .num {
     background: var(--button); color: var(--button-text);
   }
-  .day-cell.selected .dow { color: var(--text); }
+  .day-cell:disabled .num { background: transparent; }
 
   /* ---------- Content shell ---------- */
   main { padding: 12px 14px 20px; }
@@ -725,26 +707,10 @@ _DASHBOARD_HTML = r"""<!DOCTYPE html>
     font-weight: 500; white-space: nowrap; font-variant-numeric: tabular-nums;
   }
 
-  /* ---------- Quick actions + close ---------- */
-  .quick-actions {
-    display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px;
-    margin: 14px 0;
+  .summary-text {
+    margin: 0; font-size: 0.92em; line-height: 1.5; color: var(--text);
   }
-  .qa-btn {
-    padding: 11px 6px; border: none; border-radius: 10px;
-    background: var(--button); color: var(--button-text);
-    font-size: 0.88em; font-weight: 600; cursor: pointer; font-family: inherit;
-  }
-  .qa-btn:active { transform: scale(0.97); }
-  .qa-btn.ghost { background: var(--bg-secondary); color: var(--text); }
-  .qa-btn[disabled] { opacity: 0.4; cursor: not-allowed; }
-
-  .close-row { text-align: center; margin-top: 16px; }
-  .close-row button {
-    background: transparent; color: var(--link);
-    border: 1px solid var(--separator); padding: 10px 18px;
-    border-radius: 10px; font-size: 0.9em; cursor: pointer; font-family: inherit;
-  }
+  .summary-text .muted { color: var(--hint); }
 
   /* ---------- Meals list ---------- */
   .meal-group { margin-top: 4px; }
@@ -807,13 +773,6 @@ _DASHBOARD_HTML = r"""<!DOCTYPE html>
 <body>
 
 <div class="spinner-wrap">
-  <div class="spinner-head">
-    <div class="spinner-month" id="spinnerMonth">—</div>
-    <div class="spinner-nav">
-      <button id="weekPrev" aria-label="Previous week">‹</button>
-      <button id="weekNext" aria-label="Next week">›</button>
-    </div>
-  </div>
   <div class="spinner-row" id="spinnerRow"></div>
 </div>
 
@@ -867,14 +826,10 @@ _DASHBOARD_HTML = r"""<!DOCTYPE html>
       </div>
     </div>
 
-    <div class="quick-actions" id="quickActions">
-      <button type="button" class="qa-btn" data-action="water_add:250">💧 +250 мл</button>
-      <button type="button" class="qa-btn ghost" data-action="water_undo">↩️ Скасувати</button>
-      <button type="button" class="qa-btn ghost" data-close="1">💬 До бота</button>
+    <div class="card summary-card">
+      <h2>Підсумок</h2>
+      <p class="summary-text" id="daySummary">—</p>
     </div>
-    <p class="muted-note" id="historyNote" hidden>
-      Історичний день — дії з водою можна робити тільки для сьогодні.
-    </p>
   </section>
 
   <section id="tab-meals" hidden>
@@ -910,10 +865,6 @@ _DASHBOARD_HTML = r"""<!DOCTYPE html>
       <h2>Серія</h2>
       <span class="streak-pill" id="streakValue">🔥 0 днів поспіль</span>
     </div>
-
-    <div class="close-row">
-      <button type="button" data-close="1">💬 Повернутися в бот</button>
-    </div>
   </section>
 </main>
 
@@ -929,6 +880,7 @@ _DASHBOARD_HTML = r"""<!DOCTYPE html>
   </button>
 </nav>
 
+<script type="application/json" id="__data__">__DATA_JSON__</script>
 <script>
   var TG = (window.Telegram && window.Telegram.WebApp) || null;
   var DATA = JSON.parse(document.getElementById('__data__').textContent);
@@ -1001,15 +953,6 @@ _DASHBOARD_HTML = r"""<!DOCTYPE html>
   function renderSpinner() {
     var row = document.getElementById('spinnerRow');
     row.innerHTML = '';
-    var first = weekAnchor;
-    var last = addDays(weekAnchor, 6);
-
-    // Header label: "Тра 2026" based on midpoint of the week
-    var mid = addDays(weekAnchor, 3);
-    document.getElementById('spinnerMonth').textContent =
-      MONTH_UA[mid.getMonth()].charAt(0).toUpperCase() +
-      MONTH_UA[mid.getMonth()].slice(1) + ' ' + mid.getFullYear();
-
     for (var i = 0; i < 7; i++) {
       var d = addDays(weekAnchor, i);
       var iso = toISO(d);
@@ -1017,44 +960,51 @@ _DASHBOARD_HTML = r"""<!DOCTYPE html>
       var isSelected = iso === selectedDate;
       var isFuture = d > todayDate;
       var isTooOld = d < minDate;
-      var agg = aggregates[iso];
-      var hasData = !!(agg && agg.has_meals);
 
       var btn = document.createElement('button');
       btn.type = 'button';
       btn.className = 'day-cell';
       if (isToday) btn.classList.add('today');
       if (isSelected) btn.classList.add('selected');
-      if (hasData) btn.classList.add('has-data');
       btn.disabled = isFuture || isTooOld;
-      btn.innerHTML = '<span class="dow">' + DOW_UA[i] + '</span>' +
+      var label = isToday ? 'Сьогодні' : DOW_UA[i];
+      btn.innerHTML = '<span class="dow">' + label + '</span>' +
                       '<span class="num">' + d.getDate() + '</span>';
       (function(iso2){
         btn.addEventListener('click', function(){ selectDate(iso2); });
       })(iso);
       row.appendChild(btn);
     }
-
-    // Nav arrows
-    document.getElementById('weekPrev').disabled = addDays(weekAnchor, -1) < minDate;
-    document.getElementById('weekNext').disabled = addDays(weekAnchor, 7) > todayDate;
   }
 
-  document.getElementById('weekPrev').addEventListener('click', function(){
-    var prev = addDays(weekAnchor, -7);
-    if (prev < minDate) {
-      weekAnchor = startOfWeek(minDate);
-    } else {
-      weekAnchor = prev;
-    }
-    renderSpinner();
-  });
-  document.getElementById('weekNext').addEventListener('click', function(){
-    var next = addDays(weekAnchor, 7);
-    if (next > todayDate) return;
-    weekAnchor = next;
-    renderSpinner();
-  });
+  // Swipe navigation on the spinner row (horizontal drag → ±1 week).
+  (function(){
+    var wrap = document.querySelector('.spinner-wrap');
+    if (!wrap) return;
+    var startX = null, startY = null;
+    wrap.addEventListener('touchstart', function(e){
+      if (e.touches.length !== 1) return;
+      startX = e.touches[0].clientX;
+      startY = e.touches[0].clientY;
+    }, {passive: true});
+    wrap.addEventListener('touchend', function(e){
+      if (startX == null) return;
+      var t = e.changedTouches[0];
+      var dx = t.clientX - startX;
+      var dy = t.clientY - startY;
+      startX = startY = null;
+      if (Math.abs(dx) < 50 || Math.abs(dx) < Math.abs(dy)) return;
+      if (dx < 0) {
+        var next = addDays(weekAnchor, 7);
+        if (next > todayDate) return;
+        weekAnchor = next;
+      } else {
+        var prev = addDays(weekAnchor, -7);
+        weekAnchor = (prev < minDate) ? startOfWeek(minDate) : prev;
+      }
+      renderSpinner();
+    }, {passive: true});
+  })();
 
   // --- Tab switching ---
   function setTab(tab) {
@@ -1174,10 +1124,65 @@ _DASHBOARD_HTML = r"""<!DOCTYPE html>
     setMacro('cFill', 'cVal', c, t.carbs);
     setMacro('fFill', 'fVal', f, t.fat);
 
-    // Hide water actions when not viewing today
+    renderSummary(blob);
+  }
+
+  function renderSummary(blob) {
+    var t = DATA.targets;
+    var log = blob.log;
+    var cal = log.calories || 0;
+    var p = log.protein || 0, c = log.carbs || 0, f = log.fat || 0;
+    var mc = log.meal_count || 0;
+    var calTarget = t.calories || 1;
+    var waterMl = blob.water_ml || 0;
     var isToday = (blob.date === DATA.today);
-    document.getElementById('quickActions').style.display = isToday ? '' : 'none';
-    document.getElementById('historyNote').hidden = isToday;
+
+    var calPct = Math.round((cal / calTarget) * 100);
+    var diff = Math.round(cal - calTarget);
+    var parts = [];
+
+    if (mc === 0) {
+      parts.push(isToday
+        ? 'Сьогодні ще нічого не записано.'
+        : 'На цей день нічого не записано.');
+    } else {
+      if (calPct > 115) {
+        parts.push('Калорії перевищено: <b>' + calPct + '%</b> цілі (+' + Math.abs(diff).toLocaleString('uk-UA') + ' ккал).');
+      } else if (calPct >= 85) {
+        parts.push('Калорії в нормі: <b>' + calPct + '%</b> цілі.');
+      } else if (calPct >= 50) {
+        parts.push('Калорій з\'їдено <b>' + calPct + '%</b> цілі' + (isToday ? ' — ще є простір.' : '.'));
+      } else {
+        parts.push('Калорій дуже мало: <b>' + calPct + '%</b> цілі.');
+      }
+
+      // Find the most-off macro (largest |pct-100|) and comment on it.
+      var macros = [
+        {name: 'білків',    val: p, target: t.protein},
+        {name: 'вуглеводів',val: c, target: t.carbs},
+        {name: 'жирів',     val: f, target: t.fat},
+      ];
+      var worst = null, worstOff = 0;
+      macros.forEach(function(m){
+        if (!m.target) return;
+        var pct = (m.val / m.target) * 100;
+        var off = Math.abs(pct - 100);
+        if (off > worstOff) { worstOff = off; worst = {m: m, pct: pct}; }
+      });
+      if (worst && worstOff >= 25) {
+        var pctR = Math.round(worst.pct);
+        if (worst.pct < 100) {
+          parts.push('Мало ' + worst.m.name + ' — <b>' + pctR + '%</b> цілі.');
+        } else {
+          parts.push('Багато ' + worst.m.name + ' — <b>' + pctR + '%</b> цілі.');
+        }
+      }
+
+      parts.push('<span class="muted">Страв: ' + mc + ' · вода ' +
+                 (waterMl / 1000).toFixed(2).replace('.', ',') + ' л.</span>');
+    }
+
+    document.getElementById('daySummary').innerHTML = parts.join(' ');
   }
 
   // --- Meals rendering ---
@@ -1335,45 +1340,6 @@ _DASHBOARD_HTML = r"""<!DOCTYPE html>
            '<b class="macro-val">' + val + ' %</b></div>';
   }
 
-  // --- Mutating actions (water +/undo) — triggers full SSR re-render ---
-  function doAction(action, btn) {
-    if (btn && btn.disabled) return;
-    var initData = (TG && TG.initData) || '';
-    var body = 'action=' + encodeURIComponent(action) +
-               '&initData=' + encodeURIComponent(initData);
-    if (btn) { btn.disabled = true; btn.style.opacity = 0.5; }
-    fetch(window.location.pathname, {
-      method: 'POST',
-      headers: {'Content-Type': 'application/x-www-form-urlencoded'},
-      body: body,
-      credentials: 'same-origin'
-    }).then(function(r) { return r.text(); })
-      .then(function(html) {
-        document.open(); document.write(html); document.close();
-      }).catch(function(e) {
-        if (btn) { btn.disabled = false; btn.style.opacity = 1; }
-        console.error('action failed', e);
-      });
-  }
-  document.querySelectorAll('[data-action]').forEach(function(el) {
-    el.addEventListener('click', function() { doAction(el.dataset.action, el); });
-  });
-
-  // --- Close / back-to-bot ---
-  function closeApp() {
-    if (BOT_URL && TG && typeof TG.openTelegramLink === 'function') {
-      try { TG.openTelegramLink(BOT_URL); } catch(e) {}
-    }
-    if (TG && typeof TG.close === 'function') {
-      try { TG.close(); return; } catch(e) {}
-    }
-    try { window.close(); } catch(e) {}
-    try { history.back(); } catch(e) {}
-  }
-  document.querySelectorAll('[data-close]').forEach(function(el) {
-    el.addEventListener('click', closeApp);
-  });
-
   // --- Refresh today's data when returning to the tab ---
   document.addEventListener('visibilitychange', function(){
     if (!document.hidden) {
@@ -1391,5 +1357,4 @@ _DASHBOARD_HTML = r"""<!DOCTYPE html>
   renderOverview(DATA.today_blob);
   renderMeals(DATA.today_blob);
 </script>
-<script type="application/json" id="__data__">__DATA_JSON__</script>
 </body></html>"""

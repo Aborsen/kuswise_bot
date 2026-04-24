@@ -23,6 +23,8 @@ WEBHOOK_SECRET = _env("WEBHOOK_SECRET")
 VERCEL_URL = _env("VERCEL_URL")
 DATABASE_URL = _env("DATABASE_URL") or _env("POSTGRES_URL")
 CRON_SECRET = _env("CRON_SECRET")
+ADMIN_USERNAME = _env("ADMIN_USERNAME")
+ADMIN_PASSWORD = _env("ADMIN_PASSWORD")
 
 # Empty = public (no allowlist). Previously restricted the bot to a single user.
 ALLOWED_USER_IDS: set[int] = set()

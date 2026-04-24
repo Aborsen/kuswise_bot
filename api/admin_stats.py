@@ -13,7 +13,7 @@ _ROOT = os.path.dirname(_THIS)
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
-from lib.config import CRON_SECRET
+from lib.config import ADMIN_PASSWORD, ADMIN_USERNAME, CRON_SECRET
 from lib.database import get_conn, init_db, delete_meal, delete_meal_admin, recalc_daily_log, delete_user_all_data
 
 
@@ -41,31 +41,33 @@ _SECURITY_HEADERS = [
 def _authorized(headers) -> bool:
     """Authenticate via either Bearer token (curl) or HTTP Basic Auth (browser).
 
-    Fails closed when CRON_SECRET is not configured — refuses to serve
-    rather than exposing the dashboard on an unconfigured deployment.
+    - Bearer: matches CRON_SECRET. Used by crons and curl scripts.
+    - Basic: matches ADMIN_USERNAME + ADMIN_PASSWORD. Used by browsers.
+
+    Fails closed when neither path is fully configured on the deployment.
     Uses constant-time comparison to resist timing attacks.
     """
-    if not CRON_SECRET:
-        return False
-
     auth = headers.get("Authorization", "")
     if not auth:
         return False
 
-    expected_bearer = f"Bearer {CRON_SECRET}"
-    if hmac.compare_digest(auth, expected_bearer):
-        return True
+    if CRON_SECRET:
+        expected_bearer = f"Bearer {CRON_SECRET}"
+        if hmac.compare_digest(auth, expected_bearer):
+            return True
 
-    # Basic auth: any username, password must match CRON_SECRET.
-    # Accepted so browsers can prompt the user and cache credentials without
-    # putting the token in the URL (which would leak via history/logs/referer).
-    if auth.startswith("Basic "):
+    if ADMIN_USERNAME and ADMIN_PASSWORD and auth.startswith("Basic "):
         try:
             decoded = base64.b64decode(auth[6:], validate=True).decode("utf-8", errors="replace")
         except Exception:
             return False
-        _, _, password = decoded.partition(":")
-        if password and hmac.compare_digest(password, CRON_SECRET):
+        username, _, password = decoded.partition(":")
+        if (
+            username
+            and password
+            and hmac.compare_digest(username, ADMIN_USERNAME)
+            and hmac.compare_digest(password, ADMIN_PASSWORD)
+        ):
             return True
 
     return False
@@ -102,8 +104,9 @@ class handler(BaseHTTPRequestHandler):
     def do_GET(self):
         if not _authorized(self.headers):
             self._send_unauthorized(
-                b"Unauthorized. Authenticate via HTTP Basic Auth (any username, "
-                b"password = CRON_SECRET) or Authorization: Bearer <CRON_SECRET>."
+                b"Unauthorized. Authenticate via HTTP Basic Auth "
+                b"(ADMIN_USERNAME / ADMIN_PASSWORD) or Authorization: "
+                b"Bearer <CRON_SECRET>."
             )
             return
 

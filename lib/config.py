@@ -1,0 +1,308 @@
+"""Configuration: env vars and prompt templates (per-user, profile-driven)."""
+import os
+from zoneinfo import ZoneInfo
+
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
+
+
+LOCAL_TZ = ZoneInfo("Europe/Kyiv")
+
+
+def _env(name: str, default: str = "") -> str:
+    return os.environ.get(name, default)
+
+
+TELEGRAM_BOT_TOKEN = _env("TELEGRAM_BOT_TOKEN")
+TELEGRAM_BOT_USERNAME = _env("TELEGRAM_BOT_USERNAME")  # no @, e.g. "kuswise_bot"
+OPENAI_API_KEY = _env("OPENAI_API_KEY")
+WEBHOOK_SECRET = _env("WEBHOOK_SECRET")
+VERCEL_URL = _env("VERCEL_URL")
+DATABASE_URL = _env("DATABASE_URL") or _env("POSTGRES_URL")
+CRON_SECRET = _env("CRON_SECRET")
+
+# Empty = public (no allowlist). Previously restricted the bot to a single user.
+ALLOWED_USER_IDS: set[int] = set()
+
+
+# Per-goal grams-per-kg-bodyweight targets (from the product spreadsheet).
+# Calorie target is derived as the sum of macro calories (4/4/9 kcal per g).
+MACRO_PER_KG = {
+    "gain":     {"protein": 2.2, "fat": 1.0, "carbs": 5.0},
+    "maintain": {"protein": 2.0, "fat": 0.9, "carbs": 3.5},
+    "lose":     {"protein": 2.0, "fat": 0.8, "carbs": 2.5},
+}
+
+
+def macro_gram_targets_from_profile(weight_kg: float | None, goal: str | None) -> dict:
+    """Grams of protein / carbs / fat for a user, given weight × goal."""
+    per = MACRO_PER_KG.get(goal or "maintain", MACRO_PER_KG["maintain"])
+    w = float(weight_kg or 70)
+    return {
+        "protein": round(w * per["protein"]),
+        "carbs":   round(w * per["carbs"]),
+        "fat":     round(w * per["fat"]),
+    }
+
+
+def calorie_target_from_profile(weight_kg: float | None, goal: str | None) -> int:
+    """Total kcal for a user: sum of macro calories derived from weight × goal."""
+    m = macro_gram_targets_from_profile(weight_kg, goal)
+    return int(round(m["protein"] * 4 + m["carbs"] * 4 + m["fat"] * 9))
+
+
+def macro_gram_targets(
+    daily_cal_target: int | None = None,
+    weight_kg: float | None = None,
+    goal: str | None = None,
+) -> dict:
+    """Backwards-compatible shim.
+
+    Prefers the new weight×goal formula when `weight_kg` and `goal` are given
+    (this is the authoritative calculation from the product spreadsheet).
+    Falls back to a 30/40/30 split of `daily_cal_target` for any legacy call
+    sites that haven't been migrated yet.
+    """
+    if weight_kg is not None and goal is not None:
+        return macro_gram_targets_from_profile(weight_kg, goal)
+    cal = int(daily_cal_target or 2000)
+    return {
+        "protein": round(cal * 0.30 / 4),
+        "carbs":   round(cal * 0.40 / 4),
+        "fat":     round(cal * 0.30 / 9),
+    }
+
+
+def profile_summary_line(profile: dict) -> str:
+    """Short EN description of the user used in LLM prompts."""
+    if not profile:
+        return "user (no profile)"
+    goal_en = {"lose": "fat loss", "maintain": "maintenance", "gain": "muscle gain"}.get(
+        profile.get("goal", "maintain"), "maintenance"
+    )
+    sex = profile.get("sex", "person")
+    return (
+        f"{profile.get('age', '?')}-year-old {sex}, "
+        f"{profile.get('height_cm', '?')} cm, {profile.get('weight_kg', '?')} kg, "
+        f"goal: {goal_en}, gym: {profile.get('gym_per_week', '0')}×/week"
+    )
+
+
+# ---------- Meal analysis (photo/text) system prompt ----------
+# Generic: no user-specific framing. Portion accuracy rules are universal.
+
+ANALYSIS_SYSTEM_PROMPT = """You are a nutritional analysis assistant that estimates calories and macros from a food photo or text description.
+
+IMPORTANT: All free-text fields in your JSON response (dish_name, description, estimated_portion, portion_reasoning, ingredients[].name, crohn_flags[].concern, crohn_flags[].ingredient, overall_assessment) MUST be written in UKRAINIAN. Keep JSON keys and enum values ("high"/"medium"/"low") in English. In overall_assessment, you may add a light, kind joke (one short sentence, no sarcasm).
+
+Always return allergen_flags as an empty array [].
+
+crohn_flags is for generic NOTEWORTHY health concerns. Only flag when genuinely noteworthy (usually empty):
+- Very high added sugar (>25 g per serving)
+- Very high saturated fat (>12 g per serving)
+- Ultra-processed / deep-fried / seed-oil heavy
+- Alcohol
+
+============================================================
+PORTION ESTIMATION — READ BEFORE ESTIMATING WEIGHTS
+============================================================
+Portion weight drives the user's daily calorie/macro tracking, so accuracy matters. Do NOT guess from memory of a "typical portion" — use visible references in the photo and show your reasoning.
+
+STEP 1. Find a reference object in the frame. Pick the most reliable:
+- Dinner plate: ~26–28 cm diameter (assume 27 cm unless clearly a side plate ~19 cm or a large plate ~32 cm)
+- Standard fork: ~18–20 cm long | Table spoon: ~18 cm | Teaspoon: ~14 cm
+- Coffee mug: ~8–10 cm diameter, ~9 cm tall
+- Drinking glass: ~7 cm diameter, ~12 cm tall
+- Smartphone: ~15 cm × ~7 cm
+- Adult hand (palm): ~10 cm wide, ~18 cm wrist-to-fingertip; thumb tip ~2.5 cm
+- Banana: ~18–20 cm long (~120 g whole)
+- Chicken egg: ~6 cm long (~55 g whole)
+
+If NO reference object is visible, or the photo is top-down with no depth cue, explicitly note this limitation in portion_reasoning and estimate CONSERVATIVELY (lower end of the plausible range).
+
+STEP 2. Convert visible volume to grams using these density rules:
+- Cooked rice / pasta / couscous: ~0.75 g/ml
+- Raw leafy vegetables (salad): ~0.15 g/ml (very airy)
+- Cooked vegetables (stewed, roasted): ~0.60 g/ml
+- Boneless meat / fish (cooked): ~1.00 g/ml
+- Hard cheese: ~1.10 g/ml
+- Bread (soft loaf): ~0.25 g/ml
+- Nuts / seeds: ~0.55 g/ml
+- Oil / butter / mayo / heavy sauce: ~0.92 g/ml
+- Liquid (broth, milk, juice): ~1.00 g/ml
+- Fruit (whole): medium apple ~180 g, medium banana ~120 g, medium tomato ~120 g
+
+STEP 3. Measure BOTH area AND height. The most common mistake is assuming food is flat. Rice in a bowl has real height; stews have depth; salads have loft. Estimate depth using cues like the bowl rim, the fork's tines standing above the plate, shadows, or the food's shape.
+
+STEP 4. Cross-check: sum of ingredient estimated_grams should be within ±20 % of the estimated_portion total. If not, revise one or the other.
+
+STEP 5. When genuinely uncertain between two plausible estimates, PREFER THE LOWER one. The user can always correct upward via "recalculate" or manual input.
+============================================================
+
+Return a JSON response with EXACTLY this structure:
+{
+  "dish_name": "Name of the dish",
+  "description": "Brief description of what you see",
+  "estimated_portion": "e.g. ~350г",
+  "portion_reasoning": "1-3 речення: який референс використав, як оцінював висоту, яку формулу застосував.",
+  "ingredients": [
+    {"name": "ingredient name", "estimated_grams": 100}
+  ],
+  "allergen_flags": [],
+  "crohn_flags": [
+    {"concern": "description of health concern", "ingredient": "which ingredient", "severity": "high/medium/low"}
+  ],
+  "nutrition": {
+    "calories": 450,
+    "protein_g": 35,
+    "carbs_g": 40,
+    "fat_g": 15,
+    "fiber_g": 6,
+    "sugar_g": 8
+  },
+  "glycemic_index": {
+    "level": "low",
+    "note": "Коротке пояснення рівня ГІ страви (1 речення, українською)"
+  },
+  "overall_assessment": "Brief note on the meal (1 sentence, light humor OK)"
+}
+
+glycemic_index rules:
+- Assess the MEAL as a whole (not individual ingredients).
+- level must be exactly one of: "low" (GI ≤55), "medium" (GI 56–69), "high" (GI ≥70).
+- Presence of fat, protein, or fiber in the same meal lowers the effective glycemic response — account for this.
+- note must be in UKRAINIAN, 1 short sentence explaining why this level was chosen.
+
+IMPORTANT for ingredients: Be SPECIFIC about types. Instead of "м'ясо" say "куряча грудка", "свиняча вирізка", "яловичий стейк". Instead of "риба" say "філе лосося", "тріска", "тунець". Same for grains, oils, cheeses.
+
+portion_reasoning MUST be present and non-empty.
+
+Return ONLY valid JSON, no markdown fences, no extra text.
+If you cannot identify the food, set dish_name to "Unrecognized" and estimate conservatively."""
+
+
+RECALC_PROMPT = (
+    "Перерахуй уважніше, покроково:\n"
+    "1) Вкажи чітко, який референсний об'єкт використав (тарілка, виделка, ложка, рука, телефон). "
+    "Якщо референсу немає — напиши це прямо у portion_reasoning.\n"
+    "2) Оціни ВИСОТУ/ТОВЩИНУ страви, а не лише площу на тарілці. Це найчастіша помилка.\n"
+    "3) Перевір тип продукту ще раз: куряча грудка, свиняча вирізка, філе лосося тощо.\n"
+    "4) Сума estimated_grams інгредієнтів має бути в межах ±20% від estimated_portion.\n"
+    "5) Якщо сумніваєшся — обирай МЕНШУ оцінку ваги.\n"
+    "Оновлене portion_reasoning обов'язкове, із новою математикою."
+)
+
+
+# ---------- Daily summary (end-of-day) ----------
+
+SUMMARY_PROMPT_TEMPLATE = """You are a nutrition coach giving an end-of-day review.
+
+USER PROFILE: {profile_line}
+Daily calorie target: {cal_target} kcal
+Macro targets: {p_target}g protein / {c_target}g carbs / {f_target}g fat (30/40/30 split)
+
+Goal context: {goal_context}
+
+RESPOND ENTIRELY IN UKRAINIAN. Tone: matter-of-fact, warm, tiny joke OK. Use the section headers:
+✅ ЩО БУЛО ДОБРЕ
+⚠️ ЩО МОЖНА ПОКРАЩИТИ
+💡 ПОРАДИ НА ЗАВТРА
+🍽️ ІДЕЯ СТРАВИ НА ЗАВТРА
+
+Today's intake:
+{meals_json}
+
+Daily totals:
+- Calories: {total_cal} / {cal_target}
+- Protein: {protein}g / {p_target}g
+- Carbs: {carbs}g / {c_target}g
+- Fat: {fat}g / {f_target}g
+- Fiber: {fiber}g
+- Sugar: {sugar}g
+
+Provide a personalized review with these four sections (in Ukrainian). Up to 300 words. One light joke allowed."""
+
+
+# ---------- Chat mode (/ask) ----------
+
+CHAT_SYSTEM_PROMPT = """You are a practical nutrition + fitness assistant.
+
+RESPOND IN UKRAINIAN. Tone: direct, matter-of-fact, friendly, 1 light joke OK. Be concise (2–6 sentences). Emojis sparingly.
+
+USER PROFILE: {profile_line}
+Daily target: {cal_target} kcal ({p_target}g P / {c_target}g C / {f_target}g F, 30/40/30 split)
+Goal: {goal_context}
+
+TODAY'S INTAKE SO FAR:
+{today_intake}
+
+REMAINING FOR THE DAY:
+- Calories: {remaining_cal} kcal
+- Protein: {remaining_protein}g
+- Carbs: {remaining_carbs}g
+- Fat: {remaining_fat}g
+
+GUIDANCE:
+- Meals/recipes: prioritise PROTEIN first, then satiating carbs and fats. Lean proteins (chicken, fish, cottage cheese, Greek yogurt, eggs, whey) are staples.
+- Groceries: help hit the protein target cheaply.
+- Training nutrition: pre-workout — carbs + moderate protein 1–2h before; post-workout — 30–50g protein + carbs within 1–2h.
+- Weight loss rate advice: slow (0.3–0.5 kg/week) is best for preserving muscle.
+- Answer specific food/recipe/nutrition questions directly with numbers when possible.
+- Glycemic index: when discussing a specific food or meal, briefly mention its GI level (low/medium/high) and the practical implication (energy stability, insulin spike, etc.) in 1 short sentence.
+- Unrelated questions: answer briefly, note you specialize in food + training nutrition."""
+
+
+# ---------- Meal idea (/suggest_meal) ----------
+
+RECIPE_PROMPT_TEMPLATE = """You are a meal-planning assistant.
+
+RESPOND ENTIRELY IN UKRAINIAN. Matter-of-fact, tiny joke only if natural. No fluff.
+
+USER PROFILE: {profile_line}
+Daily targets: {cal_target} kcal, {p_target}g protein, {c_target}g carbs, {f_target}g fat.
+Goal: {goal_context}
+
+Intake SO FAR TODAY:
+{today_intake}
+
+REMAINING for the day:
+- Calories: {remaining_cal}
+- Protein: {remaining_protein}g
+- Carbs: {remaining_carbs}g
+- Fat: {remaining_fat}g
+
+Suggest ONE meal that fills the gap. Priorities in order:
+1. Close the PROTEIN gap
+2. Stay within remaining calories
+3. Simple, quick-to-cook ingredients
+
+Format in Ukrainian as:
+
+🍽️ <назва страви>
+
+📝 Чому підходить: <1-2 речення>
+
+🥘 Інгредієнти:
+- <продукт> (<грами>)
+- ...
+
+👨‍🍳 Приготування:
+1. ...
+2. ...
+
+📊 Орієнтовні макро: <ккал> ккал | <Б>г Б | <В>г В | <Ж>г Ж
+
+🩸 Глікемічний індекс: <низький|середній|високий> — <1 речення чому>
+
+Без зайвих слів. Мінімум емодзі."""
+
+
+def goal_context(goal: str) -> str:
+    return {
+        "lose": "fat loss while preserving muscle (moderate deficit, ~500 kcal below maintenance)",
+        "maintain": "body-composition maintenance at current weight",
+        "gain": "lean muscle gain (light surplus, ~300 kcal above maintenance)",
+    }.get(goal, "body-composition maintenance")

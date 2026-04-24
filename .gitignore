@@ -1,0 +1,17 @@
+.env
+.env.local
+__pycache__/
+*.pyc
+*.pyo
+.vercel/
+node_modules/
+*.db
+*.sqlite
+.venv/
+venv/
+.DS_Store
+.idea/
+.vscode/
+.claude/
+.vercel
+.env*.local

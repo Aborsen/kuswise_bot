@@ -1,0 +1,1466 @@
+"""Vercel serverless handler for Telegram webhook updates."""
+import json
+import os
+import sys
+import traceback
+from http.server import BaseHTTPRequestHandler
+
+_THIS = os.path.dirname(os.path.abspath(__file__))
+_ROOT = os.path.dirname(_THIS)
+if _ROOT not in sys.path:
+    sys.path.insert(0, _ROOT)
+
+from lib.config import (
+    WEBHOOK_SECRET,
+    RECALC_PROMPT,
+    ALLOWED_USER_IDS,
+    calorie_target_from_profile,
+    macro_gram_targets_from_profile,
+)
+from lib.database import (
+    get_conn,
+    init_db,
+    upsert_user,
+    save_pending_photo,
+    save_pending_text,
+    pop_pending_entry,
+    cleanup_stale_pending,
+    cleanup_stale_analyses,
+    save_pending_analysis,
+    get_pending_analysis,
+    pop_pending_analysis,
+    set_awaiting_manual,
+    save_meal,
+    upsert_daily_log_from_meal,
+    get_today_log,
+    get_history,
+    get_meals_for_day,
+    delete_meal,
+    recalc_daily_log,
+    get_chat_history,
+    append_chat_message,
+    cleanup_stale_chat,
+    get_log_for_date,
+    get_profile,
+    ensure_profile_row,
+    update_profile,
+    profile_is_complete,
+    reset_onboarding,
+    toggle_favorite,
+    set_favorite,
+    get_meal_by_id,
+    get_recent_meals,
+    get_favorites,
+    clone_meal_for_today,
+    add_water,
+    remove_last_water_today,
+    get_water_today,
+    get_water_target,
+    set_water_target,
+    upsert_water_target_from_profile,
+    insert_weight,
+    set_awaiting_input,
+)
+from lib.telegram_helpers import (
+    send_message,
+    answer_callback_query,
+    get_file_bytes,
+    edit_message_text,
+    edit_message_reply_markup,
+    send_chat_action,
+    meal_type_keyboard,
+    moderation_keyboard,
+    meals_list_keyboard,
+    main_menu_keyboard,
+    dashboard_inline_keyboard,
+    set_chat_menu_button,
+    sex_keyboard,
+    gym_keyboard,
+    goal_keyboard,
+    confirm_calories_keyboard,
+    profile_edit_keyboard,
+    profile_goal_keyboard,
+    cancel_only_keyboard,
+    recent_meals_keyboard,
+    meal_logged_actions_keyboard,
+    undo_relog_keyboard,
+    water_keyboard,
+    water_goal_keyboard,
+)
+from lib.openai_vision import analyze_photo, analyze_text
+from lib.openai_voice import transcribe_voice
+from lib.openai_nutrition import suggest_meal
+from lib.openai_chat import ask_chat
+from lib.formatters import (
+    welcome_message,
+    help_message,
+    format_today_progress,
+    format_yesterday,
+    format_history,
+    format_day_detail,
+    format_meal_logged,
+    format_meal_preview,
+    format_meals_list,
+    format_profile,
+    format_recommendation,
+    PHOTO_PROMPT_MEAL_TYPE,
+    TEXT_PROMPT_MEAL_TYPE,
+    ANALYZING_WAIT,
+    RECALC_WAIT,
+    PHOTO_DOWNLOAD_FAILED,
+    PHOTO_ANALYSIS_FAILED,
+    TEXT_ANALYSIS_FAILED,
+    PENDING_EXPIRED,
+    MANUAL_INPUT_PROMPT,
+    MEAL_DELETED,
+    MEAL_EDIT_PROMPT,
+    MEAL_NOT_FOUND,
+    MEAL_CANCELLED,
+    NO_MEALS_TO_MANAGE,
+    UNKNOWN_COMMAND,
+    SUGGEST_THINKING,
+    SUGGEST_FAILED,
+    HISTORY_USAGE,
+    ASK_PROMPT,
+    ASK_THINKING,
+    ASK_ERROR,
+    ONBOARDING_INTRO,
+    ONBOARDING_ASK_AGE,
+    ONBOARDING_ASK_SEX,
+    ONBOARDING_ASK_WEIGHT,
+    ONBOARDING_ASK_HEIGHT,
+    ONBOARDING_ASK_GYM,
+    ONBOARDING_ASK_GOAL,
+    ONBOARDING_INVALID_NUMBER,
+    ONBOARDING_AGE_RANGE,
+    ONBOARDING_WEIGHT_RANGE,
+    ONBOARDING_HEIGHT_RANGE,
+    ONBOARDING_CUSTOM_CAL_PROMPT,
+    ONBOARDING_CUSTOM_CAL_RANGE,
+    ONBOARDING_NEED_BUTTON,
+    ONBOARDING_DONE,
+    ONBOARDING_REQUIRED,
+    BTN_ASK,
+    BTN_TODAY,
+    BTN_YESTERDAY,
+    BTN_MEALS,
+    BTN_PROFILE,
+    BTN_SUGGEST,
+    BTN_DASHBOARD,
+    BTN_FAV,
+    BTN_WATER,
+    MENU_BUTTON_LABELS,
+    format_water,
+    format_meal_list_entry,
+    FAV_EMPTY_LIST,
+    RECENT_EMPTY_LIST,
+    FAV_ADDED,
+    FAV_REMOVED,
+    RELOG_DONE,
+    RELOG_FAILED,
+    UNDO_EXPIRED,
+    UNDO_DONE,
+    WATER_UNDO_EMPTY,
+    WATER_GOAL_PROMPT,
+    WATER_GOAL_SAVED,
+    WEIGHT_CHECKIN_SKIPPED,
+    WEIGHT_INPUT_PROMPT,
+    WEIGHT_INVALID,
+    WEIGHT_NOT_A_NUMBER,
+    GOAL_UPDATE_PROMPT,
+    GOAL_UPDATED,
+)
+
+
+NOT_AUTHORIZED = "🔒 Цей бот зараз недоступний. Спробуй пізніше."
+
+
+def _is_allowed(user_id: int | None) -> bool:
+    if not ALLOWED_USER_IDS:
+        return True
+    return user_id in ALLOWED_USER_IDS
+
+
+MAX_WEBHOOK_BYTES = 512 * 1024
+
+
+class handler(BaseHTTPRequestHandler):
+    def do_POST(self):
+        secret = self.headers.get("X-Telegram-Bot-Api-Secret-Token", "")
+        if not WEBHOOK_SECRET or secret != WEBHOOK_SECRET:
+            self.send_response(403)
+            self.end_headers()
+            return
+
+        try:
+            length = int(self.headers.get("Content-Length", "0") or 0)
+        except ValueError:
+            length = 0
+        if length > MAX_WEBHOOK_BYTES:
+            self.send_response(413)
+            self.end_headers()
+            return
+
+        try:
+            raw = self.rfile.read(length) if length else b"{}"
+            update = json.loads(raw.decode("utf-8") or "{}")
+        except Exception:
+            self._respond_ok()
+            return
+
+        try:
+            process_update(update)
+        except Exception:
+            print("webhook error:", traceback.format_exc(), flush=True)
+
+        self._respond_ok()
+
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.end_headers()
+        self.wfile.write(json.dumps({"ok": True, "service": "webhook"}).encode())
+
+    def _respond_ok(self):
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.end_headers()
+        self.wfile.write(json.dumps({"ok": True}).encode())
+
+
+# ---------- Calorie target (new weight×goal formula) ----------
+#
+# We keep collecting age / sex / height / gym_per_week in onboarding because
+# they add useful context to AI prompts — but the calorie target itself is
+# computed purely from bodyweight and goal per the product spreadsheet.
+# See MACRO_PER_KG in lib/config.py.
+
+_VALID_GYM_FREQ = {"0", "1-2", "3-4", "5-6", "7"}
+_VALID_GOALS = {"lose", "maintain", "gain"}
+
+
+# ---------- Main dispatcher ----------
+
+def process_update(update: dict) -> None:
+    conn = get_conn()
+    try:
+        init_db(conn)
+        cleanup_stale_pending(conn, minutes=10)
+        cleanup_stale_analyses(conn, minutes=10)
+        cleanup_stale_chat(conn, minutes=60)
+
+        if "callback_query" in update:
+            cb_user_id = update["callback_query"].get("from", {}).get("id")
+            if not _is_allowed(cb_user_id):
+                _reject_cb(update["callback_query"])
+                return
+            handle_callback(conn, update["callback_query"])
+            return
+
+        message = update.get("message") or update.get("edited_message")
+        if not message:
+            return
+
+        user = message.get("from", {})
+        user_id = user.get("id")
+        username = user.get("username") or user.get("first_name")
+        first_name = user.get("first_name")
+
+        if not _is_allowed(user_id):
+            chat_id = message.get("chat", {}).get("id")
+            if chat_id:
+                send_message(chat_id, NOT_AUTHORIZED)
+            return
+
+        if user_id:
+            upsert_user(conn, user_id, username)
+
+        chat_id = message["chat"]["id"]
+
+        # Onboarding takes precedence over everything except explicit /start reset.
+        profile = get_profile(conn, user_id) if user_id else None
+        text = (message.get("text") or "").strip()
+        is_start = text.lower().startswith("/start")
+
+        if is_start:
+            # /start: always (re)introduce + begin onboarding if incomplete
+            handle_start(conn, chat_id, user_id, first_name, profile)
+            return
+
+        # If onboarding not complete, route every message through onboarding handler.
+        if user_id and not profile_is_complete(profile):
+            # Allow /help without a profile
+            if text.lower().startswith("/help"):
+                send_message(chat_id, help_message())
+                return
+            if message.get("photo"):
+                send_message(chat_id, ONBOARDING_REQUIRED)
+                return
+            handle_onboarding_text(conn, chat_id, user_id, first_name, text, profile)
+            return
+
+        # ----- Normal flow (profile complete) -----
+
+        if message.get("voice") or message.get("audio"):
+            handle_voice(conn, message)
+            return
+
+        if message.get("photo"):
+            handle_photo(conn, message)
+            return
+
+        if not text:
+            return
+
+        if text == BTN_DASHBOARD:
+            send_message(
+                chat_id,
+                "📱 Натисни кнопку нижче, щоб відкрити Dashboard:",
+                reply_markup=dashboard_inline_keyboard(),
+            )
+            return
+        if text == BTN_WATER:
+            # Quick-add 250 ml and reply with updated bar + keyboard.
+            handle_water_quickadd(conn, chat_id, user_id, amount_ml=250)
+            return
+        if text in MENU_BUTTON_LABELS:
+            mapped = {
+                BTN_ASK: "/ask",
+                BTN_FAV: "/fav",
+                BTN_MEALS: "/meals",
+                BTN_PROFILE: "/profile",
+                BTN_SUGGEST: "/suggest_meal",
+            }.get(text)
+            if mapped:
+                handle_command(conn, message, mapped, first_name, profile)
+                return
+
+        # Weight check-in / manual weight edit takes priority over everything
+        # except the /cancel escape hatch (handled further down).
+        if (
+            user_id
+            and profile
+            and profile.get("awaiting_input_type") == "weight"
+            and text.lower().strip() != "/cancel"
+        ):
+            handle_weight_input(conn, chat_id, user_id, first_name, text, profile)
+            return
+
+        # Manual water-target entry from /profile → 💧 Ціль води → Своє значення.
+        if (
+            user_id
+            and profile
+            and profile.get("awaiting_input_type") == "water_target"
+            and text.lower().strip() != "/cancel"
+        ):
+            handle_water_target_input(conn, chat_id, user_id, text)
+            return
+
+        if text.startswith("/"):
+            if user_id and text.lower().strip() == "/cancel":
+                pending = get_pending_analysis(conn, user_id)
+                if pending and pending["awaiting_manual"]:
+                    pop_pending_analysis(conn, user_id)
+                    pop_pending_entry(conn, user_id)
+                    send_message(chat_id, MEAL_CANCELLED, reply_markup=main_menu_keyboard())
+                    return
+            handle_command(conn, message, text, first_name, profile)
+            return
+
+        reply_to = message.get("reply_to_message") or {}
+        if (
+            reply_to.get("from", {}).get("is_bot")
+            and reply_to.get("text") == ASK_PROMPT
+            and user_id
+        ):
+            handle_ask(conn, user_id, chat_id, text, profile)
+            return
+
+        if user_id:
+            pending = get_pending_analysis(conn, user_id)
+            if pending and pending["awaiting_manual"]:
+                handle_manual_text_input(conn, message, text, pending, profile)
+                return
+
+        handle_text_entry(conn, message, text)
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+def _reject_cb(cb: dict) -> None:
+    message = cb.get("message", {})
+    chat_id = message.get("chat", {}).get("id")
+    if chat_id:
+        send_message(chat_id, NOT_AUTHORIZED)
+    answer_callback_query(cb["id"], "🔒 Недоступно")
+
+
+# ---------- Onboarding ----------
+
+def handle_start(conn, chat_id: int, user_id: int, first_name: str | None, profile: dict | None) -> None:
+    try:
+        set_chat_menu_button(chat_id=chat_id)
+    except Exception as e:
+        print("set_chat_menu_button error:", e, flush=True)
+
+    if profile_is_complete(profile):
+        send_message(chat_id, welcome_message(first_name), reply_markup=main_menu_keyboard())
+        return
+
+    # Fresh user or unfinished profile: kick off onboarding.
+    profile = ensure_profile_row(conn, user_id)
+    reset_onboarding(conn, user_id)
+    send_message(chat_id, ONBOARDING_INTRO)
+    send_message(chat_id, ONBOARDING_ASK_AGE)
+
+
+def _parse_int(text: str) -> int | None:
+    try:
+        return int(text.strip().replace(",", "."))
+    except (ValueError, AttributeError):
+        return None
+
+
+def _parse_float(text: str) -> float | None:
+    try:
+        return float(text.strip().replace(",", "."))
+    except (ValueError, AttributeError):
+        return None
+
+
+def handle_onboarding_text(conn, chat_id: int, user_id: int, first_name: str | None,
+                           text: str, profile: dict | None) -> None:
+    if profile is None:
+        profile = ensure_profile_row(conn, user_id)
+    step = profile.get("onboarding_step") or "awaiting_age"
+
+    if step == "awaiting_age":
+        age = _parse_int(text)
+        if age is None:
+            send_message(chat_id, ONBOARDING_INVALID_NUMBER)
+            return
+        if not (10 <= age <= 100):
+            send_message(chat_id, ONBOARDING_AGE_RANGE)
+            return
+        update_profile(conn, user_id, age=age, onboarding_step="awaiting_sex")
+        send_message(chat_id, ONBOARDING_ASK_SEX, reply_markup=sex_keyboard())
+
+    elif step == "awaiting_sex":
+        send_message(chat_id, ONBOARDING_NEED_BUTTON, reply_markup=sex_keyboard())
+
+    elif step == "awaiting_weight":
+        w = _parse_float(text)
+        if w is None:
+            send_message(chat_id, ONBOARDING_INVALID_NUMBER)
+            return
+        if not (30 <= w <= 300):
+            send_message(chat_id, ONBOARDING_WEIGHT_RANGE)
+            return
+        update_profile(conn, user_id, weight_kg=w, onboarding_step="awaiting_height")
+        send_message(chat_id, ONBOARDING_ASK_HEIGHT)
+
+    elif step == "awaiting_height":
+        h = _parse_int(text)
+        if h is None:
+            send_message(chat_id, ONBOARDING_INVALID_NUMBER)
+            return
+        if not (100 <= h <= 250):
+            send_message(chat_id, ONBOARDING_HEIGHT_RANGE)
+            return
+        update_profile(conn, user_id, height_cm=h, onboarding_step="awaiting_gym")
+        send_message(chat_id, ONBOARDING_ASK_GYM, reply_markup=gym_keyboard())
+
+    elif step == "awaiting_gym":
+        send_message(chat_id, ONBOARDING_NEED_BUTTON, reply_markup=gym_keyboard())
+
+    elif step == "awaiting_goal":
+        send_message(chat_id, ONBOARDING_NEED_BUTTON, reply_markup=goal_keyboard())
+
+    elif step == "awaiting_confirm":
+        send_message(chat_id, ONBOARDING_NEED_BUTTON, reply_markup=confirm_calories_keyboard())
+
+    elif step == "awaiting_custom_cal":
+        cal = _parse_int(text)
+        if cal is None:
+            send_message(chat_id, ONBOARDING_INVALID_NUMBER)
+            return
+        if not (1000 <= cal <= 6000):
+            send_message(chat_id, ONBOARDING_CUSTOM_CAL_RANGE)
+            return
+        update_profile(
+            conn, user_id,
+            daily_calorie_target=cal,
+            onboarding_step="done",
+        )
+        try:
+            w = (profile or {}).get("weight_kg")
+            water = upsert_water_target_from_profile(conn, user_id, float(w)) if w else None
+        except Exception as e:
+            print("water target upsert error:", e, flush=True)
+            water = None
+        done_text = ONBOARDING_DONE.format(name=first_name or "друже")
+        if water:
+            done_text += (
+                f"\n\n🎯 Калорії: <b>{cal} ккал/день</b>\n"
+                f"💧 Вода: <b>{water} мл/день</b> (можна змінити в /water)"
+            )
+        send_message(chat_id, done_text, reply_markup=main_menu_keyboard())
+    else:
+        # Unexpected state — restart
+        reset_onboarding(conn, user_id)
+        send_message(chat_id, ONBOARDING_ASK_AGE)
+
+
+def handle_onboarding_callback(conn, cb: dict) -> None:
+    cb_id = cb["id"]
+    data = cb["data"]
+    user_id = cb["from"]["id"]
+    first_name = cb["from"].get("first_name")
+    message = cb.get("message", {})
+    chat_id = message.get("chat", {}).get("id", user_id)
+
+    profile = ensure_profile_row(conn, user_id)
+    step = profile.get("onboarding_step") or "awaiting_age"
+
+    # Allow restart from the profile screen regardless of step
+    if data == "onb:restart":
+        answer_callback_query(cb_id, "🔄 Починаємо заново")
+        reset_onboarding(conn, user_id)
+        send_message(chat_id, ONBOARDING_INTRO)
+        send_message(chat_id, ONBOARDING_ASK_AGE)
+        return
+
+    if data.startswith("onb:sex:"):
+        if step != "awaiting_sex":
+            answer_callback_query(cb_id, "Вже відповів(ла) 🙂")
+            return
+        sex = data.split(":", 2)[2]
+        if sex not in ("male", "female"):
+            answer_callback_query(cb_id, "Невірна відповідь")
+            return
+        update_profile(conn, user_id, sex=sex, onboarding_step="awaiting_weight")
+        answer_callback_query(cb_id, "Записав")
+        send_message(chat_id, ONBOARDING_ASK_WEIGHT)
+        return
+
+    if data.startswith("onb:gym:"):
+        if step != "awaiting_gym":
+            answer_callback_query(cb_id, "Вже відповів(ла) 🙂")
+            return
+        freq = data.split(":", 2)[2]
+        if freq not in _VALID_GYM_FREQ:
+            answer_callback_query(cb_id, "Невірна відповідь")
+            return
+        update_profile(conn, user_id, gym_per_week=freq, onboarding_step="awaiting_goal")
+        answer_callback_query(cb_id, "Записав")
+        send_message(chat_id, ONBOARDING_ASK_GOAL, reply_markup=goal_keyboard())
+        return
+
+    if data.startswith("onb:goal:"):
+        if step != "awaiting_goal":
+            answer_callback_query(cb_id, "Вже відповів(ла) 🙂")
+            return
+        goal = data.split(":", 2)[2]
+        if goal not in _VALID_GOALS:
+            answer_callback_query(cb_id, "Невірна відповідь")
+            return
+        # Compute recommendation from the new weight × goal formula.
+        updated = get_profile(conn, user_id) or {}
+        try:
+            rec = calorie_target_from_profile(float(updated["weight_kg"]), goal)
+        except (KeyError, TypeError, ValueError):
+            # Weight missing or unparseable — restart safely.
+            reset_onboarding(conn, user_id)
+            answer_callback_query(cb_id, "Щось пішло не так, починаємо заново")
+            send_message(chat_id, ONBOARDING_ASK_AGE)
+            return
+        update_profile(
+            conn, user_id,
+            goal=goal,
+            recommended_calorie_target=rec,
+            onboarding_step="awaiting_confirm",
+        )
+        answer_callback_query(cb_id, "Рахую твою норму…")
+        profile_after = get_profile(conn, user_id) or {}
+        send_message(
+            chat_id,
+            format_recommendation(profile_after, rec),
+            reply_markup=confirm_calories_keyboard(),
+        )
+        return
+
+    if data == "onb:cal:accept":
+        if step != "awaiting_confirm":
+            answer_callback_query(cb_id, "Вже прийнято 🙂")
+            return
+        profile_after = get_profile(conn, user_id) or {}
+        rec = profile_after.get("recommended_calorie_target") or 2000
+        update_profile(
+            conn, user_id,
+            daily_calorie_target=rec,
+            onboarding_step="done",
+        )
+        # Auto-estimate water target from body weight (30 ml/kg).
+        try:
+            w = profile_after.get("weight_kg")
+            if w:
+                water = upsert_water_target_from_profile(conn, user_id, float(w))
+            else:
+                water = None
+        except Exception as e:
+            print("water target upsert error:", e, flush=True)
+            water = None
+        answer_callback_query(cb_id, "✅ Прийнято")
+        done_text = ONBOARDING_DONE.format(name=first_name or "друже")
+        if water:
+            done_text += (
+                f"\n\n🎯 Калорії: <b>{rec} ккал/день</b>\n"
+                f"💧 Вода: <b>{water} мл/день</b> (можна змінити в /water)"
+            )
+        send_message(chat_id, done_text, reply_markup=main_menu_keyboard())
+        return
+
+    if data == "onb:cal:custom":
+        if step != "awaiting_confirm":
+            answer_callback_query(cb_id, "Вже прийнято 🙂")
+            return
+        update_profile(conn, user_id, onboarding_step="awaiting_custom_cal")
+        answer_callback_query(cb_id, "Чекаю на число")
+        send_message(chat_id, ONBOARDING_CUSTOM_CAL_PROMPT)
+        return
+
+    answer_callback_query(cb_id, "Невідома дія")
+
+
+# ---------- Photo / text entry ----------
+
+def handle_photo(conn, message: dict) -> None:
+    chat_id = message["chat"]["id"]
+    user_id = message["from"]["id"]
+    photos = message["photo"]
+    file_id = photos[-1]["file_id"]
+    save_pending_photo(conn, user_id, file_id)
+    send_message(chat_id, PHOTO_PROMPT_MEAL_TYPE, reply_markup=meal_type_keyboard())
+
+
+def handle_text_entry(conn, message: dict, text: str) -> None:
+    chat_id = message["chat"]["id"]
+    user_id = message["from"]["id"]
+    save_pending_text(conn, user_id, text)
+    send_message(chat_id, TEXT_PROMPT_MEAL_TYPE, reply_markup=meal_type_keyboard())
+
+
+# ---------- Voice entry (Whisper) ----------
+
+VOICE_TOO_LONG = "🎙 Задовге повідомлення — будь ласка, до 60 с."
+VOICE_EMPTY = "🤔 Не розпізнав їжу. Спробуй ще раз або напиши текстом."
+VOICE_ERROR = "😵 Не вийшло розпізнати голос. Спробуй ще раз або напиши текстом."
+VOICE_TRANSCRIPT = "🎙 Почув: «{text}»"
+
+
+def handle_voice(conn, message: dict) -> None:
+    import html as _html
+    chat_id = message["chat"]["id"]
+    user_id = message["from"]["id"]
+    voice = message.get("voice") or message.get("audio") or {}
+    file_id = voice.get("file_id")
+    file_size = voice.get("file_size") or 0
+    if not file_id:
+        return
+
+    # Hard cap ~2 MB (≈60–90 s OGG/Opus) to keep Whisper + analysis under Vercel timeout.
+    if file_size > 2 * 1024 * 1024:
+        send_message(chat_id, VOICE_TOO_LONG)
+        return
+
+    send_chat_action(chat_id, "typing")
+
+    try:
+        audio_bytes = get_file_bytes(file_id)
+    except Exception as e:
+        print("voice getFile error:", e, flush=True)
+        send_message(chat_id, VOICE_ERROR)
+        return
+
+    try:
+        transcript = transcribe_voice(audio_bytes)
+    except Exception as e:
+        print("whisper error:", e, flush=True)
+        send_message(chat_id, VOICE_ERROR)
+        return
+
+    if not transcript or len(transcript) < 3:
+        send_message(chat_id, VOICE_EMPTY)
+        return
+
+    safe = _html.escape(transcript, quote=False)
+    send_message(chat_id, VOICE_TRANSCRIPT.format(text=safe))
+
+    # If this voice message is a reply to the /ask prompt, treat transcript as a
+    # chat question and route to handle_ask instead of the meal-logging flow.
+    reply_to = message.get("reply_to_message") or {}
+    if (
+        reply_to.get("from", {}).get("is_bot")
+        and reply_to.get("text") == ASK_PROMPT
+    ):
+        profile = get_profile(conn, user_id)
+        handle_ask(conn, user_id, chat_id, transcript, profile)
+        return
+
+    # Otherwise reuse the existing text-entry flow: saves as pending and asks meal type.
+    save_pending_text(conn, user_id, transcript)
+    send_message(chat_id, TEXT_PROMPT_MEAL_TYPE, reply_markup=meal_type_keyboard())
+
+
+# ---------- Callback router ----------
+
+def handle_callback(conn, cb: dict) -> None:
+    data = cb.get("data", "")
+    if data.startswith("onb:"):
+        handle_onboarding_callback(conn, cb)
+        return
+    # Everything below requires a completed profile.
+    user_id = cb["from"]["id"]
+    profile = get_profile(conn, user_id)
+    if not profile_is_complete(profile):
+        answer_callback_query(cb["id"], "Спочатку /start")
+        message = cb.get("message", {})
+        chat_id = message.get("chat", {}).get("id")
+        if chat_id:
+            send_message(chat_id, ONBOARDING_REQUIRED)
+        return
+
+    if data.startswith("meal_type:"):
+        handle_meal_type_callback(conn, cb, profile)
+    elif data.startswith("mod:"):
+        handle_moderation_callback(conn, cb, profile)
+    elif data.startswith("meal_del:") or data.startswith("meal_edit:"):
+        handle_meal_manage_callback(conn, cb)
+    elif data.startswith("fav:"):
+        handle_fav_callback(conn, cb)
+    elif data.startswith("relog:"):
+        handle_relog_callback(conn, cb)
+    elif data.startswith("undo:"):
+        handle_undo_callback(conn, cb)
+    elif data.startswith("water:"):
+        handle_water_callback(conn, cb)
+    elif data.startswith("prof:"):
+        handle_profile_edit_callback(conn, cb, profile)
+    elif data == "noop":
+        answer_callback_query(cb["id"])
+    else:
+        answer_callback_query(cb["id"], "Невідома дія")
+
+
+# ---------- Meal type selection → analyze → show preview ----------
+
+def handle_meal_type_callback(conn, cb: dict, profile: dict) -> None:
+    cb_id = cb["id"]
+    data = cb["data"]
+    user_id = cb["from"]["id"]
+    message = cb.get("message", {})
+    chat_id = message.get("chat", {}).get("id", user_id)
+
+    meal_type = data.split(":", 1)[1]
+
+    if meal_type == "cancel":
+        pop_pending_entry(conn, user_id)  # discard photo/text
+        answer_callback_query(cb_id, "Скасовано")
+        send_message(chat_id, MEAL_CANCELLED, reply_markup=main_menu_keyboard())
+        return
+
+    meal_ua_map = {"breakfast": "сніданок", "lunch": "обід", "dinner": "вечерю", "snack": "перекус"}
+    answer_callback_query(cb_id, f"Аналізую твій {meal_ua_map.get(meal_type, meal_type)}…")
+
+    entry = pop_pending_entry(conn, user_id)
+    if entry is None:
+        send_message(chat_id, PENDING_EXPIRED)
+        return
+    file_id, text_description = entry
+
+    send_message(chat_id, ANALYZING_WAIT)
+
+    analysis, raw = None, ""
+    try:
+        if file_id:
+            try:
+                image_bytes = get_file_bytes(file_id)
+            except Exception as e:
+                print("getFile error:", e, flush=True)
+                send_message(chat_id, PHOTO_DOWNLOAD_FAILED)
+                return
+            analysis, raw = analyze_photo(image_bytes)
+        elif text_description:
+            analysis, raw = analyze_text(text_description)
+        else:
+            send_message(chat_id, PENDING_EXPIRED)
+            return
+    except Exception as e:
+        print("analysis error:", e, flush=True)
+        send_message(chat_id, TEXT_ANALYSIS_FAILED if text_description else PHOTO_ANALYSIS_FAILED)
+        return
+
+    save_pending_analysis(conn, user_id, meal_type, analysis, file_id, text_description, raw)
+    send_message(chat_id, format_meal_preview(meal_type, analysis), reply_markup=moderation_keyboard())
+
+
+# ---------- Moderation: Accept / Recalculate / Manual ----------
+
+def handle_moderation_callback(conn, cb: dict, profile: dict) -> None:
+    cb_id = cb["id"]
+    action = cb["data"].split(":", 1)[1]
+    user_id = cb["from"]["id"]
+    first_name = cb["from"].get("first_name")
+    message = cb.get("message", {})
+    chat_id = message.get("chat", {}).get("id", user_id)
+
+    if action == "accept":
+        answer_callback_query(cb_id, "✅ Записую!")
+        pending = pop_pending_analysis(conn, user_id)
+        if not pending:
+            send_message(chat_id, PENDING_EXPIRED)
+            return
+        analysis = pending["analysis"]
+        meal_id = save_meal(conn, user_id, pending["meal_type"], analysis, pending["photo_file_id"] or "", pending["raw_response"])
+        upsert_daily_log_from_meal(conn, user_id, analysis)
+        today_log = get_today_log(conn, user_id)
+        cal_target = profile.get("daily_calorie_target") or 2000
+        send_message(
+            chat_id,
+            format_meal_logged(pending["meal_type"], analysis, today_log, cal_target, first_name),
+            reply_markup=meal_logged_actions_keyboard(meal_id, is_fav=False),
+        )
+
+    elif action == "recalc":
+        answer_callback_query(cb_id, "🔄 Перераховую…")
+        pending = get_pending_analysis(conn, user_id)
+        if not pending:
+            send_message(chat_id, PENDING_EXPIRED)
+            return
+        send_message(chat_id, RECALC_WAIT)
+
+        try:
+            if pending["photo_file_id"]:
+                image_bytes = get_file_bytes(pending["photo_file_id"])
+                analysis, raw = analyze_photo(image_bytes, retry_prompt=RECALC_PROMPT)
+            elif pending["text_description"]:
+                analysis, raw = analyze_text(pending["text_description"], retry_prompt=RECALC_PROMPT)
+            else:
+                send_message(chat_id, PENDING_EXPIRED)
+                return
+        except Exception as e:
+            print("recalc error:", e, flush=True)
+            send_message(chat_id, PHOTO_ANALYSIS_FAILED)
+            return
+
+        save_pending_analysis(conn, user_id, pending["meal_type"], analysis, pending["photo_file_id"], pending["text_description"], raw)
+        send_message(chat_id, format_meal_preview(pending["meal_type"], analysis), reply_markup=moderation_keyboard())
+
+    elif action == "manual":
+        answer_callback_query(cb_id, "✏️ Чекаю на текст")
+        pending = get_pending_analysis(conn, user_id)
+        if not pending:
+            send_message(chat_id, PENDING_EXPIRED)
+            return
+        set_awaiting_manual(conn, user_id)
+        send_message(chat_id, MANUAL_INPUT_PROMPT, reply_markup=cancel_only_keyboard())
+
+    elif action == "cancel":
+        answer_callback_query(cb_id, "Скасовано")
+        pop_pending_analysis(conn, user_id)
+        pop_pending_entry(conn, user_id)
+        send_message(chat_id, MEAL_CANCELLED, reply_markup=main_menu_keyboard())
+
+
+def handle_manual_text_input(conn, message: dict, text: str, pending: dict, profile: dict) -> None:
+    chat_id = message["chat"]["id"]
+    user_id = message["from"]["id"]
+
+    send_message(chat_id, ANALYZING_WAIT)
+
+    try:
+        analysis, raw = analyze_text(text)
+    except Exception as e:
+        print("manual text analysis error:", e, flush=True)
+        send_message(chat_id, TEXT_ANALYSIS_FAILED)
+        return
+
+    save_pending_analysis(conn, user_id, pending["meal_type"], analysis, pending["photo_file_id"], text, raw)
+    send_message(chat_id, format_meal_preview(pending["meal_type"], analysis), reply_markup=moderation_keyboard())
+
+
+# ---------- Meal management: Delete / Edit ----------
+
+def handle_meal_manage_callback(conn, cb: dict) -> None:
+    cb_id = cb["id"]
+    data = cb["data"]
+    user_id = cb["from"]["id"]
+    message = cb.get("message", {})
+    chat_id = message.get("chat", {}).get("id", user_id)
+
+    if data.startswith("meal_del:"):
+        meal_id = int(data.split(":", 1)[1])
+        answer_callback_query(cb_id, "🗑 Видаляю…")
+        deleted = delete_meal(conn, meal_id, user_id)
+        if not deleted:
+            send_message(chat_id, MEAL_NOT_FOUND)
+            return
+        recalc_daily_log(conn, user_id, deleted["date"])
+        send_message(
+            chat_id,
+            MEAL_DELETED.format(dish=deleted["description"][:40], cal=round(deleted["calories"])),
+        )
+
+    elif data.startswith("meal_edit:"):
+        meal_id = int(data.split(":", 1)[1])
+        answer_callback_query(cb_id, "✏️ Готуюсь до заміни…")
+        deleted = delete_meal(conn, meal_id, user_id)
+        if not deleted:
+            send_message(chat_id, MEAL_NOT_FOUND)
+            return
+        recalc_daily_log(conn, user_id, deleted["date"])
+        save_pending_analysis(conn, user_id, deleted["meal_type"], {}, None, None, "")
+        set_awaiting_manual(conn, user_id, meal_type=deleted["meal_type"])
+        send_message(
+            chat_id,
+            MEAL_EDIT_PROMPT.format(dish=deleted["description"][:40]),
+            reply_markup=cancel_only_keyboard(),
+        )
+
+
+# ---------- Commands ----------
+
+def handle_command(conn, message: dict, text: str, first_name: str | None, profile: dict) -> None:
+    chat_id = message["chat"]["id"]
+    user_id = message["from"]["id"]
+
+    parts = text.split()
+    cmd = parts[0].split("@")[0].lower()
+    args = parts[1:]
+
+    cal_target = (profile or {}).get("daily_calorie_target") or 2000
+
+    if cmd == "/help":
+        send_message(chat_id, help_message(), reply_markup=main_menu_keyboard())
+        return
+
+    if cmd == "/profile":
+        send_message(chat_id, format_profile(profile), reply_markup=profile_edit_keyboard())
+        return
+
+    if cmd == "/today":
+        log = get_today_log(conn, user_id)
+        send_message(chat_id, format_today_progress(log, cal_target, first_name, profile=profile), reply_markup=main_menu_keyboard())
+        return
+
+    if cmd == "/yesterday":
+        from datetime import datetime, timedelta
+        from lib.config import LOCAL_TZ
+        y = (datetime.now(LOCAL_TZ) - timedelta(days=1)).strftime("%Y-%m-%d")
+        log = get_log_for_date(conn, user_id, y)
+        meals = get_meals_for_day(conn, user_id, y)
+        send_message(chat_id, format_yesterday(log, meals, cal_target, first_name, profile=profile), reply_markup=main_menu_keyboard())
+        return
+
+    if cmd == "/meals":
+        log = get_today_log(conn, user_id)
+        meals = get_meals_for_day(conn, user_id, log["date"])
+        if not meals:
+            send_message(chat_id, NO_MEALS_TO_MANAGE)
+            return
+        macros = macro_gram_targets_from_profile(
+            (profile or {}).get("weight_kg"),
+            (profile or {}).get("goal") or "maintain",
+        )
+        send_message(
+            chat_id,
+            format_meals_list(meals, log=log, daily_cal_target=cal_target, macros=macros),
+            reply_markup=meals_list_keyboard(meals),
+        )
+        return
+
+    if cmd == "/history":
+        rows = get_history(conn, user_id, days=7)
+        send_message(chat_id, format_history(rows, cal_target), reply_markup=main_menu_keyboard())
+        return
+
+    if cmd == "/history_detail":
+        if not args:
+            send_message(chat_id, HISTORY_USAGE)
+            return
+        date = args[0]
+        meals = get_meals_for_day(conn, user_id, date)
+        send_message(chat_id, format_day_detail(date, meals))
+        return
+
+    if cmd == "/suggest_meal":
+        log = get_today_log(conn, user_id)
+        meals = get_meals_for_day(conn, user_id, log["date"])
+        send_message(chat_id, SUGGEST_THINKING)
+        try:
+            recipe = suggest_meal(log, meals, profile)
+        except Exception as e:
+            print("suggest error:", e, flush=True)
+            send_message(chat_id, SUGGEST_FAILED, reply_markup=main_menu_keyboard())
+            return
+        send_message(chat_id, recipe, reply_markup=main_menu_keyboard())
+        return
+
+    if cmd == "/ask":
+        question = " ".join(args).strip()
+        if question:
+            handle_ask(conn, user_id, chat_id, question, profile)
+        else:
+            send_message(
+                chat_id,
+                ASK_PROMPT,
+                reply_markup={"force_reply": True, "selective": True},
+            )
+        return
+
+    if cmd == "/fav":
+        meals = get_favorites(conn, user_id)
+        if not meals:
+            send_message(chat_id, FAV_EMPTY_LIST, reply_markup=main_menu_keyboard())
+            return
+        lines = ["⭐ <b>Улюблені страви</b>", ""] + [f"• {format_meal_list_entry(m)}" for m in meals[:20]]
+        lines.append("")
+        lines.append("👇 Тисни 🔁 щоб записати страву на сьогодні:")
+        send_message(chat_id, "\n".join(lines), reply_markup=recent_meals_keyboard(meals, variant="fav"))
+        return
+
+    if cmd == "/recent":
+        meals = get_recent_meals(conn, user_id, limit=10)
+        if not meals:
+            send_message(chat_id, RECENT_EMPTY_LIST, reply_markup=main_menu_keyboard())
+            return
+        lines = ["🕘 <b>Останні страви</b>", ""] + [f"• {format_meal_list_entry(m)}" for m in meals]
+        lines.append("")
+        lines.append("👇 Тисни 🔁 щоб повторити:")
+        send_message(chat_id, "\n".join(lines), reply_markup=recent_meals_keyboard(meals, variant="recent"))
+        return
+
+    if cmd == "/water":
+        total = get_water_today(conn, user_id)
+        target = get_water_target(conn, user_id)
+        send_message(chat_id, format_water(total, target), reply_markup=water_keyboard())
+        return
+
+    send_message(chat_id, UNKNOWN_COMMAND)
+
+
+# ---------- Favorites / Recent / Undo callbacks ----------
+
+def _meal_type_by_local_hour() -> str:
+    from datetime import datetime
+    from lib.config import LOCAL_TZ
+    h = datetime.now(LOCAL_TZ).hour
+    if 6 <= h < 11:
+        return "breakfast"
+    if 11 <= h < 16:
+        return "lunch"
+    if 16 <= h < 21:
+        return "dinner"
+    return "snack"
+
+
+_MEAL_TYPE_UA = {"breakfast": "сніданок", "lunch": "обід", "dinner": "вечерю", "snack": "перекус"}
+
+
+def handle_fav_callback(conn, cb: dict) -> None:
+    cb_id = cb["id"]
+    data = cb["data"]
+    user_id = cb["from"]["id"]
+    message = cb.get("message", {})
+    chat_id = message.get("chat", {}).get("id", user_id)
+    message_id = message.get("message_id")
+
+    parts = data.split(":")
+    if len(parts) != 3:
+        answer_callback_query(cb_id, "Помилка")
+        return
+    try:
+        meal_id = int(parts[1])
+    except ValueError:
+        answer_callback_query(cb_id, "Помилка")
+        return
+    target_state = parts[2] == "1"
+    ok = set_favorite(conn, meal_id, user_id, target_state)
+    if not ok:
+        answer_callback_query(cb_id, "Страву не знайдено")
+        return
+    answer_callback_query(cb_id, FAV_ADDED if target_state else FAV_REMOVED)
+    if message_id:
+        try:
+            edit_message_reply_markup(
+                chat_id, message_id,
+                meal_logged_actions_keyboard(meal_id, is_fav=target_state),
+            )
+        except Exception as e:
+            print("edit_reply_markup error:", e, flush=True)
+
+
+def handle_relog_callback(conn, cb: dict) -> None:
+    cb_id = cb["id"]
+    data = cb["data"]
+    user_id = cb["from"]["id"]
+    message = cb.get("message", {})
+    chat_id = message.get("chat", {}).get("id", user_id)
+
+    try:
+        meal_id = int(data.split(":", 1)[1])
+    except (ValueError, IndexError):
+        answer_callback_query(cb_id, "Помилка")
+        return
+
+    src = get_meal_by_id(conn, meal_id, user_id)
+    if not src:
+        answer_callback_query(cb_id, "Страву не знайдено")
+        return
+
+    meal_type = _meal_type_by_local_hour()
+    new_id = clone_meal_for_today(conn, meal_id, user_id, meal_type)
+    if not new_id:
+        answer_callback_query(cb_id, "Не вдалося")
+        send_message(chat_id, RELOG_FAILED)
+        return
+    answer_callback_query(cb_id, "✅ Записав")
+    send_message(
+        chat_id,
+        RELOG_DONE.format(
+            dish=(src.get("description") or "страву")[:40],
+            meal_type=_MEAL_TYPE_UA.get(meal_type, meal_type),
+        ),
+        reply_markup=undo_relog_keyboard(new_id),
+    )
+
+
+def handle_undo_callback(conn, cb: dict) -> None:
+    from datetime import datetime, timezone, timedelta
+    cb_id = cb["id"]
+    data = cb["data"]
+    user_id = cb["from"]["id"]
+    message = cb.get("message", {})
+    chat_id = message.get("chat", {}).get("id", user_id)
+    message_id = message.get("message_id")
+
+    try:
+        meal_id = int(data.split(":", 1)[1])
+    except (ValueError, IndexError):
+        answer_callback_query(cb_id, "Помилка")
+        return
+
+    meal = get_meal_by_id(conn, meal_id, user_id)
+    if not meal:
+        answer_callback_query(cb_id, "Уже немає")
+        return
+
+    # 10-min TTL
+    try:
+        created = datetime.fromisoformat(meal["created_at"].replace("Z", "+00:00"))
+        if created.tzinfo is None:
+            created = created.replace(tzinfo=timezone.utc)
+        if datetime.now(timezone.utc) - created > timedelta(minutes=10):
+            answer_callback_query(cb_id, "Пізно")
+            send_message(chat_id, UNDO_EXPIRED)
+            return
+    except Exception:
+        pass
+
+    deleted = delete_meal(conn, meal_id, user_id)
+    if not deleted:
+        answer_callback_query(cb_id, "Не знайдено")
+        return
+    recalc_daily_log(conn, user_id, deleted["date"])
+    answer_callback_query(cb_id, UNDO_DONE)
+    if message_id:
+        try:
+            edit_message_text(chat_id, message_id, f"↩️ Скасовано: {deleted['description'][:40]}")
+        except Exception:
+            pass
+
+
+# ---------- Water callbacks ----------
+
+def handle_water_quickadd(conn, chat_id: int, user_id: int, amount_ml: int) -> None:
+    total = add_water(conn, user_id, amount_ml)
+    target = get_water_target(conn, user_id)
+    send_message(chat_id, format_water(total, target), reply_markup=water_keyboard())
+
+
+def handle_water_callback(conn, cb: dict) -> None:
+    cb_id = cb["id"]
+    data = cb["data"]
+    user_id = cb["from"]["id"]
+    message = cb.get("message", {})
+    chat_id = message.get("chat", {}).get("id", user_id)
+    message_id = message.get("message_id")
+
+    parts = data.split(":")
+    # Forms: water:add:<ml>, water:undo, water:goal, water:goal:set:<ml>, water:back
+    sub = parts[1] if len(parts) > 1 else ""
+
+    if sub == "add" and len(parts) == 3:
+        try:
+            ml = int(parts[2])
+        except ValueError:
+            answer_callback_query(cb_id, "Помилка")
+            return
+        if ml not in (200, 250, 300, 500, 750):
+            answer_callback_query(cb_id, "Невірно")
+            return
+        total = add_water(conn, user_id, ml)
+        target = get_water_target(conn, user_id)
+        answer_callback_query(cb_id, f"+{ml} мл")
+        if message_id:
+            edit_message_text(chat_id, message_id, format_water(total, target), reply_markup=water_keyboard())
+        else:
+            send_message(chat_id, format_water(total, target), reply_markup=water_keyboard())
+        return
+
+    if sub == "undo":
+        new_total = remove_last_water_today(conn, user_id)
+        if new_total is None:
+            answer_callback_query(cb_id, WATER_UNDO_EMPTY)
+            return
+        target = get_water_target(conn, user_id)
+        answer_callback_query(cb_id, "Відкотив")
+        if message_id:
+            edit_message_text(chat_id, message_id, format_water(new_total, target), reply_markup=water_keyboard())
+        return
+
+    if sub == "goal" and len(parts) == 2:
+        answer_callback_query(cb_id)
+        if message_id:
+            edit_message_text(chat_id, message_id, WATER_GOAL_PROMPT, reply_markup=water_goal_keyboard())
+        else:
+            send_message(chat_id, WATER_GOAL_PROMPT, reply_markup=water_goal_keyboard())
+        return
+
+    if sub == "goal" and len(parts) == 4 and parts[2] == "set":
+        try:
+            ml = int(parts[3])
+        except ValueError:
+            answer_callback_query(cb_id, "Помилка")
+            return
+        set_water_target(conn, user_id, ml, overridden=True)
+        answer_callback_query(cb_id, WATER_GOAL_SAVED.format(target=ml))
+        total = get_water_today(conn, user_id)
+        if message_id:
+            edit_message_text(chat_id, message_id, format_water(total, ml), reply_markup=water_keyboard())
+        return
+
+    if sub == "back":
+        answer_callback_query(cb_id)
+        total = get_water_today(conn, user_id)
+        target = get_water_target(conn, user_id)
+        if message_id:
+            edit_message_text(chat_id, message_id, format_water(total, target), reply_markup=water_keyboard())
+        return
+
+    answer_callback_query(cb_id, "Невідома дія")
+
+
+# ---------- /ask chat mode ----------
+
+def handle_ask(conn, user_id: int, chat_id: int, question: str, profile: dict) -> None:
+    send_message(chat_id, ASK_THINKING)
+    try:
+        today_log = get_today_log(conn, user_id)
+        today_meals = get_meals_for_day(conn, user_id, today_log["date"])
+        history = get_chat_history(conn, user_id, limit=10, minutes=60)
+        answer = ask_chat(question, history, today_log, today_meals, profile)
+    except Exception as e:
+        print("ask_chat error:", traceback.format_exc(), flush=True)
+        send_message(chat_id, ASK_ERROR, reply_markup=main_menu_keyboard())
+        return
+
+    append_chat_message(conn, user_id, "user", question)
+    append_chat_message(conn, user_id, "assistant", answer)
+    send_message(chat_id, answer, reply_markup=main_menu_keyboard())
+
+
+# ---------- Weight / goal edit ----------
+
+_GOAL_LABEL_UA = {
+    "lose": "🔥 Схуднути",
+    "maintain": "⚖️ Підтримувати вагу",
+    "gain": "💪 Набрати м'язи",
+}
+
+
+def _apply_new_weight(conn, user_id: int, new_weight: float, goal: str, source: str) -> dict:
+    """Persist a weight change: history + profile + calorie + water recompute."""
+    insert_weight(conn, user_id, new_weight, source=source)
+    new_cal = calorie_target_from_profile(new_weight, goal)
+    update_profile(
+        conn, user_id,
+        weight_kg=float(new_weight),
+        daily_calorie_target=new_cal,
+    )
+    # Auto-recompute water target (30 ml/kg) unless user has manually overridden.
+    try:
+        upsert_water_target_from_profile(conn, user_id, float(new_weight))
+    except Exception as e:
+        print("water recompute after weight change failed:", e, flush=True)
+    return {
+        "calories": new_cal,
+        "macros": macro_gram_targets_from_profile(new_weight, goal),
+    }
+
+
+def _weight_change_reply(
+    new_weight: float,
+    old_weight: float | None,
+    new_cal: int,
+    macros: dict,
+) -> str:
+    lines = []
+    if old_weight:
+        delta_kg = float(new_weight) - float(old_weight)
+        delta_g = round(delta_kg * 1000)
+        if delta_g == 0:
+            delta_txt = "без змін"
+        else:
+            delta_txt = f"{'+' if delta_g > 0 else ''}{delta_g}г за тиждень"
+        lines.append(f"✅ Записав: <b>{new_weight} кг</b> ({delta_txt}).")
+    else:
+        lines.append(f"✅ Записав: <b>{new_weight} кг</b>.")
+    lines.append(f"🎯 Нова норма калорій: <b>{new_cal} ккал/день</b>")
+    lines.append(
+        f"🥩 Білки {macros['protein']}г · 🍚 Вуглеводи {macros['carbs']}г · 🧈 Жири {macros['fat']}г"
+    )
+    return "\n".join(lines)
+
+
+def handle_weight_input(
+    conn,
+    chat_id: int,
+    user_id: int,
+    first_name: str | None,
+    text: str,
+    profile: dict,
+) -> None:
+    """Process a weight reply from either the Monday check-in or /profile edit."""
+    cleaned = text.strip()
+    if cleaned.lower() in ("/skip", "skip"):
+        set_awaiting_input(conn, user_id, None)
+        send_message(chat_id, WEIGHT_CHECKIN_SKIPPED, reply_markup=main_menu_keyboard())
+        return
+
+    new_weight = _parse_float(cleaned)
+    if new_weight is None:
+        send_message(chat_id, WEIGHT_NOT_A_NUMBER)
+        return
+    if not (30 <= new_weight <= 300):
+        send_message(chat_id, WEIGHT_INVALID)
+        return
+
+    old_weight = profile.get("weight_kg")
+    goal = profile.get("goal") or "maintain"
+    source = "checkin"  # cron + /profile edit both call us; treat as checkin by default
+
+    result = _apply_new_weight(conn, user_id, float(new_weight), goal, source)
+    set_awaiting_input(conn, user_id, None)
+
+    send_message(
+        chat_id,
+        _weight_change_reply(float(new_weight), old_weight, result["calories"], result["macros"]),
+        reply_markup=main_menu_keyboard(),
+    )
+
+
+def handle_water_target_input(
+    conn,
+    chat_id: int,
+    user_id: int,
+    text: str,
+) -> None:
+    """Process a manual water-goal reply (ml) from the /profile → 💧 Ціль води flow."""
+    cleaned = text.strip().lower().replace("мл", "").replace("ml", "").strip()
+    if cleaned in ("/skip", "skip", "/cancel", "cancel"):
+        set_awaiting_input(conn, user_id, None)
+        send_message(chat_id, "👌 Скасовано.", reply_markup=main_menu_keyboard())
+        return
+
+    ml = _parse_int(cleaned)
+    if ml is None:
+        send_message(chat_id, "Напиши ціле число в мл (наприклад, 2500).")
+        return
+    if not (1500 <= ml <= 4000):
+        send_message(chat_id, "Ціль має бути від 1500 до 4000 мл. Спробуй ще раз.")
+        return
+
+    set_water_target(conn, user_id, ml, overridden=True)
+    set_awaiting_input(conn, user_id, None)
+    total = get_water_today(conn, user_id)
+    send_message(
+        chat_id,
+        WATER_GOAL_SAVED.format(target=ml) + "\n\n" + format_water(total, ml),
+        reply_markup=water_keyboard(),
+    )
+
+
+def handle_profile_edit_callback(conn, cb: dict, profile: dict) -> None:
+    """Handle inline buttons from the /profile screen: weight / goal / water edit."""
+    cb_id = cb["id"]
+    data = cb["data"]
+    user_id = cb["from"]["id"]
+    message = cb.get("message", {})
+    chat_id = message.get("chat", {}).get("id", user_id)
+
+    # prof:weight → prompt for new weight, FSM picks it up via awaiting_input_type.
+    if data == "prof:weight":
+        answer_callback_query(cb_id, "⚖️ Чекаю на вагу")
+        set_awaiting_input(conn, user_id, "weight")
+        send_message(chat_id, WEIGHT_INPUT_PROMPT)
+        return
+
+    # prof:goal → show the goal picker.
+    if data == "prof:goal":
+        answer_callback_query(cb_id)
+        send_message(chat_id, GOAL_UPDATE_PROMPT, reply_markup=profile_goal_keyboard())
+        return
+
+    # prof:goal:<lose|maintain|gain> → apply the goal change.
+    if data.startswith("prof:goal:"):
+        new_goal = data.split(":", 2)[2]
+        if new_goal not in _VALID_GOALS:
+            answer_callback_query(cb_id, "Невірна відповідь")
+            return
+        weight = profile.get("weight_kg") or 70
+        new_cal = calorie_target_from_profile(float(weight), new_goal)
+        update_profile(
+            conn, user_id,
+            goal=new_goal,
+            daily_calorie_target=new_cal,
+            recommended_calorie_target=new_cal,
+        )
+        answer_callback_query(cb_id, "🎯 Оновив")
+        macros = macro_gram_targets_from_profile(float(weight), new_goal)
+        send_message(
+            chat_id,
+            f"{GOAL_UPDATED.format(goal=_GOAL_LABEL_UA.get(new_goal, new_goal))}\n"
+            f"🎯 Нова норма калорій: <b>{new_cal} ккал/день</b>\n"
+            f"🥩 Білки {macros['protein']}г · 🍚 Вуглеводи {macros['carbs']}г · 🧈 Жири {macros['fat']}г",
+            reply_markup=main_menu_keyboard(),
+        )
+        return
+
+    # prof:water → show preset picker (reuses the existing water_goal_keyboard).
+    if data == "prof:water":
+        answer_callback_query(cb_id)
+        send_message(chat_id, WATER_GOAL_PROMPT, reply_markup=water_goal_keyboard())
+        return
+
+    # prof:water:custom → prompt for manual ml entry, FSM picks it up.
+    if data == "prof:water:custom":
+        answer_callback_query(cb_id, "💧 Чекаю на число")
+        set_awaiting_input(conn, user_id, "water_target")
+        send_message(chat_id, "💧 Напиши ціль по воді в мл (1500–4000):")
+        return
+
+    answer_callback_query(cb_id, "Невідома дія")

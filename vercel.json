@@ -1,0 +1,21 @@
+{
+  "functions": {
+    "api/*.py": {
+      "runtime": "@vercel/python@4.3.0"
+    }
+  },
+  "crons": [
+    {
+      "path": "/api/cron_daily_summary",
+      "schedule": "0 20 * * *"
+    },
+    {
+      "path": "/api/cron_midnight_reset",
+      "schedule": "0 0 * * *"
+    },
+    {
+      "path": "/api/cron_weekly_weight_checkin",
+      "schedule": "0 6 * * 1"
+    }
+  ]
+}

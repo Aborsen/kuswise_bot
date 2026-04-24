@@ -733,21 +733,32 @@ _DASHBOARD_HTML = r"""<!DOCTYPE html>
   }
   .summary-text .muted { color: var(--hint); }
 
-  /* Meals tab header summary */
-  .meals-summary {
-    padding: 2px 0 12px;
-    margin-bottom: 10px;
-    border-bottom: 1px solid var(--separator);
+  /* Meals tab: hero summary card */
+  .meals-summary-card { text-align: center; padding: 16px 14px; }
+  .meals-summary-head {
+    font-size: 0.85em; color: var(--hint);
+    text-transform: uppercase; letter-spacing: 0.04em;
   }
-  .meals-summary-line { font-size: 1em; color: var(--text); }
-  .meals-summary-line b { font-size: 1.3em; font-weight: 700; }
-  .meals-summary-line .muted { color: var(--hint); font-size: 0.9em; }
-  .meals-summary-macros { color: var(--hint); font-size: 0.88em; margin-top: 4px; }
+  .meals-summary-big {
+    margin-top: 6px;
+    display: flex; align-items: baseline; justify-content: center; gap: 8px;
+  }
+  .meals-summary-kcal {
+    font-size: 2.4em; font-weight: 700; line-height: 1; color: var(--text);
+  }
+  .meals-summary-kcal-of { color: var(--hint); font-size: 0.95em; }
+  .meals-summary-pct {
+    margin-top: 6px; color: var(--hint); font-size: 0.9em;
+  }
   .meals-summary-bar {
-    height: 6px; border-radius: 3px; margin-top: 8px;
+    height: 8px; border-radius: 4px; margin-top: 12px;
     background: var(--track); overflow: hidden;
   }
-  .meals-summary-fill { height: 100%; background: var(--accent); border-radius: 3px; }
+  .meals-summary-fill {
+    height: 100%; background: var(--accent); border-radius: 4px;
+    transition: width 0.3s ease;
+  }
+  .meals-summary-macros { color: var(--hint); font-size: 0.9em; margin-top: 10px; }
 
   /* ---------- Meals list ---------- */
   .meal-group { margin-top: 4px; }
@@ -870,9 +881,17 @@ _DASHBOARD_HTML = r"""<!DOCTYPE html>
   </section>
 
   <section id="tab-meals" hidden>
+    <div class="card meals-summary-card">
+      <div class="meals-summary-head" id="mealsDateHeader">Страви</div>
+      <div class="meals-summary-big">
+        <span class="meals-summary-kcal" id="sumKcal">0</span>
+        <span class="meals-summary-kcal-of">/ <span id="sumKcalTarget">0</span> ккал</span>
+      </div>
+      <div class="meals-summary-pct" id="sumPct">0%</div>
+      <div class="meals-summary-bar"><div class="meals-summary-fill" id="sumFill"></div></div>
+      <div class="meals-summary-macros" id="sumMacros">—</div>
+    </div>
     <div class="card">
-      <h2 id="mealsDateHeader">Страви</h2>
-      <div class="meals-summary" id="mealsSummary"></div>
       <div id="mealsList"><p class="meal-empty">Завантаження…</p></div>
       <p class="hint-line">Змінити або видалити можна в боті: <b>/meals</b></p>
     </div>
@@ -1244,18 +1263,17 @@ _DASHBOARD_HTML = r"""<!DOCTYPE html>
     var cal = log.calories || 0;
     var pct = Math.round((cal / calTarget) * 100);
     var fillPct = Math.min(100, Math.max(0, pct));
-    document.getElementById('mealsSummary').innerHTML =
-      '<div class="meals-summary-line">' +
-        '<b>' + Math.round(cal).toLocaleString('uk-UA') + '</b>' +
-        ' <span class="muted">/ ' + calTarget.toLocaleString('uk-UA') + ' ккал · ' + pct + '%</span>' +
-      '</div>' +
-      '<div class="meals-summary-macros">' +
-        '🥩 ' + Math.round(log.protein || 0) + ' г · ' +
-        '🍞 ' + Math.round(log.carbs || 0) + ' г · ' +
-        '🥑 ' + Math.round(log.fat || 0) + ' г · ' +
-        'страв: ' + meals.length +
-      '</div>' +
-      '<div class="meals-summary-bar"><div class="meals-summary-fill" style="width:' + fillPct + '%"></div></div>';
+    document.getElementById('sumKcal').textContent =
+      Math.round(cal).toLocaleString('uk-UA');
+    document.getElementById('sumKcalTarget').textContent =
+      calTarget.toLocaleString('uk-UA');
+    document.getElementById('sumPct').textContent = pct + '% цілі';
+    document.getElementById('sumFill').style.width = fillPct + '%';
+    document.getElementById('sumMacros').innerHTML =
+      '🥩 ' + Math.round(log.protein || 0) + ' г · ' +
+      '🍞 ' + Math.round(log.carbs || 0) + ' г · ' +
+      '🥑 ' + Math.round(log.fat || 0) + ' г · ' +
+      'страв: ' + meals.length;
 
     if (meals.length === 0) {
       list.innerHTML = '<p class="meal-empty">На цей день нічого не записано.</p>';

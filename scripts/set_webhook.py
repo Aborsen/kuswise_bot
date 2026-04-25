@@ -102,7 +102,9 @@ def main() -> int:
 
     # 3. Register the Mini App chat menu button (persistent; replaces '/' menu).
     # This is the only launch mode that provides signed initData for user auth.
-    dashboard_url = f"https://{vercel_url}/api/dashboard"
+    sha = os.environ.get("VERCEL_GIT_COMMIT_SHA", "")[:8]
+    suffix = f"?v={sha}" if sha else ""
+    dashboard_url = f"https://{vercel_url}/api/dashboard{suffix}"
     mb = _post(token, "setChatMenuButton", {
         "menu_button": {
             "type": "web_app",

@@ -19,6 +19,9 @@ from lib.database import (
     init_db,
     mark_all_previous_summaries_sent,
 )
+from lib.log import setup_sentry, http_handler, error
+
+setup_sentry("cron_midnight_reset")
 
 
 def _authorized(headers) -> bool:
@@ -32,6 +35,7 @@ def _authorized(headers) -> bool:
 
 
 class handler(BaseHTTPRequestHandler):
+    @http_handler("cron_midnight_reset")
     def do_GET(self):
         if not _authorized(self.headers):
             self.send_response(401)
@@ -41,8 +45,8 @@ class handler(BaseHTTPRequestHandler):
         result = {"ok": True}
         try:
             result = run_midnight_reset()
-        except Exception:
-            print("cron_midnight_reset error:", traceback.format_exc(), flush=True)
+        except Exception as exc:
+            error("cron_midnight_reset_failed", exc=exc)
             result = {"ok": False, "error": "internal"}
 
         self.send_response(200)

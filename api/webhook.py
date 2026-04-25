@@ -89,11 +89,15 @@ from lib.telegram_helpers import (
     undo_relog_keyboard,
     water_keyboard,
     water_goal_keyboard,
+    tz_keyboard,
+    health_menu_keyboard,
+    language_keyboard,
 )
 from lib.openai_vision import analyze_photo, analyze_text
 from lib.openai_voice import transcribe_voice
 from lib.openai_nutrition import suggest_meal
 from lib.openai_chat import ask_chat
+from lib.log import setup_sentry, http_handler, error
 from lib.formatters import (
     welcome_message,
     help_message,
@@ -179,6 +183,42 @@ from lib.formatters import (
     TARGET_WEIGHT_GAIN_MISMATCH,
     TARGET_WEIGHT_SAVED,
     TARGET_WEIGHT_CLEARED,
+    ONBOARDING_ASK_TZ,
+    ONBOARDING_TZ_CUSTOM_PROMPT,
+    ONBOARDING_TZ_INVALID,
+    ONBOARDING_TZ_SAVED,
+    TIMEZONE_PROMPT,
+    TIMEZONE_NOT_ONBOARDED,
+    TIMEZONE_SAVED,
+    TIMEZONE_CUSTOM_PROMPT,
+    TIMEZONE_CANCELLED,
+)
+from lib.datehelpers import is_valid_tz, now_user
+from lib.database import (
+    get_health_profile,
+    set_health_allergens,
+    set_health_conditions,
+    clear_health_profile,
+)
+from lib.health import (
+    ALLERGENS as HEALTH_ALLERGENS,
+    CONDITIONS as HEALTH_CONDITIONS,
+    addendum_for_profile,
+    is_clear_keyword,
+    parse_csv as parse_health_csv,
+    render_labels as render_health_labels,
+)
+from lib import i18n as i18n_mod
+from lib.formatters import (
+    HEALTH_HEADER,
+    HEALTH_NOT_ONBOARDED,
+    HEALTH_ALLERGENS_PROMPT,
+    HEALTH_CONDITIONS_PROMPT,
+    HEALTH_SAVED,
+    HEALTH_SAVED_WITH_HINTS,
+    HEALTH_CLEARED,
+    HEALTH_CANCELLED,
+    HEALTH_INVALID_ALL,
 )
 
 
@@ -241,7 +281,11 @@ def _enforce_quota(conn, chat_id: int, user_id: int, action: str) -> bool:
 MAX_WEBHOOK_BYTES = 512 * 1024
 
 
+setup_sentry("webhook")
+
+
 class handler(BaseHTTPRequestHandler):
+    @http_handler("webhook")
     def do_POST(self):
         secret = self.headers.get("X-Telegram-Bot-Api-Secret-Token", "")
         # Constant-time comparison to avoid leaking secret bytes via timing.
@@ -271,8 +315,8 @@ class handler(BaseHTTPRequestHandler):
 
         try:
             process_update(update)
-        except Exception:
-            print("webhook error:", traceback.format_exc(), flush=True)
+        except Exception as exc:
+            error("webhook_process_update_failed", exc=exc)
 
         self._respond_ok()
 
@@ -346,7 +390,10 @@ def process_update(update: dict) -> None:
 
         if is_start:
             # /start: always (re)introduce + begin onboarding if incomplete
-            handle_start(conn, chat_id, user_id, first_name, profile)
+            handle_start(
+                conn, chat_id, user_id, first_name, profile,
+                language_code=user.get("language_code"),
+            )
             return
 
         # If onboarding not complete, route every message through onboarding handler.
@@ -428,6 +475,24 @@ def process_update(update: dict) -> None:
             handle_target_weight_input(conn, chat_id, user_id, text, profile)
             return
 
+        # Free-text IANA timezone from /timezone → ✏️ Інша зона.
+        if (
+            user_id
+            and profile
+            and profile.get("awaiting_input_type") == "timezone"
+        ):
+            handle_timezone_input(conn, chat_id, user_id, text)
+            return
+
+        # Free-text health profile input (allergens / conditions) from /health.
+        if (
+            user_id
+            and profile
+            and profile.get("awaiting_input_type") in ("health_allergens", "health_conditions")
+        ):
+            handle_health_input(conn, chat_id, user_id, text, profile["awaiting_input_type"])
+            return
+
         if text.startswith("/"):
             if user_id and text.lower().strip() == "/cancel":
                 pending = get_pending_analysis(conn, user_id)
@@ -472,7 +537,14 @@ def _reject_cb(cb: dict) -> None:
 
 # ---------- Onboarding ----------
 
-def handle_start(conn, chat_id: int, user_id: int, first_name: str | None, profile: dict | None) -> None:
+def handle_start(
+    conn,
+    chat_id: int,
+    user_id: int,
+    first_name: str | None,
+    profile: dict | None,
+    language_code: str | None = None,
+) -> None:
     try:
         set_chat_menu_button(chat_id=chat_id)
     except Exception as e:
@@ -485,6 +557,12 @@ def handle_start(conn, chat_id: int, user_id: int, first_name: str | None, profi
     # Fresh user or unfinished profile: kick off onboarding.
     profile = ensure_profile_row(conn, user_id)
     reset_onboarding(conn, user_id)
+    # Seed lang from Telegram client locale on first /start. Users can override
+    # later via /language. We only do this once: if the row already has a
+    # non-default lang, the user has chosen — keep their pick.
+    if language_code:
+        detected = i18n_mod.normalize_lang(language_code)
+        update_profile(conn, user_id, lang=detected)
     send_message(chat_id, ONBOARDING_INTRO)
     send_message(chat_id, ONBOARDING_ASK_AGE)
 
@@ -501,6 +579,29 @@ def _parse_float(text: str) -> float | None:
         return float(text.strip().replace(",", "."))
     except (ValueError, AttributeError):
         return None
+
+
+def _finalize_onboarding(conn, chat_id: int, user_id: int, first_name: str | None) -> None:
+    """Tail of the onboarding flow: estimate water target, send done message.
+
+    Called from both terminal paths (timezone preset tap and custom IANA text)
+    once the profile is fully populated and ``onboarding_step`` is ``done``.
+    """
+    profile = get_profile(conn, user_id) or {}
+    cal = profile.get("daily_calorie_target") or 2000
+    try:
+        w = profile.get("weight_kg")
+        water = upsert_water_target_from_profile(conn, user_id, float(w)) if w else None
+    except Exception as e:
+        error("water_target_upsert_failed", exc=e, user_id=user_id)
+        water = None
+    done_text = ONBOARDING_DONE.format(name=first_name or "друже")
+    if water:
+        done_text += (
+            f"\n\n🎯 Калорії: <b>{cal} ккал/день</b>\n"
+            f"💧 Вода: <b>{water} мл/день</b> (можна змінити в /water)"
+        )
+    send_message(chat_id, done_text, reply_markup=main_menu_keyboard())
 
 
 def handle_onboarding_text(conn, chat_id: int, user_id: int, first_name: str | None,
@@ -597,21 +698,27 @@ def handle_onboarding_text(conn, chat_id: int, user_id: int, first_name: str | N
         update_profile(
             conn, user_id,
             daily_calorie_target=cal,
-            onboarding_step="done",
+            onboarding_step="awaiting_tz",
         )
-        try:
-            w = (profile or {}).get("weight_kg")
-            water = upsert_water_target_from_profile(conn, user_id, float(w)) if w else None
-        except Exception as e:
-            print("water target upsert error:", e, flush=True)
-            water = None
-        done_text = ONBOARDING_DONE.format(name=first_name or "друже")
-        if water:
-            done_text += (
-                f"\n\n🎯 Калорії: <b>{cal} ккал/день</b>\n"
-                f"💧 Вода: <b>{water} мл/день</b> (можна змінити в /water)"
-            )
-        send_message(chat_id, done_text, reply_markup=main_menu_keyboard())
+        send_message(chat_id, ONBOARDING_ASK_TZ, reply_markup=tz_keyboard(prefix="onb:tz"))
+
+    elif step == "awaiting_tz":
+        # User typed instead of tapping a preset — reshow the keyboard.
+        send_message(chat_id, ONBOARDING_NEED_BUTTON, reply_markup=tz_keyboard(prefix="onb:tz"))
+
+    elif step == "awaiting_tz_custom":
+        tz_input = text.strip()
+        if tz_input.lower() in ("/cancel", "cancel"):
+            update_profile(conn, user_id, onboarding_step="awaiting_tz")
+            send_message(chat_id, ONBOARDING_ASK_TZ, reply_markup=tz_keyboard(prefix="onb:tz"))
+            return
+        if not is_valid_tz(tz_input):
+            send_message(chat_id, ONBOARDING_TZ_INVALID)
+            return
+        update_profile(conn, user_id, tz=tz_input, onboarding_step="done")
+        send_message(chat_id, ONBOARDING_TZ_SAVED.format(tz=tz_input))
+        _finalize_onboarding(conn, chat_id, user_id, first_name)
+
     else:
         # Unexpected state — restart
         reset_onboarding(conn, user_id)
@@ -718,26 +825,29 @@ def handle_onboarding_callback(conn, cb: dict) -> None:
         update_profile(
             conn, user_id,
             daily_calorie_target=rec,
-            onboarding_step="done",
+            onboarding_step="awaiting_tz",
         )
-        # Auto-estimate water target from body weight (30 ml/kg).
-        try:
-            w = profile_after.get("weight_kg")
-            if w:
-                water = upsert_water_target_from_profile(conn, user_id, float(w))
-            else:
-                water = None
-        except Exception as e:
-            print("water target upsert error:", e, flush=True)
-            water = None
         answer_callback_query(cb_id, "✅ Прийнято")
-        done_text = ONBOARDING_DONE.format(name=first_name or "друже")
-        if water:
-            done_text += (
-                f"\n\n🎯 Калорії: <b>{rec} ккал/день</b>\n"
-                f"💧 Вода: <b>{water} мл/день</b> (можна змінити в /water)"
-            )
-        send_message(chat_id, done_text, reply_markup=main_menu_keyboard())
+        send_message(chat_id, ONBOARDING_ASK_TZ, reply_markup=tz_keyboard(prefix="onb:tz"))
+        return
+
+    if data.startswith("onb:tz:"):
+        if step != "awaiting_tz":
+            answer_callback_query(cb_id, "Вже відповів(ла) 🙂")
+            return
+        tz_value = data.split(":", 2)[2]
+        if tz_value == "custom":
+            update_profile(conn, user_id, onboarding_step="awaiting_tz_custom")
+            answer_callback_query(cb_id, "Чекаю на назву зони")
+            send_message(chat_id, ONBOARDING_TZ_CUSTOM_PROMPT)
+            return
+        if not is_valid_tz(tz_value):
+            answer_callback_query(cb_id, "Невідома зона")
+            return
+        update_profile(conn, user_id, tz=tz_value, onboarding_step="done")
+        answer_callback_query(cb_id, "✅ Записав")
+        send_message(chat_id, ONBOARDING_TZ_SAVED.format(tz=tz_value))
+        _finalize_onboarding(conn, chat_id, user_id, first_name)
         return
 
     if data == "onb:cal:custom":
@@ -750,6 +860,163 @@ def handle_onboarding_callback(conn, cb: dict) -> None:
         return
 
     answer_callback_query(cb_id, "Невідома дія")
+
+
+def handle_timezone_callback(conn, cb: dict, profile: dict) -> None:
+    """Handle /timezone keyboard taps (callbacks prefixed `tz:set:`)."""
+    cb_id = cb["id"]
+    data = cb["data"]
+    user_id = cb["from"]["id"]
+    message = cb.get("message", {})
+    chat_id = message.get("chat", {}).get("id")
+    if not chat_id:
+        answer_callback_query(cb_id)
+        return
+    if not data.startswith("tz:set:"):
+        answer_callback_query(cb_id, "Невідома дія")
+        return
+    tz_value = data.split(":", 2)[2]
+    if tz_value == "custom":
+        set_awaiting_input(conn, user_id, "timezone")
+        answer_callback_query(cb_id, "Чекаю на назву зони")
+        send_message(chat_id, TIMEZONE_CUSTOM_PROMPT)
+        return
+    if not is_valid_tz(tz_value):
+        answer_callback_query(cb_id, "Невідома зона")
+        return
+    update_profile(conn, user_id, tz=tz_value)
+    set_awaiting_input(conn, user_id, None)
+    answer_callback_query(cb_id, "✅ Записав")
+    send_message(chat_id, TIMEZONE_SAVED.format(tz=tz_value))
+
+
+def handle_timezone_input(conn, chat_id: int, user_id: int, text: str) -> None:
+    """Free-text IANA timezone input from /timezone → ✏️ Інша зона."""
+    cleaned = text.strip()
+    if cleaned.lower() in ("/cancel", "cancel"):
+        set_awaiting_input(conn, user_id, None)
+        send_message(chat_id, TIMEZONE_CANCELLED)
+        return
+    if not is_valid_tz(cleaned):
+        send_message(chat_id, ONBOARDING_TZ_INVALID)
+        return
+    update_profile(conn, user_id, tz=cleaned)
+    set_awaiting_input(conn, user_id, None)
+    send_message(chat_id, TIMEZONE_SAVED.format(tz=cleaned))
+
+
+# ---------- Health profile (F-1) ----------
+
+def _send_health_menu(conn, chat_id: int, user_id: int) -> None:
+    h = get_health_profile(conn, user_id) or {"allergens": [], "conditions": []}
+    send_message(
+        chat_id,
+        HEALTH_HEADER.format(
+            allergens=render_health_labels(h["allergens"], HEALTH_ALLERGENS),
+            conditions=render_health_labels(h["conditions"], HEALTH_CONDITIONS),
+        ),
+        reply_markup=health_menu_keyboard(),
+    )
+
+
+def handle_health_callback(conn, cb: dict, profile: dict) -> None:
+    """Handle /health menu taps (callbacks prefixed `h:`)."""
+    cb_id = cb["id"]
+    data = cb["data"]
+    user_id = cb["from"]["id"]
+    message = cb.get("message", {})
+    chat_id = message.get("chat", {}).get("id")
+    if not chat_id:
+        answer_callback_query(cb_id)
+        return
+    if data == "h:set:allergens":
+        set_awaiting_input(conn, user_id, "health_allergens")
+        answer_callback_query(cb_id, "Чекаю на список")
+        send_message(chat_id, HEALTH_ALLERGENS_PROMPT)
+        return
+    if data == "h:set:conditions":
+        set_awaiting_input(conn, user_id, "health_conditions")
+        answer_callback_query(cb_id, "Чекаю на список")
+        send_message(chat_id, HEALTH_CONDITIONS_PROMPT)
+        return
+    if data == "h:clear":
+        clear_health_profile(conn, user_id)
+        set_awaiting_input(conn, user_id, None)
+        answer_callback_query(cb_id, "🧹 Очищено")
+        send_message(chat_id, HEALTH_CLEARED)
+        _send_health_menu(conn, chat_id, user_id)
+        return
+    answer_callback_query(cb_id, "Невідома дія")
+
+
+def handle_language_callback(conn, cb: dict, profile: dict) -> None:
+    """Handle /language keyboard taps (callbacks prefixed `lang:set:`)."""
+    cb_id = cb["id"]
+    data = cb["data"]
+    user_id = cb["from"]["id"]
+    message = cb.get("message", {})
+    chat_id = message.get("chat", {}).get("id")
+    if not chat_id:
+        answer_callback_query(cb_id)
+        return
+    if not data.startswith("lang:set:"):
+        answer_callback_query(cb_id, "?")
+        return
+    lang = data.split(":", 2)[2]
+    if lang not in i18n_mod.supported_langs():
+        answer_callback_query(cb_id, "?")
+        return
+    update_profile(conn, user_id, lang=lang)
+    answer_callback_query(cb_id, "✅")
+    label = i18n_mod.t(f"lang_label_{lang}", locale=lang)
+    send_message(chat_id, i18n_mod.t("language_saved", locale=lang, lang=label))
+
+
+def handle_health_input(conn, chat_id: int, user_id: int, text: str, kind: str) -> None:
+    """Free-text input for /health → set allergens / conditions.
+
+    ``kind`` is "health_allergens" or "health_conditions" — picked up from
+    the user's ``awaiting_input_type``.
+    """
+    cleaned = text.strip()
+    if cleaned.lower() in ("/cancel", "cancel"):
+        set_awaiting_input(conn, user_id, None)
+        send_message(chat_id, HEALTH_CANCELLED)
+        return
+
+    is_allergens = kind == "health_allergens"
+    registry = HEALTH_ALLERGENS if is_allergens else HEALTH_CONDITIONS
+
+    if is_clear_keyword(cleaned):
+        if is_allergens:
+            set_health_allergens(conn, user_id, [])
+        else:
+            set_health_conditions(conn, user_id, [])
+        set_awaiting_input(conn, user_id, None)
+        send_message(chat_id, HEALTH_CLEARED)
+        _send_health_menu(conn, chat_id, user_id)
+        return
+
+    canon, unknown = parse_health_csv(cleaned, registry)
+    if not canon:
+        send_message(chat_id, HEALTH_INVALID_ALL)
+        return
+
+    if is_allergens:
+        set_health_allergens(conn, user_id, canon)
+    else:
+        set_health_conditions(conn, user_id, canon)
+    set_awaiting_input(conn, user_id, None)
+
+    saved = render_health_labels(canon, registry)
+    if unknown:
+        send_message(
+            chat_id,
+            HEALTH_SAVED_WITH_HINTS.format(saved=saved, unknown=", ".join(unknown)),
+        )
+    else:
+        send_message(chat_id, HEALTH_SAVED.format(saved=saved))
+    _send_health_menu(conn, chat_id, user_id)
 
 
 # ---------- Photo / text entry ----------
@@ -883,6 +1150,12 @@ def handle_callback(conn, cb: dict) -> None:
         handle_water_callback(conn, cb)
     elif data.startswith("prof:"):
         handle_profile_edit_callback(conn, cb, profile)
+    elif data.startswith("tz:"):
+        handle_timezone_callback(conn, cb, profile)
+    elif data.startswith("h:"):
+        handle_health_callback(conn, cb, profile)
+    elif data.startswith("lang:"):
+        handle_language_callback(conn, cb, profile)
     elif data == "noop":
         answer_callback_query(cb["id"])
     else:
@@ -920,6 +1193,7 @@ def handle_meal_type_callback(conn, cb: dict, profile: dict) -> None:
 
     send_message(chat_id, ANALYZING_WAIT)
 
+    health_ctx = addendum_for_profile(get_health_profile(conn, user_id))
     analysis, raw = None, ""
     try:
         if file_id:
@@ -929,9 +1203,9 @@ def handle_meal_type_callback(conn, cb: dict, profile: dict) -> None:
                 print("getFile error:", e, flush=True)
                 send_message(chat_id, PHOTO_DOWNLOAD_FAILED)
                 return
-            analysis, raw = analyze_photo(image_bytes)
+            analysis, raw = analyze_photo(image_bytes, health_addendum=health_ctx)
         elif text_description:
-            analysis, raw = analyze_text(text_description)
+            analysis, raw = analyze_text(text_description, health_addendum=health_ctx)
         else:
             send_message(chat_id, PENDING_EXPIRED)
             return
@@ -981,12 +1255,21 @@ def handle_moderation_callback(conn, cb: dict, profile: dict) -> None:
             return
         send_message(chat_id, RECALC_WAIT)
 
+        health_ctx = addendum_for_profile(get_health_profile(conn, user_id))
         try:
             if pending["photo_file_id"]:
                 image_bytes = get_file_bytes(pending["photo_file_id"])
-                analysis, raw = analyze_photo(image_bytes, retry_prompt=RECALC_PROMPT)
+                analysis, raw = analyze_photo(
+                    image_bytes,
+                    retry_prompt=RECALC_PROMPT,
+                    health_addendum=health_ctx,
+                )
             elif pending["text_description"]:
-                analysis, raw = analyze_text(pending["text_description"], retry_prompt=RECALC_PROMPT)
+                analysis, raw = analyze_text(
+                    pending["text_description"],
+                    retry_prompt=RECALC_PROMPT,
+                    health_addendum=health_ctx,
+                )
             else:
                 send_message(chat_id, PENDING_EXPIRED)
                 return
@@ -1023,8 +1306,9 @@ def handle_manual_text_input(conn, message: dict, text: str, pending: dict, prof
 
     send_message(chat_id, ANALYZING_WAIT)
 
+    health_ctx = addendum_for_profile(get_health_profile(conn, user_id))
     try:
-        analysis, raw = analyze_text(text)
+        analysis, raw = analyze_text(text, health_addendum=health_ctx)
     except Exception as e:
         print("manual text analysis error:", e, flush=True)
         send_message(chat_id, TEXT_ANALYSIS_FAILED)
@@ -1104,9 +1388,8 @@ def handle_command(conn, message: dict, text: str, first_name: str | None, profi
         return
 
     if cmd == "/yesterday":
-        from datetime import datetime, timedelta
-        from lib.config import LOCAL_TZ
-        y = (datetime.now(LOCAL_TZ) - timedelta(days=1)).strftime("%Y-%m-%d")
+        from datetime import timedelta
+        y = (now_user(profile) - timedelta(days=1)).strftime("%Y-%m-%d")
         log = get_log_for_date(conn, user_id, y)
         meals = get_meals_for_day(conn, user_id, y)
         send_message(chat_id, format_yesterday(log, meals, cal_target, first_name, profile=profile), reply_markup=main_menu_keyboard())
@@ -1192,6 +1475,38 @@ def handle_command(conn, message: dict, text: str, first_name: str | None, profi
         send_message(chat_id, "\n".join(lines), reply_markup=recent_meals_keyboard(meals, variant="recent"))
         return
 
+    if cmd == "/timezone":
+        if not profile_is_complete(profile):
+            send_message(chat_id, TIMEZONE_NOT_ONBOARDED)
+            return
+        cur = (profile or {}).get("tz") or "Europe/Kyiv"
+        send_message(
+            chat_id,
+            TIMEZONE_PROMPT.format(current=cur),
+            reply_markup=tz_keyboard(prefix="tz:set"),
+        )
+        return
+
+    if cmd == "/health":
+        if not profile_is_complete(profile):
+            send_message(chat_id, HEALTH_NOT_ONBOARDED)
+            return
+        _send_health_menu(conn, chat_id, user_id)
+        return
+
+    if cmd == "/language":
+        lang = (profile or {}).get("lang") or "en"
+        if not profile_is_complete(profile):
+            send_message(chat_id, i18n_mod.t("language_not_onboarded", locale=lang))
+            return
+        cur_label = i18n_mod.t(f"lang_label_{lang}", locale=lang)
+        send_message(
+            chat_id,
+            i18n_mod.t("language_prompt", locale=lang, current=cur_label),
+            reply_markup=language_keyboard(),
+        )
+        return
+
     if cmd == "/water":
         total = get_water_today(conn, user_id)
         target = get_water_target(conn, user_id)
@@ -1203,10 +1518,13 @@ def handle_command(conn, message: dict, text: str, first_name: str | None, profi
 
 # ---------- Favorites / Recent / Undo callbacks ----------
 
-def _meal_type_by_local_hour() -> str:
-    from datetime import datetime
-    from lib.config import LOCAL_TZ
-    h = datetime.now(LOCAL_TZ).hour
+def _meal_type_by_local_hour(profile: dict | None = None) -> str:
+    """Pick a default meal type from the user's local clock.
+
+    When ``profile`` carries a ``tz`` field, use it; otherwise fall back to
+    Europe/Kyiv via ``now_user(None)``.
+    """
+    h = now_user(profile).hour
     if 6 <= h < 11:
         return "breakfast"
     if 11 <= h < 16:
@@ -1270,7 +1588,8 @@ def handle_relog_callback(conn, cb: dict) -> None:
         answer_callback_query(cb_id, "Страву не знайдено")
         return
 
-    meal_type = _meal_type_by_local_hour()
+    profile = get_profile(conn, user_id) or {}
+    meal_type = _meal_type_by_local_hour(profile)
     new_id = clone_meal_for_today(conn, meal_id, user_id, meal_type)
     if not new_id:
         answer_callback_query(cb_id, "Не вдалося")

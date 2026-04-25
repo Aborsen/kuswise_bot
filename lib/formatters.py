@@ -337,6 +337,73 @@ ONBOARDING_DONE = (
     "Надсилай 📸 фото страв або 📝 текстом — я рахуватиму. Команди — у меню «/», твій профіль — /profile."
 )
 
+# Onboarding step: timezone (F-3)
+ONBOARDING_ASK_TZ = (
+    "🌐 <b>Який у тебе часовий пояс?</b>\n\n"
+    "Це впливає на час денного підсумку і на те, коли «сьогодні» переходить у «завтра». "
+    "Якщо твоєї зони немає в списку — обери «Інша зона» і введи назву IANA вручну."
+)
+ONBOARDING_TZ_CUSTOM_PROMPT = (
+    "Введи свою часову зону у форматі IANA, наприклад:\n"
+    "<code>Asia/Tokyo</code>, <code>America/Chicago</code>, <code>Australia/Sydney</code>.\n\n"
+    "Повний список: en.wikipedia.org/wiki/List_of_tz_database_time_zones"
+)
+ONBOARDING_TZ_INVALID = (
+    "Не впізнав цю зону 🤔 Перевір написання — потрібен формат <code>Region/City</code>, "
+    "наприклад <code>Europe/Madrid</code> або <code>Asia/Tokyo</code>."
+)
+ONBOARDING_TZ_SAVED = "🌐 Часовий пояс: <b>{tz}</b>"
+
+# /timezone command
+TIMEZONE_PROMPT = (
+    "🌐 <b>Часовий пояс</b>\n"
+    "Поточний: <b>{current}</b>\n\n"
+    "Обери нову зону зі списку або «Інша зона» для введення вручну."
+)
+TIMEZONE_NOT_ONBOARDED = "Спершу пройди /start, щоб налаштувати профіль ☺️"
+TIMEZONE_SAVED = "✅ Готово. Часовий пояс: <b>{tz}</b>"
+TIMEZONE_CUSTOM_PROMPT = (
+    "Введи назву зони у форматі IANA (<code>Region/City</code>), "
+    "наприклад <code>Asia/Tokyo</code>. /cancel — щоб скасувати."
+)
+TIMEZONE_CANCELLED = "Скасовано. Часовий пояс не змінено."
+
+# Health profile (F-1)
+HEALTH_HEADER = (
+    "⚕️ <b>Здоровʼя</b>\n\n"
+    "🥜 Алергени: <b>{allergens}</b>\n"
+    "🩺 Стани: <b>{conditions}</b>\n\n"
+    "Це впливає на попередження в аналізі страв (allergen_flags / crohn_flags) — "
+    "кнопки нижче дозволяють відредагувати."
+)
+HEALTH_NOT_ONBOARDED = "Спершу пройди /start ☺️"
+HEALTH_ALLERGENS_PROMPT = (
+    "🥜 <b>Алергени</b>\n\n"
+    "Введи список через кому. Розпізнаю:\n"
+    "<i>peanut, tree_nut, dairy, egg, soy, gluten, fish, shellfish, "
+    "sesame, mustard, sulphites, celery, lupin, mollusks</i>\n\n"
+    "Або українською: <i>арахіс, горіхи, молочне, яйце, соя, глютен, "
+    "риба, морепродукти, кунжут, гірчиця, сульфіти, селера, люпин, мідії</i>\n\n"
+    "Напиши <code>немає</code> щоб очистити, /cancel — скасувати."
+)
+HEALTH_CONDITIONS_PROMPT = (
+    "🩺 <b>Хронічні стани</b>\n\n"
+    "Введи через кому. Розпізнаю:\n"
+    "<i>crohns, ibs, celiac, diabetes_t1, diabetes_t2, hypertension, "
+    "pcos, kidney, thyroid, gestational</i>\n\n"
+    "Українською: <i>хвороба Крона, СРК, целіакія, діабет 1, діабет 2, "
+    "гіпертонія, СПКЯ, нирки, щитоподібна, вагітність</i>\n\n"
+    "Напиши <code>немає</code> щоб очистити, /cancel — скасувати."
+)
+HEALTH_SAVED = "✅ Збережено: <b>{saved}</b>"
+HEALTH_SAVED_WITH_HINTS = (
+    "✅ Збережено: <b>{saved}</b>\n"
+    "Не розпізнав: <i>{unknown}</i> — спробуй з канонічного списку."
+)
+HEALTH_CLEARED = "🧹 Очищено."
+HEALTH_CANCELLED = "Скасовано."
+HEALTH_INVALID_ALL = "Не розпізнав жодного значення. Спробуй ще раз або /cancel."
+
 
 def _sex_ua(sex: str) -> str:
     return {"male": "чоловіча", "female": "жіноча"}.get(sex, sex or "—")

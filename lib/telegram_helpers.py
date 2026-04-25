@@ -343,6 +343,54 @@ def confirm_calories_keyboard() -> dict:
     }
 
 
+def language_keyboard() -> dict:
+    """EN / UK language picker (F-2)."""
+    return {
+        "inline_keyboard": [
+            [
+                {"text": "🇬🇧 English",     "callback_data": "lang:set:en"},
+                {"text": "🇺🇦 Українська", "callback_data": "lang:set:uk"},
+            ],
+        ]
+    }
+
+
+def health_menu_keyboard() -> dict:
+    """Top-level /health menu (F-1)."""
+    return {
+        "inline_keyboard": [
+            [{"text": "🥜 Алергени",        "callback_data": "h:set:allergens"}],
+            [{"text": "🩺 Хронічні стани",  "callback_data": "h:set:conditions"}],
+            [{"text": "🧹 Очистити все",    "callback_data": "h:clear"}],
+        ]
+    }
+
+
+def tz_keyboard(prefix: str = "tz:set") -> dict:
+    """Six timezone presets + 'Other' (free-text). The same keyboard is used
+    by onboarding (prefix=onb:tz) and by /timezone (prefix=tz:set).
+    Keep this list in sync with ``lib.datehelpers.TZ_PRESETS``."""
+    return {
+        "inline_keyboard": [
+            [
+                {"text": "🇺🇦 Київ",                "callback_data": f"{prefix}:Europe/Kyiv"},
+                {"text": "🇬🇧 Лондон",              "callback_data": f"{prefix}:Europe/London"},
+            ],
+            [
+                {"text": "🇩🇪 Берлін / Варшава",     "callback_data": f"{prefix}:Europe/Berlin"},
+                {"text": "🇺🇸 Нью-Йорк",            "callback_data": f"{prefix}:America/New_York"},
+            ],
+            [
+                {"text": "🇺🇸 Лос-Анджелес",        "callback_data": f"{prefix}:America/Los_Angeles"},
+                {"text": "🇦🇪 Дубай",                "callback_data": f"{prefix}:Asia/Dubai"},
+            ],
+            [
+                {"text": "✏️ Інша зона (вкажу вручну)", "callback_data": f"{prefix}:custom"},
+            ],
+        ]
+    }
+
+
 def profile_edit_keyboard() -> dict:
     """Quick-edit actions shown under the /profile message."""
     return {

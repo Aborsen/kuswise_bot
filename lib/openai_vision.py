@@ -44,11 +44,17 @@ def _strip_fences(text: str) -> str:
     return t.strip()
 
 
-def analyze_photo(image_bytes: bytes, retry_prompt: str | None = None) -> tuple[dict, str]:
+def analyze_photo(
+    image_bytes: bytes,
+    retry_prompt: str | None = None,
+    health_addendum: str = "",
+) -> tuple[dict, str]:
     """Analyze a food photo. Returns (parsed_dict, raw_response_text).
 
     Retries parsing once (with a reminder) if the first response isn't valid JSON.
     If retry_prompt is provided (for recalculate), it's appended as an extra instruction.
+    If ``health_addendum`` is non-empty, it is appended to the system prompt so
+    the model has the user's allergens + chronic-condition context (F-1).
     """
     b64 = base64.b64encode(image_bytes).decode("ascii")
     client = _get_client()
@@ -57,8 +63,12 @@ def analyze_photo(image_bytes: bytes, retry_prompt: str | None = None) -> tuple[
     if retry_prompt:
         user_text += f"\n\n{retry_prompt}"
 
+    system_prompt = ANALYSIS_SYSTEM_PROMPT
+    if health_addendum:
+        system_prompt = f"{system_prompt}\n\n{health_addendum}"
+
     messages = [
-        {"role": "system", "content": ANALYSIS_SYSTEM_PROMPT},
+        {"role": "system", "content": system_prompt},
         {
             "role": "user",
             "content": [
@@ -97,10 +107,15 @@ def analyze_photo(image_bytes: bytes, retry_prompt: str | None = None) -> tuple[
     return json.loads(_strip_fences(raw2)), raw2
 
 
-def analyze_text(description: str, retry_prompt: str | None = None) -> tuple[dict, str]:
+def analyze_text(
+    description: str,
+    retry_prompt: str | None = None,
+    health_addendum: str = "",
+) -> tuple[dict, str]:
     """Analyze a user's free-text description of a meal.
 
     Returns (parsed_dict, raw_response_text) with the same JSON schema as analyze_photo.
+    See ``analyze_photo`` for ``health_addendum`` semantics.
     """
     client = _get_client()
 
@@ -119,8 +134,12 @@ def analyze_text(description: str, retry_prompt: str | None = None) -> tuple[dic
         f"її в estimated_portion (наприклад '~300г припущено'). Відповідай лише валідним JSON.{extra}"
     )
 
+    system_prompt = ANALYSIS_SYSTEM_PROMPT
+    if health_addendum:
+        system_prompt = f"{system_prompt}\n\n{health_addendum}"
+
     messages = [
-        {"role": "system", "content": ANALYSIS_SYSTEM_PROMPT},
+        {"role": "system", "content": system_prompt},
         {"role": "user", "content": user_prompt},
     ]
 

@@ -1,0 +1,7 @@
+{
+  "language_prompt": "🌐 <b>Bot language</b>\nCurrent: <b>{current}</b>\n\nPick a language below. (Full localization is in progress — some messages will stay Ukrainian for now.)",
+  "language_saved": "✅ Done. Language: <b>{lang}</b>",
+  "language_not_onboarded": "First go through /start ☺️",
+  "lang_label_en": "🇬🇧 English",
+  "lang_label_uk": "🇺🇦 Українська"
+}

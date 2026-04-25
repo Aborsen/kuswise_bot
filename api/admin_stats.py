@@ -16,6 +16,9 @@ if _ROOT not in sys.path:
 
 from lib.config import ADMIN_PASSWORD, ADMIN_USERNAME
 from lib.database import get_conn, init_db, delete_meal, delete_meal_admin, recalc_daily_log, delete_user_all_data
+from lib.log import setup_sentry, http_handler, error
+
+setup_sentry("admin_stats")
 
 
 # Static headers applied to every response (CSP is built per-request from
@@ -122,6 +125,7 @@ class handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    @http_handler("admin_stats")
     def do_GET(self):
         if not _authorized(self.headers):
             self._send_unauthorized(
@@ -134,8 +138,8 @@ class handler(BaseHTTPRequestHandler):
         nonce = _new_nonce()
         try:
             body = build_html(nonce)
-        except Exception:
-            print("admin_stats error:", traceback.format_exc(), flush=True)
+        except Exception as exc:
+            error("admin_stats_render_failed", exc=exc)
             body = "<pre>Error rendering dashboard (see logs)</pre>"
 
         self.send_response(200)
@@ -144,6 +148,7 @@ class handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body.encode("utf-8"))
 
+    @http_handler("admin_stats")
     def do_POST(self):
         """Handle admin actions (delete meal) via AJAX."""
         if not _authorized(self.headers):

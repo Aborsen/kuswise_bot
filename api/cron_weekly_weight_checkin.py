@@ -32,6 +32,9 @@ from lib.database import (
 )
 from lib.formatters import WEIGHT_CHECKIN_PROMPT
 from lib.telegram_helpers import send_message
+from lib.log import setup_sentry, http_handler, error
+
+setup_sentry("cron_weekly_weight_checkin")
 
 
 def _authorized(headers) -> bool:
@@ -44,6 +47,7 @@ def _authorized(headers) -> bool:
 
 
 class handler(BaseHTTPRequestHandler):
+    @http_handler("cron_weekly_weight_checkin")
     def do_GET(self):
         if not _authorized(self.headers):
             self.send_response(401)
@@ -52,8 +56,8 @@ class handler(BaseHTTPRequestHandler):
 
         try:
             result = run_weekly_checkin()
-        except Exception:
-            print("cron_weekly_weight_checkin error:", traceback.format_exc(), flush=True)
+        except Exception as exc:
+            error("cron_weekly_weight_checkin_failed", exc=exc)
             result = {"ok": False, "error": "internal"}
 
         self.send_response(200)
@@ -85,11 +89,7 @@ def run_weekly_checkin() -> dict:
                     errors.append({"user_id": user_id, "error": resp})
             except Exception as e:
                 errors.append({"user_id": user_id, "error": str(e)})
-                print(
-                    f"weekly checkin error for {user_id}:",
-                    traceback.format_exc(),
-                    flush=True,
-                )
+                error("weekly_checkin_user_failed", exc=e, user_id=user_id)
     finally:
         try:
             conn.close()

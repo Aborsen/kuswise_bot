@@ -182,6 +182,12 @@ def init_db(conn=None, force: bool = False) -> None:
         cur.execute(
             "ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS target_weight_kg DOUBLE PRECISION"
         )
+        cur.execute(
+            "ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS tz TEXT NOT NULL DEFAULT 'Europe/Kyiv'"
+        )
+        cur.execute(
+            "ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS lang TEXT NOT NULL DEFAULT 'en'"
+        )
         cur.execute("""
             CREATE TABLE IF NOT EXISTS weight_history (
                 id BIGSERIAL PRIMARY KEY,
@@ -205,6 +211,18 @@ def init_db(conn=None, force: bool = False) -> None:
                 day TEXT NOT NULL,
                 count INTEGER NOT NULL DEFAULT 0,
                 PRIMARY KEY (user_id, action, day)
+            )
+        """)
+        # Health profile (F-1): allergens + chronic conditions injected into
+        # vision/text analysis prompts so the model can flag user-specific
+        # triggers (lactose for Crohn's, GI > 70 for diabetes, etc.).
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS user_health_profile (
+                user_id BIGINT PRIMARY KEY,
+                allergens TEXT[] NOT NULL DEFAULT '{}',
+                conditions TEXT[] NOT NULL DEFAULT '{}',
+                notes TEXT NOT NULL DEFAULT '',
+                updated_at TEXT
             )
         """)
     conn.commit()
@@ -235,6 +253,7 @@ PROFILE_COLUMNS = [
     "goal", "daily_calorie_target", "recommended_calorie_target",
     "onboarding_step", "created_at", "updated_at",
     "awaiting_input_type", "weekly_checkin_sent_at", "target_weight_kg",
+    "tz", "lang",
 ]
 
 
@@ -273,6 +292,7 @@ _ALLOWED_PROFILE_FIELDS = {
     "age", "sex", "weight_kg", "height_cm", "gym_per_week", "goal",
     "daily_calorie_target", "recommended_calorie_target", "onboarding_step",
     "awaiting_input_type", "weekly_checkin_sent_at", "target_weight_kg",
+    "tz", "lang",
 }
 
 
@@ -301,6 +321,7 @@ def delete_user_all_data(conn, user_id: int) -> bool:
             "pending_photos", "pending_analyses", "chat_sessions",
             "daily_recommendations", "daily_logs", "meals", "user_profiles",
             "water_logs", "water_prefs", "weight_history",
+            "usage_quota", "user_health_profile",
         ):
             cur.execute(f"DELETE FROM {table} WHERE user_id = %s", (user_id,))
         cur.execute("DELETE FROM users WHERE user_id = %s", (user_id,))
@@ -1161,6 +1182,61 @@ def cleanup_old_quotas(conn, keep_days: int = 7) -> None:
     cutoff = (_date.today() - _td(days=keep_days)).isoformat()
     with conn.cursor() as cur:
         cur.execute("DELETE FROM usage_quota WHERE day < %s", (cutoff,))
+    conn.commit()
+
+
+# ---------- Health profile (F-1) ----------
+
+def get_health_profile(conn, user_id: int) -> Optional[dict]:
+    """Return ``{allergens: [...], conditions: [...], notes, updated_at}`` or None."""
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT allergens, conditions, notes, updated_at "
+            "FROM user_health_profile WHERE user_id = %s",
+            (user_id,),
+        )
+        row = cur.fetchone()
+    if not row:
+        return None
+    return {
+        "allergens":  list(row[0] or []),
+        "conditions": list(row[1] or []),
+        "notes":      row[2] or "",
+        "updated_at": row[3],
+    }
+
+
+def set_health_allergens(conn, user_id: int, allergens: list[str]) -> None:
+    """Replace the user's allergen list. Empty list = clear."""
+    with conn.cursor() as cur:
+        cur.execute(
+            """INSERT INTO user_health_profile (user_id, allergens, conditions, notes, updated_at)
+               VALUES (%s, %s, '{}', '', %s)
+               ON CONFLICT (user_id) DO UPDATE SET
+                   allergens = EXCLUDED.allergens,
+                   updated_at = EXCLUDED.updated_at""",
+            (user_id, allergens, _now_iso()),
+        )
+    conn.commit()
+
+
+def set_health_conditions(conn, user_id: int, conditions: list[str]) -> None:
+    """Replace the user's chronic-condition list. Empty list = clear."""
+    with conn.cursor() as cur:
+        cur.execute(
+            """INSERT INTO user_health_profile (user_id, allergens, conditions, notes, updated_at)
+               VALUES (%s, '{}', %s, '', %s)
+               ON CONFLICT (user_id) DO UPDATE SET
+                   conditions = EXCLUDED.conditions,
+                   updated_at = EXCLUDED.updated_at""",
+            (user_id, conditions, _now_iso()),
+        )
+    conn.commit()
+
+
+def clear_health_profile(conn, user_id: int) -> None:
+    with conn.cursor() as cur:
+        cur.execute("DELETE FROM user_health_profile WHERE user_id = %s", (user_id,))
     conn.commit()
 
 

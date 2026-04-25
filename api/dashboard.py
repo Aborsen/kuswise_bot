@@ -46,6 +46,9 @@ from lib.database import (
     add_water,
     remove_last_water_today,
 )
+from lib.log import setup_sentry, http_handler, error
+
+setup_sentry("dashboard")
 
 
 INIT_DATA_MAX_AGE = 24 * 60 * 60  # 24h, per Telegram recommendation
@@ -249,10 +252,12 @@ class handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(payload)
 
+    @http_handler("dashboard")
     def do_GET(self):
         nonce = _new_nonce()
         self._send_html(200, _BOOTSTRAP_HTML.replace("__NONCE__", _esc(nonce)), nonce=nonce)
 
+    @http_handler("dashboard")
     def do_POST(self):
         try:
             length = int(self.headers.get("Content-Length", "0") or 0)

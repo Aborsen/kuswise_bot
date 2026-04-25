@@ -26,6 +26,9 @@ from lib.database import (
 )
 from lib.telegram_helpers import send_message
 from lib.openai_nutrition import generate_daily_summary
+from lib.log import setup_sentry, http_handler, error
+
+setup_sentry("cron_daily_summary")
 
 
 def _authorized(headers) -> bool:
@@ -39,6 +42,7 @@ def _authorized(headers) -> bool:
 
 
 class handler(BaseHTTPRequestHandler):
+    @http_handler("cron_daily_summary")
     def do_GET(self):
         if not _authorized(self.headers):
             self.send_response(401)
@@ -48,8 +52,8 @@ class handler(BaseHTTPRequestHandler):
         result = {"ok": True, "sent": 0, "errors": []}
         try:
             result = run_daily_summary()
-        except Exception:
-            print("cron_daily_summary error:", traceback.format_exc(), flush=True)
+        except Exception as exc:
+            error("cron_daily_summary_failed", exc=exc)
             result = {"ok": False, "error": "internal"}
 
         self.send_response(200)
@@ -79,7 +83,7 @@ def run_daily_summary() -> dict:
                 sent += 1
             except Exception as e:
                 errors.append({"user_id": user_id, "error": str(e)})
-                print(f"summary error for {user_id}:", traceback.format_exc(), flush=True)
+                error("summary_user_failed", exc=e, user_id=user_id)
     finally:
         try:
             conn.close()

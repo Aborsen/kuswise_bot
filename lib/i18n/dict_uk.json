@@ -1,0 +1,7 @@
+{
+  "language_prompt": "🌐 <b>Мова бота</b>\nПоточна: <b>{current}</b>\n\nОбери мову нижче. (Наразі повна локалізація триває — деякі повідомлення поки що тільки українською.)",
+  "language_saved": "✅ Готово. Мова: <b>{lang}</b>",
+  "language_not_onboarded": "Спершу пройди /start ☺️",
+  "lang_label_en": "🇬🇧 English",
+  "lang_label_uk": "🇺🇦 Українська"
+}

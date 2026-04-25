@@ -200,6 +200,7 @@ from lib.formatters import (
     BTN_FAV,
     BTN_WATER,
     BTN_SCAN,
+    BTN_MENU_OCR,
     MENU_BUTTON_LABELS,
     format_water,
     format_meal_list_entry,
@@ -516,6 +517,7 @@ def process_update(update: dict) -> None:
                 BTN_PROFILE: "/profile",
                 BTN_SUGGEST: "/suggest_meal",
                 BTN_SCAN: "/scan",
+                BTN_MENU_OCR: "/menu",
             }.get(text)
             if mapped:
                 handle_command(conn, message, mapped, first_name, profile)

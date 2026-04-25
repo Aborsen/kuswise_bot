@@ -15,11 +15,23 @@ font later without changing callers.
 from __future__ import annotations
 
 import io
+import os
 from collections import Counter
 from datetime import date, timedelta
 from typing import Optional
 
 from PIL import Image, ImageDraw, ImageFont
+
+
+# Bundled font (Apache-2.0, ships in the repo at assets/fonts/). Noto Sans
+# has full Cyrillic coverage so labels like "СЕРІЯ" / "ЗМІНА ВАГИ" actually
+# render glyphs instead of tofu boxes on Vercel's bare runtime.
+_FONT_DIR = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    "assets", "fonts",
+)
+_BUNDLED_BOLD    = os.path.join(_FONT_DIR, "NotoSans-Bold.ttf")
+_BUNDLED_REGULAR = os.path.join(_FONT_DIR, "NotoSans-Regular.ttf")
 
 
 # Canvas — Instagram Story format (9:16, fits Telegram preview without crop).
@@ -33,24 +45,23 @@ _DIM       = (160, 165, 180)
 _ACCENT    = (255, 138, 30)
 
 
-def _try_truetype(size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
-    """Return a font of the requested pixel size, trying common system paths
-    before falling back to Pillow's scaled default.
+def _try_truetype(size: int, *, bold: bool = True) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
+    """Return a font of the requested pixel size with Cyrillic coverage.
 
-    Pillow 10.1+ accepts ``size`` on ``ImageFont.load_default``; older
-    versions are caught and we hand back the bitmap default (still
-    readable but smaller than requested).
+    Tries: bundled Noto Sans (always present in the repo) → common system
+    fonts → Pillow's scaled default. The bundled Noto path is the only
+    one that's reliable on Vercel's runtime, so it goes first.
     """
-    candidates = (
-        # Vercel's Amazon Linux base usually ships these:
+    candidates = [
+        _BUNDLED_BOLD if bold else _BUNDLED_REGULAR,
+        # Defensive fallbacks — almost certainly absent on Vercel but free.
         "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
         "/usr/share/fonts/dejavu/DejaVuSans-Bold.ttf",
         "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
-        "/usr/share/fonts/liberation/LiberationSans-Bold.ttf",
         # macOS dev box:
         "/System/Library/Fonts/Supplemental/Arial Bold.ttf",
         "/Library/Fonts/Arial Bold.ttf",
-    )
+    ]
     for path in candidates:
         try:
             return ImageFont.truetype(path, size)
@@ -59,7 +70,6 @@ def _try_truetype(size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
     try:
         return ImageFont.load_default(size=size)
     except TypeError:
-        # Pillow < 10.1 — bitmap default; small but won't crash.
         return ImageFont.load_default()
 
 
@@ -248,7 +258,9 @@ def render_recap_png(stats: dict, first_name: Optional[str] = None) -> bytes:
     # Weight delta
     delta = stats.get("weight_delta")
     if delta is not None:
-        sign = "+" if delta > 0 else "−" if delta < 0 else "±"
+        # Use ASCII "-" rather than the typographic U+2212 MINUS so all
+        # bundled fonts can render it. Same for "±" we just write "≈".
+        sign = "+" if delta > 0 else "-" if delta < 0 else "~"
         delta_str = f"{sign}{abs(delta):.1f} кг"
         draw.text((pad, y), "ЗМІНА ВАГИ", font=label_font, fill=_ACCENT)
         draw.text((pad, y + 40), delta_str, font=big_font, fill=_FG)

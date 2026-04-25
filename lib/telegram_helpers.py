@@ -355,14 +355,15 @@ def main_menu_keyboard() -> dict:
     webhook.py routes it.
     """
     from lib.formatters import (
-        BTN_ASK, BTN_FAV, BTN_WATER, BTN_MEALS, BTN_SUGGEST, BTN_PROFILE, BTN_SCAN,
+        BTN_ASK, BTN_FAV, BTN_WATER, BTN_MEALS, BTN_SUGGEST, BTN_PROFILE,
+        BTN_SCAN, BTN_MENU_OCR,
     )
     return {
         "keyboard": [
             [{"text": BTN_ASK},     {"text": BTN_FAV}],
             [{"text": BTN_WATER},   {"text": BTN_MEALS}],
-            [{"text": BTN_SCAN},    {"text": BTN_SUGGEST}],
-            [{"text": BTN_PROFILE}],
+            [{"text": BTN_SCAN},    {"text": BTN_MENU_OCR}],
+            [{"text": BTN_SUGGEST}, {"text": BTN_PROFILE}],
         ],
         "resize_keyboard": True,
         "is_persistent": True,

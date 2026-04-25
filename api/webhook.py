@@ -2581,8 +2581,14 @@ def handle_weekly_delta_input(
     The user types an unsigned magnitude (e.g. "0.5"); we sign it based on the
     profile's goal direction so they don't have to think about minus signs.
     """
-    cleaned = text.strip().replace(",", ".")
-    if cleaned.lower() in ("/skip", "skip", "/cancel", "cancel"):
+    cleaned = (
+        text.strip().lower()
+            .replace("кг", "")
+            .replace("kg", "")
+            .replace(",", ".")
+            .strip()
+    )
+    if cleaned in ("/skip", "skip", "/cancel", "cancel"):
         set_awaiting_input(conn, user_id, None)
         send_message(chat_id, "👌 Скасовано.", reply_markup=main_menu_keyboard())
         return
@@ -2603,12 +2609,11 @@ def handle_weekly_delta_input(
         set_awaiting_input(conn, user_id, None)
         return
 
-    # If the user typed a signed number that disagrees with their goal direction,
-    # let them know rather than silently flipping the sign.
+    # The prompt + WRONG_SIGN copy both ask the user to type a POSITIVE number;
+    # we apply the sign automatically based on goal direction.
+    #   - lose: + (as instructed) or − (already-signed) both accepted.
+    #   - gain: − is wrong-direction (wants up, typed down) → reject.
     if raw < 0 and goal == "gain":
-        send_message(chat_id, WEEKLY_DELTA_WRONG_SIGN)
-        return
-    if raw > 0 and goal == "lose":
         send_message(chat_id, WEEKLY_DELTA_WRONG_SIGN)
         return
 

@@ -21,6 +21,8 @@ from lib import goals as gl
 from lib import openai_vision as ov
 from lib import personalization as pz
 from lib import off as off_mod
+from lib import mealplan as mp
+from lib import recap as recap_mod
 
 
 # ---------- macro / calorie math (lib.config) ----------
@@ -1147,3 +1149,156 @@ def test_manual_ean_rejects_short():
 def test_manual_ean_rejects_long():
     cleaned = "12345678901234"  # 14 digits — > EAN-13 max
     assert not off_mod.looks_like_ean(cleaned)
+
+
+# ---------- F-10 meal plan parsing (lib.mealplan) ----------
+
+def test_normalize_plan_pads_short_days():
+    raw = {"days": [{"date_label": "Today", "slots": {
+        "breakfast": {"name": "Овсянка", "calories": 300, "protein_g": 12, "carbs_g": 50, "fat_g": 7},
+    }}]}
+    out = mp.normalize_plan(raw)
+    assert len(out["days"]) == 3
+    # Default labels for missing days
+    assert out["days"][1]["date_label"] == "Завтра"
+    assert out["days"][2]["date_label"] == "День 3"
+
+
+def test_normalize_plan_drops_blank_slot_names():
+    raw = {"days": [{"slots": {
+        "breakfast": {"name": "", "calories": 100},
+        "lunch":     {"name": "Salad", "calories": 350, "protein_g": 25, "carbs_g": 20, "fat_g": 18},
+    }}]}
+    out = mp.normalize_plan(raw)
+    assert out["days"][0]["slots"]["breakfast"] is None
+    assert out["days"][0]["slots"]["lunch"]["name"] == "Salad"
+
+
+def test_normalize_plan_handles_garbage_input():
+    # Non-dict input → returns the same 3-day skeleton (all-None slots).
+    out = mp.normalize_plan(None)  # type: ignore[arg-type]
+    assert len(out["days"]) == 3
+    for day in out["days"]:
+        assert all(slot is None for slot in day["slots"].values())
+
+
+def test_normalize_plan_coerces_macros_to_ints():
+    raw = {"days": [{"slots": {
+        "breakfast": {"name": "Test", "calories": "300.7", "protein_g": "12.3",
+                       "carbs_g": "50.5", "fat_g": "7.9"},
+    }}]}
+    out = mp.normalize_plan(raw)
+    slot = out["days"][0]["slots"]["breakfast"]
+    assert slot["calories"] == 301      # rounded
+    assert slot["protein_g"] == 12      # rounded
+    assert slot["fat_g"] == 8
+
+
+def test_slot_to_analysis_yields_save_meal_shape():
+    slot = {"name": "Курка з рисом", "calories": 540, "protein_g": 50,
+            "carbs_g": 60, "fat_g": 12, "recipe": "Запекти"}
+    a = mp.slot_to_analysis(slot)
+    assert a["dish_name"] == "Курка з рисом"
+    assert a["nutrition"]["calories"] == 540
+    assert a["_source"]["kind"] == "meal_plan"
+    assert a["nutrition"]["fiber_g"] == 0
+
+
+# ---------- F-12 weekly recap stats (lib.recap) ----------
+
+def test_recap_avg_kcal_basic():
+    end = _date(2026, 4, 25)
+    meals = [
+        {"date": "2026-04-25", "description": "Курка",  "calories": 600},
+        {"date": "2026-04-25", "description": "Салат",  "calories": 200},
+        {"date": "2026-04-24", "description": "Курка",  "calories": 800},
+        {"date": "2026-04-23", "description": "Риба",   "calories": 700},
+    ]
+    stats = recap_mod.compute_weekly_stats(
+        meals_last_7d=meals,
+        weight_history_recent=[],
+        streak_row={"current_streak": 5},
+        end_date=end,
+    )
+    assert stats["days_logged"] == 3
+    # 3 days totaling 800 + 800 + 700 = 2300 → 2300/3 ≈ 767
+    assert stats["avg_kcal"] == 767
+    assert stats["streak"] == 5
+
+
+def test_recap_top_food_picks_most_frequent():
+    end = _date(2026, 4, 25)
+    meals = [
+        {"date": "2026-04-25", "description": "Курка з рисом", "calories": 600},
+        {"date": "2026-04-24", "description": "Курка з рисом", "calories": 600},
+        {"date": "2026-04-23", "description": "курка з рисом", "calories": 600},  # case-insens
+        {"date": "2026-04-22", "description": "Салат",          "calories": 300},
+    ]
+    stats = recap_mod.compute_weekly_stats(
+        meals_last_7d=meals,
+        weight_history_recent=[],
+        streak_row=None,
+        end_date=end,
+    )
+    assert stats["top_food"] == "Курка з рисом"  # display capitalization preserved
+    assert stats["top_food_count"] == 3
+
+
+def test_recap_weight_delta_basic():
+    end = _date(2026, 4, 25)
+    meals = [{"date": "2026-04-25", "description": "x", "calories": 100}]
+    weights = [
+        {"weight_kg": 78.0, "recorded_at": _date(2026, 4, 19)},
+        {"weight_kg": 77.4, "recorded_at": _date(2026, 4, 25)},
+    ]
+    stats = recap_mod.compute_weekly_stats(
+        meals_last_7d=meals,
+        weight_history_recent=weights,
+        streak_row=None,
+        end_date=end,
+    )
+    assert stats["weight_delta"] == -0.6
+
+
+def test_recap_handles_empty_inputs():
+    """Cron calls this for every user — must never crash on empty data."""
+    stats = recap_mod.compute_weekly_stats(
+        meals_last_7d=[],
+        weight_history_recent=[],
+        streak_row=None,
+        end_date=_date(2026, 4, 25),
+    )
+    assert stats["days_logged"] == 0
+    assert stats["avg_kcal"] == 0
+    assert stats["streak"] == 0
+    assert stats["top_food"] is None
+    assert stats["weight_delta"] is None
+
+
+def test_recap_window_excludes_old_meals():
+    end = _date(2026, 4, 25)
+    meals = [
+        {"date": "2026-04-25", "description": "in window",  "calories": 500},
+        {"date": "2026-04-10", "description": "out window", "calories": 999},
+    ]
+    stats = recap_mod.compute_weekly_stats(
+        meals_last_7d=meals,
+        weight_history_recent=[],
+        streak_row=None,
+        end_date=end,
+    )
+    assert stats["days_logged"] == 1  # only the in-window day
+    assert stats["avg_kcal"] == 500
+
+
+def test_render_recap_png_returns_pngsignature_bytes():
+    """Renderer returns valid PNG bytes (smoke; Pillow available in CI)."""
+    stats = {
+        "end_date": "2026-04-25", "days_logged": 5, "avg_kcal": 1820,
+        "streak": 12, "top_food": "Курка з рисом", "top_food_count": 4,
+        "weight_delta": -0.6,
+    }
+    out = recap_mod.render_recap_png(stats, first_name="Vic")
+    assert isinstance(out, bytes)
+    assert len(out) > 5000               # any real PNG is well above this
+    assert out[:8] == b"\x89PNG\r\n\x1a\n"  # PNG magic bytes

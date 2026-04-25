@@ -80,6 +80,34 @@ def send_message(chat_id: int, text: str, reply_markup: dict | None = None) -> d
         return {"ok": False, "error": str(e)}
 
 
+def send_photo(
+    chat_id: int,
+    photo_bytes: bytes,
+    caption: str | None = None,
+    filename: str = "photo.png",
+    reply_markup: dict | None = None,
+) -> dict:
+    """Telegram sendPhoto via multipart upload (used by F-12 recap cards).
+
+    ``photo_bytes`` is the raw PNG/JPEG payload. We upload as a multipart
+    form so we never need to round-trip through Telegram's file_id cache.
+    """
+    files = {
+        "photo": (filename, photo_bytes, "image/png"),
+    }
+    data: dict = {"chat_id": str(chat_id), "parse_mode": "HTML"}
+    if caption is not None:
+        data["caption"] = caption[:1024]  # Telegram caption hard limit
+    if reply_markup is not None:
+        import json as _json
+        data["reply_markup"] = _json.dumps(reply_markup)
+    try:
+        resp = httpx.post(f"{BASE_URL}/sendPhoto", data=data, files=files, timeout=20)
+        return resp.json()
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
 def answer_callback_query(callback_query_id: str, text: str | None = None) -> dict:
     payload: dict = {"callback_query_id": callback_query_id}
     if text:
@@ -190,6 +218,63 @@ def cancel_only_keyboard() -> dict:
             [{"text": "❌ Скасувати", "callback_data": "mod:cancel"}],
         ]
     }
+
+
+def suggest_followup_keyboard() -> dict:
+    """F-11: shown under each /suggest_meal result.
+
+    Lets the user re-run with their own ingredients ("fridge mode") or
+    request a variation. We avoid a generic "swap X→Y" parsing step
+    (would require post-processing the model's output) — a "different
+    version" hint goes a long way for free.
+    """
+    return {
+        "inline_keyboard": [
+            [{"text": "🛒 З моїх продуктів", "callback_data": "suggest:fridge"}],
+            [{"text": "🔄 Інша версія",      "callback_data": "suggest:variation"}],
+        ]
+    }
+
+
+def plan_pantry_keyboard() -> dict:
+    """F-10: shown after /plan — let user proceed without typing pantry items."""
+    return {
+        "inline_keyboard": [
+            [{"text": "🚀 Без списку — згенерувати", "callback_data": "plan:nopantry"}],
+            [{"text": "❌ Скасувати",                 "callback_data": "plan:cancel"}],
+        ]
+    }
+
+
+def plan_day_keyboard(plan_id: int, day_idx: int, day: dict) -> dict:
+    """F-10: per-day inline buttons — one Log button per slot + day navigator.
+
+    Slot buttons fit Telegram's ~64-char limit by trimming the dish name
+    and appending kcal. Callback data: ``plan:log:<plan_id>:<day_idx>:<slot>``.
+    """
+    emoji = {"breakfast": "🥣", "lunch": "🍱", "dinner": "🍽️", "snack": "🍎"}
+    rows = []
+    for slot_key in ("breakfast", "lunch", "dinner", "snack"):
+        slot = day["slots"].get(slot_key)
+        if not slot:
+            continue
+        kcal = int(round(float(slot.get("calories") or 0)))
+        name = (slot.get("name") or "")[:28]
+        rows.append([{
+            "text": f"➕ {emoji[slot_key]} {name} · {kcal} ккал",
+            "callback_data": f"plan:log:{plan_id}:{day_idx}:{slot_key}",
+        }])
+    nav_row = []
+    if day_idx > 0:
+        nav_row.append({"text": "← День " + str(day_idx),
+                        "callback_data": f"plan:view:{plan_id}:{day_idx - 1}"})
+    if day_idx < 2:
+        nav_row.append({"text": "День " + str(day_idx + 2) + " →",
+                        "callback_data": f"plan:view:{plan_id}:{day_idx + 1}"})
+    if nav_row:
+        rows.append(nav_row)
+    rows.append([{"text": "❌ Закрити", "callback_data": "plan:cancel"}])
+    return {"inline_keyboard": rows}
 
 
 def menu_log_keyboard(dishes: list[dict]) -> dict:

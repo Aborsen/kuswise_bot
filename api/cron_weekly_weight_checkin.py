@@ -29,10 +29,15 @@ from lib.database import (
     get_users_due_weekly_checkin,
     set_awaiting_input,
     mark_weekly_checkin_sent,
+    get_profile,
+    get_streak,
+    get_weight_history,
+    get_meals_in_range,
 )
 from lib.formatters import WEIGHT_CHECKIN_PROMPT
-from lib.telegram_helpers import send_message
+from lib.telegram_helpers import send_message, send_photo
 from lib.log import setup_sentry, http_handler, error
+from lib import recap as recap_mod
 
 setup_sentry("cron_weekly_weight_checkin")
 
@@ -69,6 +74,7 @@ class handler(BaseHTTPRequestHandler):
 def run_weekly_checkin() -> dict:
     conn = get_conn()
     sent = 0
+    recaps_sent = 0
     errors = []
     try:
         init_db(conn)
@@ -87,6 +93,14 @@ def run_weekly_checkin() -> dict:
                     set_awaiting_input(conn, user_id, None)
                     mark_weekly_checkin_sent(conn, user_id)
                     errors.append({"user_id": user_id, "error": resp})
+
+                # F-12: piggyback the weekly recap PNG. Best-effort —
+                # silently skip on failure (the weight prompt already went out).
+                try:
+                    if _send_weekly_recap_for(conn, user_id):
+                        recaps_sent += 1
+                except Exception as recap_exc:
+                    error("weekly_recap_failed", exc=recap_exc, user_id=user_id)
             except Exception as e:
                 errors.append({"user_id": user_id, "error": str(e)})
                 error("weekly_checkin_user_failed", exc=e, user_id=user_id)
@@ -99,6 +113,52 @@ def run_weekly_checkin() -> dict:
     return {
         "ok": True,
         "sent": sent,
+        "recaps_sent": recaps_sent,
         "errors": errors,
         "ran_at": datetime.now(timezone.utc).isoformat(),
     }
+
+
+def _send_weekly_recap_for(conn, user_id: int) -> bool:
+    """Build + send a recap PNG to ``user_id``. Returns True on success.
+
+    Skips users with no logged meals in the past 7 days (no point sending
+    an empty card). Re-uses the same helpers as the on-demand /recap path
+    so the rendering stays identical.
+    """
+    from datetime import date as _date, timedelta as _td
+
+    profile = get_profile(conn, user_id) or {}
+    end_date_obj = _date.today()
+    start_date_obj = end_date_obj - _td(days=6)
+
+    meals_7d = get_meals_in_range(
+        conn, user_id,
+        start_date_obj.isoformat(),
+        end_date_obj.isoformat(),
+    )
+    # Skip users with zero engagement this week — no card.
+    if not meals_7d:
+        return False
+
+    weights_recent = get_weight_history(conn, user_id, limit=20)
+    try:
+        streak_row = get_streak(conn, user_id)
+    except Exception:
+        streak_row = None
+
+    stats = recap_mod.compute_weekly_stats(
+        meals_last_7d=meals_7d,
+        weight_history_recent=weights_recent,
+        streak_row=streak_row,
+        end_date=end_date_obj,
+    )
+    png = recap_mod.render_recap_png(stats, first_name=None)
+    caption = (
+        f"🔥 <b>Твій тиждень з KusWise</b>\n"
+        f"Серія: {stats['streak']} · "
+        f"Середньо: {stats['avg_kcal']} ккал/день · "
+        f"Залогованих днів: {stats['days_logged']}/7"
+    )
+    resp = send_photo(user_id, png, caption=caption)
+    return bool(resp.get("ok"))

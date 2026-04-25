@@ -513,6 +513,8 @@ def help_message() -> str:
         "/aliases — 📚 твої звичні страви (бот вчиться)\n"
         "/scan — 🔢 сканер штрих-кодів (Open Food Facts)\n"
         "/menu — 📋 OCR меню в кафе/ресторані\n"
+        "/plan — 🗓 3-денний план на основі цілі\n"
+        "/recap — 📸 PNG-картка тижневих результатів\n"
         "/meals — список страв (видалити / змінити)\n"
         "/fav — ⭐ улюблені страви\n"
         "/recent — 🕘 останні страви (швидкий повтор)\n"
@@ -770,6 +772,59 @@ BARCODE_MANUAL_PROMPT = (
     "8-13 цифр. /cancel — скасувати."
 )
 BARCODE_MANUAL_INVALID = "Штрих-код має бути 8-13 цифр без літер. Спробуй ще раз 🙂"
+
+# F-10: meal plan strings
+PLAN_INTRO = (
+    "🗓 <b>3-денний план</b>\n"
+    "Я зроблю план з твоїми калоріями + здоров'ям. "
+    "Якщо хочеш — напиши, що в тебе є вдома (наприклад: <code>курка, рис, броколі, яйця</code>) — "
+    "врахую це. Або просто натисни «Без списку».\n\n"
+    "<i>/cancel — скасувати.</i>"
+)
+PLAN_GENERATING = "🍳 Готую план… це займе 10-20 секунд."
+PLAN_FAILED = "❌ Не зміг згенерувати план. Спробуй ще раз через хвилину."
+PLAN_PANTRY_TOO_LONG = "Список занадто довгий — обмеж 200 символами."
+PLAN_HEADER_NOTES = "📝 <i>{notes}</i>\n\n"
+PLAN_DAY_HEADER = "━━━━━━━━━━━━━━━━━━━━━\n📅 <b>{label}</b>"
+
+
+# F-11: fridge / swap strings
+FRIDGE_PROMPT = (
+    "🛒 <b>Що є в холодильнику?</b>\n"
+    "Напиши через кому — наприклад: <code>курка, рис, броколі, яйця, помідори</code>. "
+    "Я придумаю рецепт лише з цих продуктів.\n\n"
+    "<i>/cancel — скасувати.</i>"
+)
+FRIDGE_TOO_LONG = "Список занадто довгий — обмеж 300 символами."
+SUGGEST_VARIATION_HINT = (
+    "Запропонуй ІНШИЙ рецепт ніж попередній — інший білок (якщо в попередньому "
+    "була курка — спробуй рибу/яйця/тофу), інший спосіб приготування, інший набір спецій."
+)
+
+
+def format_meal_plan_day(day: dict, day_idx: int) -> str:
+    """Render one day's slots as a single Telegram message body."""
+    lines = [PLAN_DAY_HEADER.format(label=day["date_label"])]
+    slot_emojis = {"breakfast": "🥣", "lunch": "🍱", "dinner": "🍽️", "snack": "🍎"}
+    slot_labels = {"breakfast": "Сніданок", "lunch": "Обід", "dinner": "Вечеря", "snack": "Перекус"}
+    for slot_key in ("breakfast", "lunch", "dinner", "snack"):
+        slot = day["slots"].get(slot_key)
+        if not slot:
+            continue
+        emoji = slot_emojis[slot_key]
+        label = slot_labels[slot_key]
+        kcal = int(round(float(slot.get("calories")  or 0)))
+        p    = int(round(float(slot.get("protein_g") or 0)))
+        f    = int(round(float(slot.get("fat_g")     or 0)))
+        c    = int(round(float(slot.get("carbs_g")   or 0)))
+        recipe = slot.get("recipe", "")
+        lines.append(
+            f"\n{emoji} <b>{label}</b> · {kcal} ккал · Б{p} Ж{f} В{c}\n"
+            f"<b>{slot['name']}</b>"
+        )
+        if recipe:
+            lines.append(f"<i>{recipe}</i>")
+    return "\n".join(lines)
 
 
 def format_aliases(aliases: list[dict], first_name: str | None = None) -> str:

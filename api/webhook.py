@@ -18,6 +18,7 @@ from lib.config import (
     ALLOWED_USER_IDS,
     calorie_target_from_profile,
     macro_gram_targets_from_profile,
+    macro_gram_targets,
 )
 from lib.database import (
     consume_quota,
@@ -66,6 +67,7 @@ from lib.database import (
 )
 from lib.telegram_helpers import (
     send_message,
+    send_photo,
     answer_callback_query,
     get_file_bytes,
     edit_message_text,
@@ -76,6 +78,9 @@ from lib.telegram_helpers import (
     alternates_keyboard,
     scanner_inline_keyboard,
     menu_log_keyboard,
+    plan_pantry_keyboard,
+    plan_day_keyboard,
+    suggest_followup_keyboard,
     meals_list_keyboard,
     main_menu_keyboard,
     dashboard_inline_keyboard,
@@ -136,6 +141,15 @@ from lib.formatters import (
     MENU_PENDING_EXPIRED,
     format_menu_dishes_intro,
     format_menu_dish_row,
+    PLAN_INTRO,
+    PLAN_GENERATING,
+    PLAN_FAILED,
+    PLAN_PANTRY_TOO_LONG,
+    PLAN_HEADER_NOTES,
+    format_meal_plan_day,
+    FRIDGE_PROMPT,
+    FRIDGE_TOO_LONG,
+    SUGGEST_VARIATION_HINT,
     format_meals_list,
     format_profile,
     format_recommendation,
@@ -243,10 +257,15 @@ from lib.database import (
     get_weight_history,
     save_menu_ocr_result,
     get_menu_ocr_result,
+    save_meal_plan,
+    get_meal_plan,
+    get_meals_in_range,
 )
 from lib import goals as goals_mod
 from lib import personalization as personalization_mod
 from lib import off as off_mod
+from lib import mealplan as mealplan_mod
+from lib import recap as recap_mod
 from lib.health import (
     ALLERGENS as HEALTH_ALLERGENS,
     CONDITIONS as HEALTH_CONDITIONS,
@@ -287,6 +306,7 @@ DAILY_QUOTAS: dict[str, int] = {
     "ask": 50,              # /ask chat (GPT-4.1-mini)
     "suggest": 20,          # /suggest_meal recipe generator (GPT-4o)
     "menu_ocr": 5,          # F-9: /menu restaurant menu scan (GPT-4o vision, multi-image)
+    "plan_generate": 3,     # F-10: /plan 3-day meal plan (GPT-4o JSON, ~1800 tokens)
 }
 
 QUOTA_ACTION_LABELS = {
@@ -295,6 +315,7 @@ QUOTA_ACTION_LABELS = {
     "ask": "запит до ШІ",
     "suggest": "ідея страви",
     "menu_ocr": "сканер меню",
+    "plan_generate": "3-денний план",
 }
 
 QUOTA_REJECT_TEMPLATE = (
@@ -559,6 +580,26 @@ def process_update(update: dict) -> None:
             and text.lower().strip() != "/cancel"
         ):
             handle_barcode_manual_input(conn, chat_id, user_id, text, profile)
+            return
+
+        # F-10: pantry items capture for /plan.
+        if (
+            user_id
+            and profile
+            and profile.get("awaiting_input_type") == "plan_pantry"
+            and text.lower().strip() != "/cancel"
+        ):
+            handle_plan_pantry_input(conn, chat_id, user_id, text, profile)
+            return
+
+        # F-11: fridge ingredients capture for /suggest_meal variation.
+        if (
+            user_id
+            and profile
+            and profile.get("awaiting_input_type") == "fridge_ingredients"
+            and text.lower().strip() != "/cancel"
+        ):
+            handle_fridge_input(conn, chat_id, user_id, text, profile)
             return
 
         # Free-text IANA timezone from /timezone → ✏️ Інша зона.
@@ -1230,6 +1271,10 @@ def handle_callback(conn, cb: dict) -> None:
         handle_barcode_callback(conn, cb, profile)
     elif data.startswith("menu:"):
         handle_menu_callback(conn, cb, profile)
+    elif data.startswith("plan:"):
+        handle_plan_callback(conn, cb, profile)
+    elif data.startswith("suggest:"):
+        handle_suggest_callback(conn, cb, profile)
     elif data.startswith("meal_del:") or data.startswith("meal_edit:"):
         handle_meal_manage_callback(conn, cb)
     elif data.startswith("fav:"):
@@ -1842,6 +1887,272 @@ def handle_menu_callback(conn, cb: dict, profile: dict) -> None:
     )
 
 
+# ---------- F-10: 3-day meal plans ----------
+
+def _build_and_send_plan(
+    conn,
+    chat_id: int,
+    user_id: int,
+    profile: dict,
+    pantry: str,
+) -> None:
+    """Generate a plan, persist it, send the day-1 message + day keyboard.
+
+    Pulled out so both ``handle_plan_pantry_input`` (typed list) and the
+    "Без списку" callback can share the heavy lifting.
+    """
+    if not _enforce_quota(conn, chat_id, user_id, "plan_generate"):
+        set_awaiting_input(conn, user_id, None)
+        return
+
+    set_awaiting_input(conn, user_id, None)
+    send_message(chat_id, PLAN_GENERATING)
+
+    cal_target = profile.get("daily_calorie_target") or 2000
+    weight_kg = profile.get("weight_kg")
+    goal = profile.get("goal") or "maintain"
+    if weight_kg:
+        macros = macro_gram_targets_from_profile(weight_kg, goal)
+    else:
+        macros = macro_gram_targets(cal_target)
+
+    today_log = get_today_log(conn, user_id) or {}
+    remaining = {
+        "calories": max(0, cal_target           - int(today_log.get("calories", 0))),
+        "protein":  max(0, int(macros["protein"]) - int(today_log.get("protein", 0))),
+        "fat":      max(0, int(macros["fat"])     - int(today_log.get("fat", 0))),
+        "carbs":    max(0, int(macros["carbs"])   - int(today_log.get("carbs", 0))),
+    }
+    health_ctx = ""
+    try:
+        health_ctx = addendum_for_profile(get_health_profile(conn, user_id))
+    except Exception as _hx:
+        error("plan_health_addendum_failed", exc=_hx, user_id=user_id)
+
+    try:
+        plan = mealplan_mod.generate_meal_plan(
+            cal_target=cal_target,
+            p_target=int(macros["protein"]),
+            c_target=int(macros["carbs"]),
+            f_target=int(macros["fat"]),
+            remaining=remaining,
+            goal=goal,
+            pantry=pantry,
+            health_addendum=health_ctx,
+        )
+    except Exception as e:
+        error("plan_generate_failed", exc=e, user_id=user_id)
+        send_message(chat_id, PLAN_FAILED, reply_markup=main_menu_keyboard())
+        return
+
+    try:
+        plan_id = save_meal_plan(conn, user_id, plan)
+    except Exception as e:
+        error("plan_save_failed", exc=e, user_id=user_id)
+        send_message(chat_id, PLAN_FAILED, reply_markup=main_menu_keyboard())
+        return
+
+    _send_plan_day(chat_id, plan_id, plan, day_idx=0)
+
+
+def _send_plan_day(chat_id: int, plan_id: int, plan: dict, day_idx: int) -> None:
+    """Render one day of a saved plan + the per-day inline keyboard."""
+    days = plan.get("days") or []
+    if day_idx < 0 or day_idx >= len(days):
+        return
+    day = days[day_idx]
+    body = format_meal_plan_day(day, day_idx)
+    if day_idx == 0 and plan.get("notes"):
+        body = PLAN_HEADER_NOTES.format(notes=plan["notes"]) + body
+    send_message(chat_id, body, reply_markup=plan_day_keyboard(plan_id, day_idx, day))
+
+
+def handle_plan_pantry_input(
+    conn,
+    chat_id: int,
+    user_id: int,
+    text: str,
+    profile: dict,
+) -> None:
+    """Capture optional pantry list and trigger plan generation."""
+    cleaned = text.strip()
+    if cleaned.lower() in ("/skip", "skip", "/cancel", "cancel"):
+        set_awaiting_input(conn, user_id, None)
+        send_message(chat_id, MEAL_CANCELLED, reply_markup=main_menu_keyboard())
+        return
+    if len(cleaned) > 200:
+        send_message(chat_id, PLAN_PANTRY_TOO_LONG)
+        return
+    _build_and_send_plan(conn, chat_id, user_id, profile, pantry=cleaned)
+
+
+def handle_plan_callback(conn, cb: dict, profile: dict) -> None:
+    """F-10: callbacks under /plan and per-day messages.
+
+    Shapes:
+        plan:nopantry                — "skip pantry list, just generate"
+        plan:cancel                  — close
+        plan:view:<plan_id>:<day>    — paginate to a different day
+        plan:log:<plan_id>:<day>:<slot> — add a slot's meal to today's log
+    """
+    cb_id = cb["id"]
+    user_id = cb["from"]["id"]
+    first_name = cb["from"].get("first_name")
+    message = cb.get("message", {})
+    chat_id = message.get("chat", {}).get("id", user_id)
+    data = cb["data"]
+
+    if data == "plan:cancel":
+        answer_callback_query(cb_id, "Закрив")
+        set_awaiting_input(conn, user_id, None)
+        send_message(chat_id, MEAL_CANCELLED, reply_markup=main_menu_keyboard())
+        return
+
+    if data == "plan:nopantry":
+        answer_callback_query(cb_id, "🍳 Готую…")
+        _build_and_send_plan(conn, chat_id, user_id, profile, pantry="")
+        return
+
+    parts = data.split(":")
+    # Both view + log forms have plan_id at index 2 and day at index 3.
+    if len(parts) < 4:
+        answer_callback_query(cb_id, "Невідома дія")
+        return
+
+    try:
+        plan_id = int(parts[2])
+        day_idx = int(parts[3])
+    except ValueError:
+        answer_callback_query(cb_id, "Невідома дія")
+        return
+
+    plan = get_meal_plan(conn, plan_id, user_id)
+    if not plan:
+        answer_callback_query(cb_id)
+        send_message(chat_id, PLAN_FAILED)
+        return
+
+    if data.startswith("plan:view:"):
+        answer_callback_query(cb_id)
+        _send_plan_day(chat_id, plan_id, plan, day_idx)
+        return
+
+    if data.startswith("plan:log:"):
+        if len(parts) < 5:
+            answer_callback_query(cb_id, "Помилка")
+            return
+        slot_key = parts[4]
+        days = plan.get("days") or []
+        if day_idx < 0 or day_idx >= len(days):
+            answer_callback_query(cb_id, "Поза діапазоном")
+            return
+        slot = (days[day_idx].get("slots") or {}).get(slot_key)
+        if not slot:
+            answer_callback_query(cb_id, "Прийом їжі недоступний")
+            return
+        answer_callback_query(cb_id, f"➕ {slot.get('name', '')[:32]}")
+        analysis = mealplan_mod.slot_to_analysis(slot)
+        meal_type = slot_key  # planner slots match the meal_type enum exactly
+        # Route through standard preview so the user can ✏️ edit / 🔄 recalc
+        # before commiting.
+        _send_analysis_preview(
+            conn, chat_id, user_id, meal_type, analysis,
+            photo_file_id=None,
+            text_description=slot.get("name", ""),
+            raw="",
+        )
+        return
+
+    answer_callback_query(cb_id, "Невідома дія")
+
+
+# ---------- F-11: /suggest_meal extensions (fridge + variation) ----------
+
+def _run_suggest_meal(
+    conn,
+    chat_id: int,
+    user_id: int,
+    profile: dict,
+    pantry: str = "",
+    extra_hint: str = "",
+) -> None:
+    """Shared body for /suggest_meal, the fridge handler, and "інша версія".
+
+    Always reuses the existing ``suggest`` quota counter — fridge / variation
+    are not separate buckets to keep the cost surface predictable.
+    """
+    if not _enforce_quota(conn, chat_id, user_id, "suggest"):
+        return
+    log = get_today_log(conn, user_id)
+    meals = get_meals_for_day(conn, user_id, log["date"])
+    send_message(chat_id, SUGGEST_THINKING)
+    health_ctx = ""
+    try:
+        health_ctx = addendum_for_profile(get_health_profile(conn, user_id))
+    except Exception as _hx:
+        error("suggest_health_addendum_failed", exc=_hx, user_id=user_id)
+    try:
+        recipe = suggest_meal(
+            log, meals, profile,
+            pantry=pantry,
+            extra_hint=extra_hint,
+            health_addendum=health_ctx,
+        )
+    except Exception as e:
+        print("suggest error:", e, flush=True)
+        send_message(chat_id, SUGGEST_FAILED, reply_markup=main_menu_keyboard())
+        return
+    send_message(chat_id, recipe, reply_markup=suggest_followup_keyboard())
+
+
+def handle_fridge_input(
+    conn,
+    chat_id: int,
+    user_id: int,
+    text: str,
+    profile: dict,
+) -> None:
+    """F-11: user typed their fridge ingredients — generate a recipe with them."""
+    cleaned = text.strip()
+    if cleaned.lower() in ("/skip", "skip", "/cancel", "cancel"):
+        set_awaiting_input(conn, user_id, None)
+        send_message(chat_id, MEAL_CANCELLED, reply_markup=main_menu_keyboard())
+        return
+    if len(cleaned) > 300:
+        send_message(chat_id, FRIDGE_TOO_LONG)
+        return
+    set_awaiting_input(conn, user_id, None)
+    _run_suggest_meal(conn, chat_id, user_id, profile, pantry=cleaned, extra_hint="")
+
+
+def handle_suggest_callback(conn, cb: dict, profile: dict) -> None:
+    """F-11: callbacks under /suggest_meal results.
+
+    Shapes:
+        suggest:fridge    — set FSM, prompt for ingredients
+        suggest:variation — re-run with a "make this different" hint
+    """
+    cb_id = cb["id"]
+    user_id = cb["from"]["id"]
+    message = cb.get("message", {})
+    chat_id = message.get("chat", {}).get("id", user_id)
+    data = cb["data"]
+
+    if data == "suggest:fridge":
+        answer_callback_query(cb_id, "🛒 Чекаю на список")
+        set_awaiting_input(conn, user_id, "fridge_ingredients")
+        send_message(chat_id, FRIDGE_PROMPT)
+        return
+
+    if data == "suggest:variation":
+        answer_callback_query(cb_id, "🔄 Готую іншу")
+        _run_suggest_meal(conn, chat_id, user_id, profile,
+                          pantry="", extra_hint=SUGGEST_VARIATION_HINT)
+        return
+
+    answer_callback_query(cb_id, "Невідома дія")
+
+
 def _portion_keyboard_for_product(product: dict) -> dict:
     """Inline keyboard mirroring api/barcode.py's portion picker.
 
@@ -2082,6 +2393,27 @@ def handle_command(conn, message: dict, text: str, first_name: str | None, profi
         send_message(chat_id, MENU_PROMPT_INTRO, reply_markup=cancel_only_keyboard())
         return
 
+    # F-10: 3-day meal plan — ask the user for optional pantry items first.
+    if cmd == "/plan":
+        set_awaiting_input(conn, user_id, "plan_pantry")
+        send_message(chat_id, PLAN_INTRO, reply_markup=plan_pantry_keyboard())
+        return
+
+    # F-12: shareable PNG recap card on demand.
+    if cmd == "/recap":
+        try:
+            png, caption = build_user_recap(conn, user_id, profile, first_name)
+        except Exception as e:
+            error("recap_build_failed", exc=e, user_id=user_id)
+            send_message(chat_id, "❌ Не зміг скласти recap. Спробуй пізніше.",
+                         reply_markup=main_menu_keyboard())
+            return
+        resp = send_photo(chat_id, png, caption=caption)
+        if not resp.get("ok"):
+            error("recap_send_failed", user_id=user_id, response=resp)
+            send_message(chat_id, "❌ Не зміг відправити картинку. Спробуй пізніше.")
+        return
+
     # F-7: user's learned food aliases (read-only view; auto-built from accepted meals).
     if cmd == "/aliases":
         try:
@@ -2165,18 +2497,7 @@ def handle_command(conn, message: dict, text: str, first_name: str | None, profi
         return
 
     if cmd == "/suggest_meal":
-        if not _enforce_quota(conn, chat_id, user_id, "suggest"):
-            return
-        log = get_today_log(conn, user_id)
-        meals = get_meals_for_day(conn, user_id, log["date"])
-        send_message(chat_id, SUGGEST_THINKING)
-        try:
-            recipe = suggest_meal(log, meals, profile)
-        except Exception as e:
-            print("suggest error:", e, flush=True)
-            send_message(chat_id, SUGGEST_FAILED, reply_markup=main_menu_keyboard())
-            return
-        send_message(chat_id, recipe, reply_markup=main_menu_keyboard())
+        _run_suggest_meal(conn, chat_id, user_id, profile, pantry="", extra_hint="")
         return
 
     if cmd == "/ask":
@@ -2255,6 +2576,57 @@ def handle_command(conn, message: dict, text: str, first_name: str | None, profi
 
 
 # ---------- Favorites / Recent / Undo callbacks ----------
+
+def build_user_recap(
+    conn,
+    user_id: int,
+    profile: dict | None,
+    first_name: str | None,
+) -> tuple[bytes, str]:
+    """F-12: assemble the weekly recap PNG + caption for a user.
+
+    Returns ``(png_bytes, caption)``. Caller decides whether to send via
+    /recap (interactive) or the Sunday cron (push).
+    """
+    from datetime import date as _date, timedelta as _td
+
+    # Use the user's local date to define the 7-day window when we have their tz.
+    try:
+        end_date_obj = now_user(profile).date() if profile else _date.today()
+    except Exception:
+        end_date_obj = _date.today()
+    start_date_obj = end_date_obj - _td(days=6)
+
+    meals_7d = get_meals_in_range(
+        conn, user_id,
+        start_date_obj.isoformat(),
+        end_date_obj.isoformat(),
+    )
+    weights_recent = get_weight_history(conn, user_id, limit=20)
+    try:
+        streak_row = get_streak(conn, user_id)
+    except Exception:
+        streak_row = None
+
+    stats = recap_mod.compute_weekly_stats(
+        meals_last_7d=meals_7d,
+        weight_history_recent=weights_recent,
+        streak_row=streak_row,
+        end_date=end_date_obj,
+    )
+    png = recap_mod.render_recap_png(stats, first_name=first_name)
+
+    # Caption ends with a sharing nudge — Telegram's "Forward / Share" button
+    # does the rest of the heavy lifting (built-in virality).
+    caption = (
+        f"🔥 <b>Мій тиждень з KusWise</b>\n"
+        f"Серія: {stats['streak']} · "
+        f"Середньо: {stats['avg_kcal']} ккал/день · "
+        f"Залогованих днів: {stats['days_logged']}/7\n\n"
+        f"<i>Поділись цим, якщо хочеш — натисни на картинку → 📤 Поділитись.</i>"
+    )
+    return png, caption
+
 
 def _meal_type_by_local_hour(profile: dict | None = None) -> str:
     """Pick a default meal type from the user's local clock.

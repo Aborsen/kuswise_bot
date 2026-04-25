@@ -70,7 +70,27 @@ def generate_daily_summary(meals: list[dict], totals: dict, profile: dict) -> st
     return (resp.choices[0].message.content or "").strip()
 
 
-def suggest_meal(today_log: dict, today_meals: list[dict], profile: dict) -> str:
+def suggest_meal(
+    today_log: dict,
+    today_meals: list[dict],
+    profile: dict,
+    *,
+    pantry: str = "",
+    extra_hint: str = "",
+    health_addendum: str = "",
+) -> str:
+    """Generate a single recipe recommendation.
+
+    F-11 extensions:
+      ``pantry``        — free-text ingredient list ("What's in your fridge?").
+                          When non-empty, the recipe must use only these (with
+                          minor pantry staples like salt/oil).
+      ``extra_hint``    — free-text directive appended after the prompt body.
+                          Used for "make this version different" / swap requests.
+      ``health_addendum`` — output of ``lib.health.addendum_for_profile``;
+                          appended verbatim so allergens + conditions inform
+                          the model.
+    """
     cal_target = profile.get("daily_calorie_target") or 2000
     macros = macro_gram_targets(cal_target)
     remaining_cal = max(0, cal_target - today_log.get("calories", 0))
@@ -102,7 +122,24 @@ def suggest_meal(today_log: dict, today_meals: list[dict], profile: dict) -> str
         remaining_protein=round(remaining_p),
         remaining_carbs=round(remaining_c),
         remaining_fat=round(remaining_f),
-    ) + _PROMPT_INJECTION_GUARD
+    )
+
+    if pantry.strip():
+        # Length-cap the pantry text so a hostile user can't blow the prompt budget.
+        pantry_clean = pantry.strip()[:300]
+        prompt += (
+            "\n\n--- ОБМЕЖЕННЯ ПО ІНГРЕДІЄНТАХ ---\n"
+            f"Користувач хоче використати тільки ці продукти (плюс базові: сіль, олія, спеції):\n"
+            f"{pantry_clean}\n"
+            "Рецепт МАЄ використовувати лише ці інгредієнти. Якщо чогось критичного бракує — "
+            "пропусти і запропонуй просту страву на основі того, що є."
+        )
+    if extra_hint.strip():
+        prompt += f"\n\n--- ДОДАТКОВО ---\n{extra_hint.strip()[:200]}"
+    if health_addendum.strip():
+        prompt += f"\n\n--- ЗДОРОВ'Я ---\n{health_addendum.strip()}"
+
+    prompt += _PROMPT_INJECTION_GUARD
     resp = _get_client().chat.completions.create(
         model="gpt-4o",
         max_tokens=1000,

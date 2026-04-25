@@ -293,6 +293,21 @@ def init_db(conn=None, force: bool = False) -> None:
                 created_at TEXT NOT NULL
             )
         """)
+        # F-10: 3-day meal plans. Stored as JSON so the renderer + per-meal
+        # log callbacks can re-read individual slots by index. Pruned at 90d
+        # by the midnight cron (history is useful but not forever).
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS meal_plans (
+                id BIGSERIAL PRIMARY KEY,
+                user_id BIGINT NOT NULL,
+                plan_json TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            )
+        """)
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_meal_plans_user_time "
+            "ON meal_plans(user_id, created_at DESC)"
+        )
     conn.commit()
     _SCHEMA_INITIALISED = True
     if close_after:
@@ -391,6 +406,7 @@ def delete_user_all_data(conn, user_id: int) -> bool:
             "water_logs", "water_prefs", "weight_history",
             "usage_quota", "user_health_profile", "user_streaks",
             "corrections", "user_food_aliases", "menu_ocr_results",
+            "meal_plans",
         ):
             cur.execute(f"DELETE FROM {table} WHERE user_id = %s", (user_id,))
         cur.execute("DELETE FROM users WHERE user_id = %s", (user_id,))
@@ -1636,3 +1652,95 @@ def cleanup_old_menu_ocr_results(conn, max_age_hours: int = 1) -> None:
     with conn.cursor() as cur:
         cur.execute("DELETE FROM menu_ocr_results WHERE created_at < %s", (cutoff,))
     conn.commit()
+
+
+# ---------- Meal plans (F-10) ----------
+
+def save_meal_plan(conn, user_id: int, plan: dict) -> int:
+    """Persist a 3-day meal plan dict. Returns the new row id."""
+    with conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO meal_plans (user_id, plan_json, created_at) "
+            "VALUES (%s, %s, %s) RETURNING id",
+            (user_id, json.dumps(plan, ensure_ascii=False), _now_iso()),
+        )
+        plan_id = cur.fetchone()[0]
+    conn.commit()
+    return int(plan_id)
+
+
+def get_meal_plan(conn, plan_id: int, user_id: int) -> Optional[dict]:
+    """Return a saved meal plan if it belongs to the user. None otherwise.
+
+    Scoping by user_id keeps a malicious / stale callback from leaking
+    another user's plan.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT plan_json FROM meal_plans WHERE id = %s AND user_id = %s",
+            (plan_id, user_id),
+        )
+        row = cur.fetchone()
+    if not row or not row[0]:
+        return None
+    try:
+        return json.loads(row[0])
+    except (TypeError, ValueError):
+        return None
+
+
+def get_latest_meal_plan(conn, user_id: int) -> Optional[tuple[int, dict]]:
+    """Return ``(id, plan_dict)`` for the user's most recent plan, or None."""
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT id, plan_json FROM meal_plans WHERE user_id = %s "
+            "ORDER BY id DESC LIMIT 1",
+            (user_id,),
+        )
+        row = cur.fetchone()
+    if not row:
+        return None
+    try:
+        return int(row[0]), json.loads(row[1])
+    except (TypeError, ValueError):
+        return None
+
+
+def cleanup_old_meal_plans(conn, max_age_days: int = 90) -> None:
+    """Drop meal plans older than ``max_age_days``. Run from midnight cron."""
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=max_age_days)).isoformat()
+    with conn.cursor() as cur:
+        cur.execute("DELETE FROM meal_plans WHERE created_at < %s", (cutoff,))
+    conn.commit()
+
+
+def get_meals_in_range(
+    conn,
+    user_id: int,
+    start_date: str,
+    end_date: str,
+) -> list[dict]:
+    """All meals for ``user_id`` between ``start_date`` and ``end_date`` (inclusive).
+
+    Used by F-12 weekly recap aggregation. Dates are 'YYYY-MM-DD' strings
+    (matching how ``meals.date`` is stored). Returns oldest-first.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            """SELECT date, meal_type, description, calories, protein_g, carbs_g, fat_g, created_at
+               FROM meals
+               WHERE user_id = %s AND date >= %s AND date <= %s
+               ORDER BY date ASC, id ASC""",
+            (user_id, start_date, end_date),
+        )
+        rows = cur.fetchall()
+    return [{
+        "date":         r[0],
+        "meal_type":    r[1],
+        "description":  r[2],
+        "calories":     r[3] or 0,
+        "protein_g":    r[4] or 0,
+        "carbs_g":      r[5] or 0,
+        "fat_g":        r[6] or 0,
+        "created_at":   r[7],
+    } for r in rows]

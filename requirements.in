@@ -2,3 +2,6 @@ openai>=1.0,<2.0
 httpx>=0.25,<1.0
 psycopg[binary]>=3.1,<4.0
 python-dotenv>=1.0,<2.0
+# F-12: PNG generation for shareable weekly recap cards. Pillow 10.1+ supports
+# `ImageFont.load_default(size=N)` so we don't need to bundle a TTF.
+Pillow>=10.4,<12

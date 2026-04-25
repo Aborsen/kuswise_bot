@@ -1,5 +1,7 @@
 """Direct Telegram Bot API calls via httpx (no aiogram — serverless-friendly)."""
 import os
+import re
+from urllib.parse import urlsplit
 
 import httpx
 
@@ -7,6 +9,34 @@ from lib.config import TELEGRAM_BOT_TOKEN, VERCEL_URL
 
 BASE_URL = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}"
 FILE_URL = f"https://api.telegram.org/file/bot{TELEGRAM_BOT_TOKEN}"
+
+# Allow only DNS-style hostnames (letters, digits, dots, hyphens). Rejects
+# anything that could ride in via a malformed VERCEL_URL — userinfo, paths,
+# query strings, embedded creds.
+_HOST_RE = re.compile(r"^[A-Za-z0-9.\-]+(?::\d+)?$")
+
+
+def _resolve_host() -> str:
+    """Parse VERCEL_URL into a clean host:port. Trips on anything weird.
+
+    Accepts both `example.vercel.app` and `https://example.vercel.app/`. Strips
+    trailing slashes; rejects userinfo, paths, queries, fragments, or non-HTTPS
+    schemes so we can safely interpolate into f"https://{host}/...".
+    """
+    raw = (VERCEL_URL or "").strip()
+    if not raw:
+        return ""
+    # Add a scheme if missing so urlsplit populates netloc instead of path.
+    candidate = raw if "://" in raw else f"https://{raw}"
+    parts = urlsplit(candidate)
+    if parts.scheme.lower() not in ("https", ""):
+        return ""
+    if parts.username or parts.password or parts.path.strip("/") or parts.query or parts.fragment:
+        return ""
+    host = parts.netloc.rstrip("/")
+    if not host or not _HOST_RE.match(host):
+        return ""
+    return host
 
 
 def _dashboard_url() -> str:
@@ -16,7 +46,11 @@ def _dashboard_url() -> str:
     auto-injected). Telegram's iOS WebView keys its HTML cache by URL, so a
     new SHA per deploy forces a cache miss and the user sees fresh HTML.
     """
-    host = (VERCEL_URL or "").replace("https://", "").replace("http://", "").rstrip("/")
+    host = _resolve_host()
+    if not host:
+        # Fall back to a clearly broken-but-safe placeholder rather than
+        # producing https:///api/dashboard, which Telegram would reject.
+        host = "invalid.invalid"
     base = f"https://{host}/api/dashboard"
     sha = os.environ.get("VERCEL_GIT_COMMIT_SHA", "")[:8]
     return f"{base}?v={sha}" if sha else base

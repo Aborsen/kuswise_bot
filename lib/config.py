@@ -39,10 +39,26 @@ MACRO_PER_KG = {
 }
 
 
+# Defense-in-depth bounds for body weight (kg). Onboarding already validates
+# 30-300 at input, but bad data can drift in via DB rewrites, so clamp at
+# every consumption site too.
+WEIGHT_MIN_KG = 30.0
+WEIGHT_MAX_KG = 300.0
+
+
+def _clamp_weight(weight_kg: float | None) -> float:
+    """Coerce weight to a sane number, clamped to [30, 300] kg. None → 70 kg."""
+    try:
+        w = float(weight_kg) if weight_kg is not None else 70.0
+    except (TypeError, ValueError):
+        w = 70.0
+    return max(WEIGHT_MIN_KG, min(WEIGHT_MAX_KG, w))
+
+
 def macro_gram_targets_from_profile(weight_kg: float | None, goal: str | None) -> dict:
     """Grams of protein / carbs / fat for a user, given weight × goal."""
     per = MACRO_PER_KG.get(goal or "maintain", MACRO_PER_KG["maintain"])
-    w = float(weight_kg or 70)
+    w = _clamp_weight(weight_kg)
     return {
         "protein": round(w * per["protein"]),
         "carbs":   round(w * per["carbs"]),

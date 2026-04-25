@@ -1,4 +1,5 @@
 """Vercel Cron endpoint — runs daily at 00:00 UTC for housekeeping."""
+import hmac
 import json
 import os
 import sys
@@ -12,15 +13,22 @@ if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
 from lib.config import CRON_SECRET
-from lib.database import get_conn, init_db, mark_all_previous_summaries_sent
+from lib.database import (
+    cleanup_old_quotas,
+    get_conn,
+    init_db,
+    mark_all_previous_summaries_sent,
+)
 
 
 def _authorized(headers) -> bool:
-    """Verify Vercel Cron bearer token. Fails closed if CRON_SECRET is not set."""
+    """Verify Vercel Cron bearer token. Fails closed if CRON_SECRET is not set.
+    Uses constant-time comparison to resist timing attacks."""
     if not CRON_SECRET:
         return False  # fail closed — refuse to serve when not configured
     auth = headers.get("Authorization", "")
-    return auth == f"Bearer {CRON_SECRET}"
+    expected = f"Bearer {CRON_SECRET}"
+    return hmac.compare_digest(auth.encode("utf-8"), expected.encode("utf-8"))
 
 
 class handler(BaseHTTPRequestHandler):
@@ -54,6 +62,8 @@ def run_midnight_reset() -> dict:
         with conn.cursor() as cur:
             cur.execute("DELETE FROM pending_photos WHERE created_at < %s", (cutoff,))
         conn.commit()
+        # Prune usage_quota rows older than 7 days so the table stays small.
+        cleanup_old_quotas(conn, keep_days=7)
     finally:
         try:
             conn.close()

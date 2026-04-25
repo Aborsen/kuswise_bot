@@ -4,6 +4,7 @@ import hmac
 import html
 import json
 import os
+import secrets
 import sys
 import traceback
 from http.server import BaseHTTPRequestHandler
@@ -13,50 +14,66 @@ _ROOT = os.path.dirname(_THIS)
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
-from lib.config import ADMIN_PASSWORD, ADMIN_USERNAME, CRON_SECRET
+from lib.config import ADMIN_PASSWORD, ADMIN_USERNAME
 from lib.database import get_conn, init_db, delete_meal, delete_meal_admin, recalc_daily_log, delete_user_all_data
 
 
-# Security headers applied to every response.
-# CSP allows 'unsafe-inline' because the dashboard uses inline styles/scripts.
-_SECURITY_HEADERS = [
+# Static headers applied to every response (CSP is built per-request from
+# _csp_with_nonce so we can use a nonce instead of 'unsafe-inline' for scripts).
+_STATIC_SECURITY_HEADERS = [
     ("Strict-Transport-Security", "max-age=63072000; includeSubDomains"),
     ("X-Frame-Options", "DENY"),
     ("X-Content-Type-Options", "nosniff"),
     ("Referrer-Policy", "no-referrer"),
-    (
-        "Content-Security-Policy",
+    ("Permissions-Policy", "camera=(), microphone=(), geolocation=(), interest-cohort=()"),
+]
+
+
+def _csp_with_nonce(nonce: str) -> str:
+    """Per-request CSP. Inline scripts must carry the matching nonce attribute;
+    inline styles still rely on 'unsafe-inline' (Tailwind-style inline styles
+    in the admin template are pervasive and lower-risk than inline scripts)."""
+    return (
         "default-src 'none'; "
         "style-src 'self' 'unsafe-inline'; "
-        "script-src 'self' 'unsafe-inline'; "
+        f"script-src 'self' 'nonce-{nonce}'; "
         "img-src 'self' data:; "
         "connect-src 'self'; "
         "form-action 'self'; "
         "base-uri 'none'; "
-        "frame-ancestors 'none'",
-    ),
-]
+        "frame-ancestors 'none'"
+    )
+
+
+def _new_nonce() -> str:
+    """Cryptographically-random per-response nonce, base64url, ~22 chars."""
+    return secrets.token_urlsafe(16)
 
 
 def _authorized(headers) -> bool:
-    """Authenticate via either Bearer token (curl) or HTTP Basic Auth (browser).
+    """Authenticate via HTTP Basic Auth (browser) or Bearer token (curl), where
+    the Bearer token is `ADMIN_PASSWORD` (NOT `CRON_SECRET`).
 
-    - Bearer: matches CRON_SECRET. Used by crons and curl scripts.
-    - Basic: matches ADMIN_USERNAME + ADMIN_PASSWORD. Used by browsers.
+    Previously this also accepted `Bearer <CRON_SECRET>`, which meant a single
+    leaked secret unlocked both crons and the admin panel. The two are now
+    fully separated — `CRON_SECRET` is for cron endpoints only.
 
-    Fails closed when neither path is fully configured on the deployment.
+    Fails closed when ADMIN_USERNAME / ADMIN_PASSWORD are unset.
     Uses constant-time comparison to resist timing attacks.
     """
+    if not (ADMIN_USERNAME and ADMIN_PASSWORD):
+        return False
+
     auth = headers.get("Authorization", "")
     if not auth:
         return False
 
-    if CRON_SECRET:
-        expected_bearer = f"Bearer {CRON_SECRET}"
-        if hmac.compare_digest(auth, expected_bearer):
-            return True
+    # Bearer = ADMIN_PASSWORD, for curl/scripted access. Username irrelevant.
+    expected_bearer = f"Bearer {ADMIN_PASSWORD}"
+    if hmac.compare_digest(auth.encode("utf-8"), expected_bearer.encode("utf-8")):
+        return True
 
-    if ADMIN_USERNAME and ADMIN_PASSWORD and auth.startswith("Basic "):
+    if auth.startswith("Basic "):
         try:
             decoded = base64.b64decode(auth[6:], validate=True).decode("utf-8", errors="replace")
         except Exception:
@@ -89,14 +106,18 @@ def _same_origin(headers) -> bool:
 
 
 class handler(BaseHTTPRequestHandler):
-    def _apply_security_headers(self):
-        for name, value in _SECURITY_HEADERS:
+    def _apply_security_headers(self, nonce: str | None = None):
+        for name, value in _STATIC_SECURITY_HEADERS:
             self.send_header(name, value)
+        if nonce is not None:
+            self.send_header("Content-Security-Policy", _csp_with_nonce(nonce))
 
     def _send_unauthorized(self, body: bytes = b"Unauthorized"):
         self.send_response(401)
         self.send_header("Content-Type", "text/plain; charset=utf-8")
         self.send_header("WWW-Authenticate", 'Basic realm="Food Admin", charset="UTF-8"')
+        # No nonce needed for plain-text body; emit a strict default CSP.
+        self.send_header("Content-Security-Policy", _csp_with_nonce("none"))
         self._apply_security_headers()
         self.end_headers()
         self.wfile.write(body)
@@ -106,19 +127,20 @@ class handler(BaseHTTPRequestHandler):
             self._send_unauthorized(
                 b"Unauthorized. Authenticate via HTTP Basic Auth "
                 b"(ADMIN_USERNAME / ADMIN_PASSWORD) or Authorization: "
-                b"Bearer <CRON_SECRET>."
+                b"Bearer <ADMIN_PASSWORD>."
             )
             return
 
+        nonce = _new_nonce()
         try:
-            body = build_html()
+            body = build_html(nonce)
         except Exception:
             print("admin_stats error:", traceback.format_exc(), flush=True)
             body = "<pre>Error rendering dashboard (see logs)</pre>"
 
         self.send_response(200)
         self.send_header("Content-Type", "text/html; charset=utf-8")
-        self._apply_security_headers()
+        self._apply_security_headers(nonce=nonce)
         self.end_headers()
         self.wfile.write(body.encode("utf-8"))
 
@@ -198,12 +220,18 @@ class handler(BaseHTTPRequestHandler):
             if not meal_ids or not isinstance(meal_ids, list):
                 self._json_response(400, {"ok": False, "error": "meal_ids list required"})
                 return
+            # Hard cap on a single bulk-delete request. Genuine admin work
+            # rarely exceeds a handful at once; the lower cap limits damage
+            # from a future XSS that automates the click.
+            if len(meal_ids) > 50:
+                self._json_response(400, {"ok": False, "error": "max 50 per bulk delete"})
+                return
             conn = get_conn()
             try:
                 init_db(conn)
                 deleted_count = 0
                 affected = {}  # user_id -> set of dates
-                for mid in meal_ids[:200]:  # hard cap
+                for mid in meal_ids:
                     try:
                         d = delete_meal_admin(conn, int(mid))
                         if d:
@@ -229,6 +257,9 @@ class handler(BaseHTTPRequestHandler):
     def _json_response(self, code: int, data: dict):
         self.send_response(code)
         self.send_header("Content-Type", "application/json")
+        # JSON responses don't render scripts, so no nonce is needed; still
+        # emit the strict CSP for defense in depth.
+        self.send_header("Content-Security-Policy", _csp_with_nonce("none"))
         self._apply_security_headers()
         self.end_headers()
         self.wfile.write(json.dumps(data).encode())
@@ -241,7 +272,14 @@ def _esc(s) -> str:
     return html.escape(str(s), quote=True)
 
 
-def build_html() -> str:
+# Hard caps on rows rendered into the admin HTML. The auto-refresh fires every
+# 60s, so unbounded fetches grow linearly with usage and eventually OOM the
+# function. These limits keep the response under a few hundred KB at scale.
+ADMIN_USERS_LIMIT = 200
+ADMIN_MEALS_LIMIT = 500
+
+
+def build_html(nonce: str = "") -> str:
     conn = get_conn()
     try:
         init_db(conn)
@@ -297,7 +335,8 @@ def build_html() -> str:
             if avg_cal is not None:
                 avg_cal_map[uid] = round(float(avg_cal))
 
-        cur.execute("""
+        cur.execute(
+            """
             SELECT u.user_id, COALESCE(u.username, ''), u.created_at,
                    COUNT(m.id) AS meals, MAX(m.created_at) AS last_meal,
                    p.age, p.sex, p.weight_kg, p.height_cm,
@@ -311,17 +350,24 @@ def build_html() -> str:
                      p.gym_per_week, p.goal, p.daily_calorie_target,
                      p.target_weight_kg
             ORDER BY meals DESC, u.created_at DESC
-        """)
+            LIMIT %s
+            """,
+            (ADMIN_USERS_LIMIT,),
+        )
         user_rows = cur.fetchall()
 
-        # ALL meals, newest first
-        cur.execute("""
+        # Newest meals first, capped at ADMIN_MEALS_LIMIT for response size.
+        cur.execute(
+            """
             SELECT m.id, m.user_id, COALESCE(u.username, ''), m.date, m.meal_type,
                    m.description, m.calories, m.protein_g, m.carbs_g, m.fat_g,
                    m.fiber_g, m.sugar_g, m.created_at
             FROM meals m LEFT JOIN users u ON u.user_id = m.user_id
             ORDER BY m.id DESC
-        """)
+            LIMIT %s
+            """,
+            (ADMIN_MEALS_LIMIT,),
+        )
         meal_rows = cur.fetchall()
 
         # Top foods by frequency
@@ -746,7 +792,7 @@ def build_html() -> str:
 </div>
 </section>
 
-<script>
+<script nonce="{_esc(nonce)}">
 const USER_DATA = {user_modal_json};
 
 /* --- Top-level tab switcher --- */
@@ -1049,7 +1095,17 @@ async function deleteUser(btn) {{
   const row = btn.closest('tr');
   const uid = row.dataset.uid;
   const uname = row.cells[1]?.textContent.trim() || uid;
-  if (!confirm(`Видалити користувача "${{uname}}" (${{uid}}) та ВСІ його дані?`)) return;
+  // Typed-confirm: require the operator to type the user_id back. Defends
+  // against accidental misclicks and slows down any future XSS-driven mass-delete.
+  const typed = prompt(
+    `Видалити користувача "${{uname}}" (${{uid}}) та ВСІ його дані?\\n` +
+    `Це незворотньо. Введи user_id (${{uid}}) щоб підтвердити:`
+  );
+  if (typed === null) return;
+  if (typed.trim() !== String(uid)) {{
+    alert('Підтвердження не співпало. Видалення скасовано.');
+    return;
+  }}
   btn.disabled = true; btn.textContent = '...';
   try {{
     const resp = await fetch(window.location.pathname, {{

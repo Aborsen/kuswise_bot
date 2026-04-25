@@ -12,6 +12,7 @@ import hmac
 import html
 import json
 import os
+import secrets
 import sys
 import time
 import traceback
@@ -51,26 +52,41 @@ INIT_DATA_MAX_AGE = 24 * 60 * 60  # 24h, per Telegram recommendation
 HISTORY_MAX_DAYS = 90              # how far back the day spinner is allowed
 PRELOAD_DAYS = 30                  # aggregates sent with the initial render
 
-_SECURITY_HEADERS = [
+# Static headers (CSP is built per-response so we can use a per-request nonce
+# in place of 'unsafe-inline' for scripts).
+_STATIC_SECURITY_HEADERS = [
     ("Strict-Transport-Security", "max-age=63072000; includeSubDomains"),
     ("X-Content-Type-Options", "nosniff"),
     ("Referrer-Policy", "no-referrer"),
+    # L6: explicit Permissions-Policy denial — defense in depth alongside the
+    # restrictive CSP. Telegram Mini Apps don't need any of these capabilities.
+    ("Permissions-Policy", "camera=(), microphone=(), geolocation=(), interest-cohort=()"),
     ("Cache-Control", "no-store, no-cache, must-revalidate, private, max-age=0"),
     ("CDN-Cache-Control", "no-store"),
     ("Vercel-CDN-Cache-Control", "no-store"),
     ("Surrogate-Control", "no-store"),
     ("Pragma", "no-cache"),
     ("Expires", "0"),
-    (
-        "Content-Security-Policy",
+]
+
+
+def _csp_with_nonce(nonce: str) -> str:
+    """Per-request CSP. Inline scripts must carry the matching nonce attribute.
+    External script-src is restricted to telegram.org for the WebApp SDK.
+    Inline styles still rely on 'unsafe-inline' — Mini App theming requires
+    setting CSS custom properties dynamically, which 'unsafe-inline' enables."""
+    return (
         "default-src 'none'; "
         "style-src 'self' 'unsafe-inline'; "
-        "script-src 'self' 'unsafe-inline' https://telegram.org; "
+        f"script-src 'self' 'nonce-{nonce}' https://telegram.org; "
         "img-src 'self' data:; "
         "connect-src 'self'; "
-        "frame-ancestors https://web.telegram.org https://t.me",
-    ),
-]
+        "frame-ancestors https://web.telegram.org https://t.me"
+    )
+
+
+def _new_nonce() -> str:
+    return secrets.token_urlsafe(16)
 
 
 def _verify_init_data(init_data: str) -> dict | None:
@@ -205,16 +221,22 @@ def _dispatch_action(conn, user_id: int, action: str) -> None:
 
 
 class handler(BaseHTTPRequestHandler):
-    def _apply_security_headers(self):
-        for name, value in _SECURITY_HEADERS:
+    def _apply_security_headers(self, nonce: str | None = None):
+        for name, value in _STATIC_SECURITY_HEADERS:
             self.send_header(name, value)
+        # When a nonce is provided, the response embeds inline <script nonce=…>
+        # blocks; otherwise emit a CSP that allows no inline scripts at all.
+        self.send_header(
+            "Content-Security-Policy",
+            _csp_with_nonce(nonce if nonce is not None else "none"),
+        )
 
-    def _send_html(self, code: int, body: str):
+    def _send_html(self, code: int, body: str, nonce: str | None = None):
         payload = body.encode("utf-8")
         self.send_response(code)
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.send_header("Content-Length", str(len(payload)))
-        self._apply_security_headers()
+        self._apply_security_headers(nonce=nonce)
         self.end_headers()
         self.wfile.write(payload)
 
@@ -228,7 +250,8 @@ class handler(BaseHTTPRequestHandler):
         self.wfile.write(payload)
 
     def do_GET(self):
-        self._send_html(200, _BOOTSTRAP_HTML)
+        nonce = _new_nonce()
+        self._send_html(200, _BOOTSTRAP_HTML.replace("__NONCE__", _esc(nonce)), nonce=nonce)
 
     def do_POST(self):
         try:
@@ -296,12 +319,13 @@ class handler(BaseHTTPRequestHandler):
                 except Exception:
                     pass
 
+        nonce = _new_nonce()
         try:
-            body = _render_dashboard(user)
+            body = _render_dashboard(user, nonce=nonce)
         except Exception:
             print("dashboard render error:", traceback.format_exc(), flush=True)
             body = "<pre>Dashboard error (see logs)</pre>"
-        self._send_html(200, body)
+        self._send_html(200, body, nonce=nonce)
 
 
 # ---------------------------------------------------------------- Bootstrap --
@@ -345,7 +369,7 @@ _BOOTSTRAP_HTML = """<!DOCTYPE html>
   <p>Завантаження…</p>
 </div>
 <div id="error" style="display:none"></div>
-<script>
+<script nonce="__NONCE__">
 (function(){
   function applyTheme() {
     var tg = window.Telegram && window.Telegram.WebApp;
@@ -472,7 +496,7 @@ _GOAL_UA = {
 _SEX_UA = {"male": "Чоловік", "female": "Жінка"}
 
 
-def _render_dashboard(user: dict) -> str:
+def _render_dashboard(user: dict, nonce: str = "") -> str:
     user_id = user["id"]
     first_name = user.get("first_name") or "друже"
     username = user.get("username") or ""
@@ -552,7 +576,11 @@ def _render_dashboard(user: dict) -> str:
         "sex_ua":            _SEX_UA.get(profile.get("sex") or "", ""),
         "bot_url":           f"https://t.me/{TELEGRAM_BOT_USERNAME}" if TELEGRAM_BOT_USERNAME else "",
     }
-    return _DASHBOARD_HTML.replace("__DATA_JSON__", _json_for_script(data))
+    return (
+        _DASHBOARD_HTML
+        .replace("__DATA_JSON__", _json_for_script(data))
+        .replace("__NONCE__", _esc(nonce))
+    )
 
 
 _DASHBOARD_HTML = r"""<!DOCTYPE html>
@@ -938,7 +966,7 @@ _DASHBOARD_HTML = r"""<!DOCTYPE html>
 </nav>
 
 <script type="application/json" id="__data__">__DATA_JSON__</script>
-<script>
+<script nonce="__NONCE__">
   var TG = (window.Telegram && window.Telegram.WebApp) || null;
   var DATA = JSON.parse(document.getElementById('__data__').textContent);
   var BOT_URL = DATA.bot_url || '';

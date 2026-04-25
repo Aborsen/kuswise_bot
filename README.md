@@ -32,7 +32,7 @@ A Ukrainian-language Telegram bot that logs meals from **photos, text, or voice*
 - 7-day and 30-day aggregates with sortable tables.
 
 ### Admin panel (`/api/admin_stats`)
-- HTTP Basic Auth (any username, password = `CRON_SECRET`).
+- HTTP Basic Auth: username `ADMIN_USERNAME`, password `ADMIN_PASSWORD` (both set in Vercel env). The previous "any username + CRON_SECRET" path was removed so a leaked cron secret can't unlock the admin UI.
 - Stat cards: total users, active today, active this week, meals, days, nightly summaries.
 - Onboarding funnel with conversion %.
 - Top-20 foods with bar chart.
@@ -93,6 +93,8 @@ No manual migrations — the bot runs idempotent `CREATE TABLE IF NOT EXISTS` on
 ```bash
 python -c "import secrets; print('WEBHOOK_SECRET=' + secrets.token_urlsafe(32))"
 python -c "import secrets; print('CRON_SECRET='    + secrets.token_urlsafe(32))"
+python -c "import secrets; print('ADMIN_PASSWORD=' + secrets.token_urlsafe(32))"
+# ADMIN_USERNAME can be any string you'll remember (e.g. 'admin').
 ```
 
 ### 4. Push to GitHub
@@ -110,7 +112,8 @@ git push -u origin main
   - `TELEGRAM_BOT_TOKEN`
   - `OPENAI_API_KEY`
   - `WEBHOOK_SECRET`
-  - `CRON_SECRET`
+  - `CRON_SECRET` — used ONLY by the cron endpoints. Not accepted on the admin panel.
+  - `ADMIN_USERNAME` and `ADMIN_PASSWORD` — required for the admin panel.
   - `VERCEL_URL` — the public domain without scheme, e.g. `kuswise-bot.vercel.app`
   - (`DATABASE_URL` is auto-injected by the Neon integration — do not set manually.)
 - Redeploy to pick up env vars.
@@ -157,7 +160,7 @@ Admin       ─▶ GET  /api/admin_stats (HTTP Basic Auth / Bearer token)
 - **Stateless serverless** — all transient state (`pending_photos`, `pending_analyses`) lives in DB with a 10-min TTL.
 - **Webhook auth:** `X-Telegram-Bot-Api-Secret-Token` header.
 - **Cron auth:** `Authorization: Bearer $CRON_SECRET`.
-- **Admin auth:** HTTP Basic (password = `CRON_SECRET`) or Bearer; CSRF via same-origin check on POSTs.
+- **Admin auth:** HTTP Basic with `ADMIN_USERNAME` / `ADMIN_PASSWORD`, OR `Authorization: Bearer $ADMIN_PASSWORD` for curl. `CRON_SECRET` is no longer accepted on the admin path. CSRF protected via same-origin Origin-header check on POSTs.
 - **Mini App auth:** HMAC-SHA256 on `initData` with 24-h freshness window, per Telegram's spec.
 - **Webhook always returns 200** (errors logged, never retried by Telegram).
 
@@ -244,7 +247,7 @@ kuswise_bot/
 | Photo/voice analysis times out | Vercel Hobby has a 60 s function cap. Whisper + GPT-4o together are usually ≤ 10 s; rerun. |
 | Voice rejected as "задовге" | Messages over 2 MB (~60–90 s) are rejected by design. |
 | Cron didn't fire | Crons require a Production deployment. Promote the deploy, or GET the cron URL manually with `Authorization: Bearer $CRON_SECRET`. |
-| Admin panel "Unauthorized" | Use `https://admin:$CRON_SECRET@kuswise-bot.vercel.app/api/admin_stats` or send `Authorization: Bearer $CRON_SECRET`. |
+| Admin panel "Unauthorized" | Send Basic Auth: `curl -u "$ADMIN_USERNAME:$ADMIN_PASSWORD" https://kuswise-bot.vercel.app/api/admin_stats` — or `-H "Authorization: Bearer $ADMIN_PASSWORD"`. Avoid `https://user:pass@host/...` URLs (history/log leaks). |
 | Water target didn't update after weight change | Expected if user manually set a target before — `target_overridden = 1` locks it. |
 
 ---
@@ -254,7 +257,7 @@ kuswise_bot/
 - [ ] GitHub repo pushed
 - [ ] Vercel project imported + first deploy succeeded
 - [ ] Neon database provisioned via Vercel → Storage
-- [ ] Env vars set: `TELEGRAM_BOT_TOKEN`, `OPENAI_API_KEY`, `WEBHOOK_SECRET`, `CRON_SECRET`, `VERCEL_URL`
+- [ ] Env vars set: `TELEGRAM_BOT_TOKEN`, `OPENAI_API_KEY`, `WEBHOOK_SECRET`, `CRON_SECRET`, `ADMIN_USERNAME`, `ADMIN_PASSWORD`, `VERCEL_URL`
 - [ ] Deployment promoted to Production (so crons run)
 - [ ] `python scripts/set_webhook.py` succeeded (webhook + commands + Mini App button)
 - [ ] `/start` onboarding works end-to-end

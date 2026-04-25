@@ -1,4 +1,6 @@
 """Vercel serverless handler for Telegram webhook updates."""
+import hmac
+import html as _html
 import json
 import os
 import sys
@@ -18,6 +20,7 @@ from lib.config import (
     macro_gram_targets_from_profile,
 )
 from lib.database import (
+    consume_quota,
     get_conn,
     init_db,
     upsert_user,
@@ -188,13 +191,64 @@ def _is_allowed(user_id: int | None) -> bool:
     return user_id in ALLOWED_USER_IDS
 
 
+# Per-user daily caps on OpenAI-spending actions. Tuned so a single Telegram
+# user costs at most ~$0.50/day in worst-case OpenAI usage. The bot is public
+# (no allowlist), so these caps are the primary defense against cost abuse.
+DAILY_QUOTAS: dict[str, int] = {
+    "meal_analysis": 50,    # photo + text + voice meal logging (GPT-4o vision/text)
+    "voice_transcribe": 30, # Whisper transcription (cheap but bandwidth-heavy)
+    "ask": 50,              # /ask chat (GPT-4.1-mini)
+    "suggest": 20,          # /suggest_meal recipe generator (GPT-4o)
+}
+
+QUOTA_ACTION_LABELS = {
+    "meal_analysis": "запис страви",
+    "voice_transcribe": "голосове повідомлення",
+    "ask": "запит до ШІ",
+    "suggest": "ідея страви",
+}
+
+QUOTA_REJECT_TEMPLATE = (
+    "⏳ На сьогодні твій ліміт для «{action}» вичерпано ({limit}/день). "
+    "Спробуй завтра або напиши страву текстом, якщо це фото."
+)
+
+
+def _enforce_quota(conn, chat_id: int, user_id: int, action: str) -> bool:
+    """Atomically increment the quota counter; if over limit, send a friendly
+    Ukrainian reject message and return False. Returns True when the caller
+    is allowed to proceed.
+
+    Errors talking to the DB fall open (return True) so a transient quota-table
+    failure doesn't break the bot for legitimate users — the daily limit is a
+    cost guardrail, not a security boundary.
+    """
+    limit = DAILY_QUOTAS.get(action)
+    if not limit or not user_id:
+        return True
+    try:
+        new_count = consume_quota(conn, user_id, action)
+    except Exception as e:
+        print("quota check error:", e, flush=True)
+        return True
+    if new_count > limit:
+        label = QUOTA_ACTION_LABELS.get(action, action)
+        send_message(chat_id, QUOTA_REJECT_TEMPLATE.format(action=label, limit=limit))
+        return False
+    return True
+
+
 MAX_WEBHOOK_BYTES = 512 * 1024
 
 
 class handler(BaseHTTPRequestHandler):
     def do_POST(self):
         secret = self.headers.get("X-Telegram-Bot-Api-Secret-Token", "")
-        if not WEBHOOK_SECRET or secret != WEBHOOK_SECRET:
+        # Constant-time comparison to avoid leaking secret bytes via timing.
+        # `hmac.compare_digest` requires same-length bytes, hence the encode.
+        if not WEBHOOK_SECRET or not hmac.compare_digest(
+            secret.encode("utf-8"), WEBHOOK_SECRET.encode("utf-8")
+        ):
             self.send_response(403)
             self.end_headers()
             return
@@ -223,10 +277,11 @@ class handler(BaseHTTPRequestHandler):
         self._respond_ok()
 
     def do_GET(self):
-        self.send_response(200)
-        self.send_header("Content-Type", "application/json")
+        # The webhook only handles POST from Telegram. Don't leak deployment
+        # info to unauthenticated probes.
+        self.send_response(405)
+        self.send_header("Allow", "POST")
         self.end_headers()
-        self.wfile.write(json.dumps({"ok": True, "service": "webhook"}).encode())
 
     def _respond_ok(self):
         self.send_response(200)
@@ -699,11 +754,26 @@ def handle_onboarding_callback(conn, cb: dict) -> None:
 
 # ---------- Photo / text entry ----------
 
+PHOTO_TOO_LARGE = "📸 Фото завелике — будь ласка, до 5 МБ."
+
+# Hard cap on photo size before we pay to download the file from Telegram and
+# ship it to GPT-4o vision. The largest entry in `photo[]` is the highest-
+# resolution version Telegram is willing to surface.
+MAX_PHOTO_BYTES = 5 * 1024 * 1024
+
+
 def handle_photo(conn, message: dict) -> None:
     chat_id = message["chat"]["id"]
     user_id = message["from"]["id"]
     photos = message["photo"]
-    file_id = photos[-1]["file_id"]
+    largest = photos[-1] if photos else {}
+    file_id = largest.get("file_id")
+    if not file_id:
+        return
+    file_size = int(largest.get("file_size") or 0)
+    if file_size > MAX_PHOTO_BYTES:
+        send_message(chat_id, PHOTO_TOO_LARGE)
+        return
     save_pending_photo(conn, user_id, file_id)
     send_message(chat_id, PHOTO_PROMPT_MEAL_TYPE, reply_markup=meal_type_keyboard())
 
@@ -724,7 +794,6 @@ VOICE_TRANSCRIPT = "🎙 Почув: «{text}»"
 
 
 def handle_voice(conn, message: dict) -> None:
-    import html as _html
     chat_id = message["chat"]["id"]
     user_id = message["from"]["id"]
     voice = message.get("voice") or message.get("audio") or {}
@@ -736,6 +805,9 @@ def handle_voice(conn, message: dict) -> None:
     # Hard cap ~2 MB (≈60–90 s OGG/Opus) to keep Whisper + analysis under Vercel timeout.
     if file_size > 2 * 1024 * 1024:
         send_message(chat_id, VOICE_TOO_LONG)
+        return
+
+    if not _enforce_quota(conn, chat_id, user_id, "voice_transcribe"):
         return
 
     send_chat_action(chat_id, "typing")
@@ -843,6 +915,9 @@ def handle_meal_type_callback(conn, cb: dict, profile: dict) -> None:
         return
     file_id, text_description = entry
 
+    if not _enforce_quota(conn, chat_id, user_id, "meal_analysis"):
+        return
+
     send_message(chat_id, ANALYZING_WAIT)
 
     analysis, raw = None, ""
@@ -902,6 +977,8 @@ def handle_moderation_callback(conn, cb: dict, profile: dict) -> None:
         if not pending:
             send_message(chat_id, PENDING_EXPIRED)
             return
+        if not _enforce_quota(conn, chat_id, user_id, "meal_analysis"):
+            return
         send_message(chat_id, RECALC_WAIT)
 
         try:
@@ -941,6 +1018,9 @@ def handle_manual_text_input(conn, message: dict, text: str, pending: dict, prof
     chat_id = message["chat"]["id"]
     user_id = message["from"]["id"]
 
+    if not _enforce_quota(conn, chat_id, user_id, "meal_analysis"):
+        return
+
     send_message(chat_id, ANALYZING_WAIT)
 
     try:
@@ -973,7 +1053,10 @@ def handle_meal_manage_callback(conn, cb: dict) -> None:
         recalc_daily_log(conn, user_id, deleted["date"])
         send_message(
             chat_id,
-            MEAL_DELETED.format(dish=deleted["description"][:40], cal=round(deleted["calories"])),
+            MEAL_DELETED.format(
+                dish=_html.escape(deleted["description"][:40], quote=False),
+                cal=round(deleted["calories"]),
+            ),
         )
 
     elif data.startswith("meal_edit:"):
@@ -988,7 +1071,9 @@ def handle_meal_manage_callback(conn, cb: dict) -> None:
         set_awaiting_manual(conn, user_id, meal_type=deleted["meal_type"])
         send_message(
             chat_id,
-            MEAL_EDIT_PROMPT.format(dish=deleted["description"][:40]),
+            MEAL_EDIT_PROMPT.format(
+                dish=_html.escape(deleted["description"][:40], quote=False),
+            ),
             reply_markup=cancel_only_keyboard(),
         )
 
@@ -1059,6 +1144,8 @@ def handle_command(conn, message: dict, text: str, first_name: str | None, profi
         return
 
     if cmd == "/suggest_meal":
+        if not _enforce_quota(conn, chat_id, user_id, "suggest"):
+            return
         log = get_today_log(conn, user_id)
         meals = get_meals_for_day(conn, user_id, log["date"])
         send_message(chat_id, SUGGEST_THINKING)
@@ -1193,7 +1280,7 @@ def handle_relog_callback(conn, cb: dict) -> None:
     send_message(
         chat_id,
         RELOG_DONE.format(
-            dish=(src.get("description") or "страву")[:40],
+            dish=_html.escape((src.get("description") or "страву")[:40], quote=False),
             meal_type=_MEAL_TYPE_UA.get(meal_type, meal_type),
         ),
         reply_markup=undo_relog_keyboard(new_id),
@@ -1240,7 +1327,8 @@ def handle_undo_callback(conn, cb: dict) -> None:
     answer_callback_query(cb_id, UNDO_DONE)
     if message_id:
         try:
-            edit_message_text(chat_id, message_id, f"↩️ Скасовано: {deleted['description'][:40]}")
+            safe_desc = _html.escape(deleted["description"][:40], quote=False)
+            edit_message_text(chat_id, message_id, f"↩️ Скасовано: {safe_desc}")
         except Exception:
             pass
 
@@ -1329,6 +1417,8 @@ def handle_water_callback(conn, cb: dict) -> None:
 # ---------- /ask chat mode ----------
 
 def handle_ask(conn, user_id: int, chat_id: int, question: str, profile: dict) -> None:
+    if not _enforce_quota(conn, chat_id, user_id, "ask"):
+        return
     send_message(chat_id, ASK_THINKING)
     try:
         today_log = get_today_log(conn, user_id)

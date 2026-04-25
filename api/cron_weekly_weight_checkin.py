@@ -9,6 +9,7 @@ Logic:
     recomputes `daily_calorie_target` (new weight × goal formula) and the
     water target.
 """
+import hmac
 import json
 import os
 import sys
@@ -34,10 +35,12 @@ from lib.telegram_helpers import send_message
 
 
 def _authorized(headers) -> bool:
+    """Constant-time comparison; fails closed when CRON_SECRET is unset."""
     if not CRON_SECRET:
         return False
     auth = headers.get("Authorization", "")
-    return auth == f"Bearer {CRON_SECRET}"
+    expected = f"Bearer {CRON_SECRET}"
+    return hmac.compare_digest(auth.encode("utf-8"), expected.encode("utf-8"))
 
 
 class handler(BaseHTTPRequestHandler):

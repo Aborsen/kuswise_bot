@@ -1,4 +1,26 @@
-openai>=1.0,<2.0
-httpx>=0.25,<1.0
-psycopg[binary]>=3.1,<4.0
-python-dotenv>=1.0,<2.0
+# Pinned dependency tree. Vercel reads this file directly during deploy.
+# To update: edit `requirements.in` and regenerate this file with
+#     uv pip compile requirements.in --output-file requirements.txt
+# (or `pip-compile requirements.in --output-file requirements.txt`).
+#
+# Pinning prevents transitive-dep drift between deploys and gives a stable
+# target for `pip-audit -r requirements.txt`.
+annotated-types==0.7.0
+anyio==4.13.0
+certifi==2026.4.22
+distro==1.9.0
+h11==0.16.0
+httpcore==1.0.9
+httpx==0.28.1
+idna==3.13
+jiter==0.14.0
+openai==1.109.1
+psycopg==3.3.3
+psycopg-binary==3.3.3
+pydantic==2.13.3
+pydantic-core==2.46.3
+python-dotenv==1.2.2
+sniffio==1.3.1
+tqdm==4.67.3
+typing-extensions==4.15.0
+typing-inspection==0.4.2

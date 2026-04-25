@@ -1,4 +1,5 @@
 """Vercel Cron endpoint — runs daily at 22:00 UTC to send end-of-day summaries."""
+import hmac
 import json
 import os
 import sys
@@ -28,11 +29,13 @@ from lib.openai_nutrition import generate_daily_summary
 
 
 def _authorized(headers) -> bool:
-    """Verify Vercel Cron bearer token. Fails closed if CRON_SECRET is not set."""
+    """Verify Vercel Cron bearer token. Fails closed if CRON_SECRET is not set.
+    Uses constant-time comparison to resist timing attacks."""
     if not CRON_SECRET:
         return False  # fail closed — refuse to serve when not configured
     auth = headers.get("Authorization", "")
-    return auth == f"Bearer {CRON_SECRET}"
+    expected = f"Bearer {CRON_SECRET}"
+    return hmac.compare_digest(auth.encode("utf-8"), expected.encode("utf-8"))
 
 
 class handler(BaseHTTPRequestHandler):

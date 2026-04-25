@@ -1,8 +1,23 @@
 """Message formatting helpers for Telegram replies (Ukrainian, з гумором)."""
+import html
 import random
 from datetime import datetime
 
 from lib.config import LOCAL_TZ, macro_gram_targets, macro_gram_targets_from_profile
+
+
+def _esc(value) -> str:
+    """HTML-escape any value before interpolation into a Telegram parse_mode=HTML message.
+
+    Bot replies use parse_mode=HTML, which renders a small subset of tags
+    (<b>, <i>, <a>, <code>, …). User- or AI-derived strings (dish names,
+    descriptions, ingredient names, free-form notes) MUST be escaped before
+    interpolation so an attacker can't inject anchors or styling. Returns
+    "" for None to avoid printing literal "None".
+    """
+    if value is None:
+        return ""
+    return html.escape(str(value), quote=False)
 
 
 def _bar(used: float, target: float, width: int = 10) -> str:
@@ -43,7 +58,10 @@ def _ua_date_short(date_str: str) -> str:
 
 
 def _name_or_default(first_name: str | None) -> str:
-    return first_name.strip() if (first_name and first_name.strip()) else "друже"
+    """Return a safe-for-HTML display name. Telegram first_name is user-controlled
+    (set in the user's Telegram profile) and may contain HTML metacharacters."""
+    name = first_name.strip() if (first_name and first_name.strip()) else "друже"
+    return _esc(name)
 
 
 _CONFIDENCE_ICON = {"high": "🔴", "medium": "🟠", "low": "🟡"}
@@ -66,7 +84,7 @@ def _format_ingredients(analysis: dict) -> list[str]:
         return []
     lines = ["", "📋 <b>Інгредієнти:</b>"]
     for ing in ingredients:
-        name = ing.get("name", "?")
+        name = _esc(ing.get("name", "?"))
         grams = ing.get("estimated_grams")
         if grams:
             lines.append(f"  • {name} — ~{round(grams)}г")
@@ -86,9 +104,11 @@ def _format_warnings(analysis: dict) -> list[str]:
         lines.append("⚠️ <b>УВАГА, АЛЕРГЕН:</b>")
         for a in allergen_flags:
             icon = _CONFIDENCE_ICON.get((a.get("confidence") or "").lower(), "⚠️")
+            allergen_name = _esc(str(a.get("allergen", "?")).capitalize())
+            confidence = _esc(a.get("confidence", "?"))
+            ingredient = _esc(a.get("ingredient", "цієї страви"))
             lines.append(
-                f"  {icon} {a.get('allergen', '?').capitalize()} "
-                f"(впевненість: {a.get('confidence', '?')}) — у складі: {a.get('ingredient', 'цієї страви')}"
+                f"  {icon} {allergen_name} (впевненість: {confidence}) — у складі: {ingredient}"
             )
 
     if crohn_flags:
@@ -96,10 +116,9 @@ def _format_warnings(analysis: dict) -> list[str]:
         lines.append("💡 <b>Нотатки щодо здоров'я (для кату):</b>")
         for c in crohn_flags:
             icon = _SEVERITY_ICON.get((c.get("severity") or "").lower(), "🟡")
-            lines.append(
-                f"  {icon} {c.get('concern', 'питання')} "
-                f"({c.get('ingredient', '?')})"
-            )
+            concern = _esc(c.get("concern", "питання"))
+            ingredient = _esc(c.get("ingredient", "?"))
+            lines.append(f"  {icon} {concern} ({ingredient})")
 
     return lines
 
@@ -124,16 +143,20 @@ def _format_glycemic_line(analysis: dict) -> str | None:
     if not level:
         return None
     icon = _GI_ICON.get(level, "🩸")
-    label = _GI_UA.get(level, level.capitalize())
-    return f"{icon} {label}" + (f" — {note}" if note else "")
+    # _GI_UA values are static literals; the level fallback is whatever the LLM
+    # returned, so escape it. Note is free-form LLM text and must be escaped.
+    label = _GI_UA.get(level, _esc(level.capitalize()))
+    safe_note = _esc(note)
+    return f"{icon} {label}" + (f" — {safe_note}" if safe_note else "")
 
 
 # --- Preview (before user accepts) ---
 
 def format_meal_preview(meal_type: str, analysis: dict) -> str:
     """Preview message shown after AI analysis, before user taps Accept."""
-    dish = analysis.get("dish_name") or "Страва"
-    meal_ua = _MEAL_TYPE_UA.get(meal_type.lower(), meal_type.capitalize())
+    dish = _esc(analysis.get("dish_name") or "Страва")
+    # meal_type comes from a callback allowlist; fall back through _esc anyway.
+    meal_ua = _MEAL_TYPE_UA.get(meal_type.lower(), _esc(meal_type.capitalize()))
     nutrition = analysis.get("nutrition", {}) or {}
 
     lines = [
@@ -152,7 +175,7 @@ def format_meal_preview(meal_type: str, analysis: dict) -> str:
     assessment = analysis.get("overall_assessment")
     if assessment:
         lines.append("")
-        lines.append(f"💬 {assessment}")
+        lines.append(f"💬 {_esc(assessment)}")
 
     lines.append("")
     lines.append("👇 <b>Підтвердити або виправити:</b>")
@@ -169,9 +192,9 @@ def format_meal_logged(
     first_name: str | None = None,
 ) -> str:
     nutrition = analysis.get("nutrition", {}) or {}
-    dish = analysis.get("dish_name") or "Страва"
+    dish = _esc(analysis.get("dish_name") or "Страва")
     date_display = _ua_date_long(datetime.now(LOCAL_TZ))
-    meal_ua = _MEAL_TYPE_UA.get(meal_type.lower(), meal_type.capitalize())
+    meal_ua = _MEAL_TYPE_UA.get(meal_type.lower(), _esc(meal_type.capitalize()))
 
     lines = [
         f"✅ <b>Записав: {dish}</b>",
@@ -189,7 +212,7 @@ def format_meal_logged(
     assessment = analysis.get("overall_assessment")
     if assessment:
         lines.append("")
-        lines.append(f"💬 {assessment}")
+        lines.append(f"💬 {_esc(assessment)}")
 
     lines.append("")
     lines.append(
@@ -197,7 +220,7 @@ def format_meal_logged(
     )
 
     if first_name:
-        lines.append(f"<i>Тримайся, {first_name}! 💪</i>")
+        lines.append(f"<i>Тримайся, {_esc(first_name)}! 💪</i>")
 
     return "\n".join(lines)
 
@@ -244,7 +267,7 @@ def format_meals_list(
     lines.append("")
     for i, m in enumerate(meals, 1):
         mt = _MEAL_TYPE_UA.get((m.get("meal_type") or "").lower(), "")
-        desc = m.get("description", "")[:50]
+        desc = _esc((m.get("description") or "")[:50])
         cal = round(m.get("calories", 0))
         p = round(m.get("protein_g", 0))
         c = round(m.get("carbs_g", 0))
@@ -517,8 +540,8 @@ def format_yesterday(
     meal_lines = []
     for m in meals:
         mt_raw = (m.get("meal_type") or "").lower()
-        mt = _MEAL_TYPE_UA.get(mt_raw, mt_raw.capitalize() or "—")
-        desc = (m.get("description") or "")[:60]
+        mt = _MEAL_TYPE_UA.get(mt_raw, _esc(mt_raw.capitalize() or "—"))
+        desc = _esc((m.get("description") or "")[:60])
         meal_lines.append(f"• {mt}: {desc} ({round(m.get('calories', 0))} ккал)")
     meal_section = "\n".join(meal_lines)
 
@@ -592,8 +615,10 @@ def format_day_detail(date: str, meals: list[dict]) -> str:
     total_cal = 0
     for m in meals:
         total_cal += m.get("calories", 0)
-        mt = _MEAL_TYPE_UA.get((m.get("meal_type") or "").lower(), (m.get("meal_type") or "").capitalize())
-        lines.append(f"🕐 <b>{mt}</b> — {m.get('description', '')}")
+        mt_raw = (m.get("meal_type") or "")
+        mt = _MEAL_TYPE_UA.get(mt_raw.lower(), _esc(mt_raw.capitalize()))
+        desc = _esc(m.get("description", ""))
+        lines.append(f"🕐 <b>{mt}</b> — {desc}")
         lines.append(
             f"   🔥 {round(m.get('calories', 0))} ккал | "
             f"🥩 {round(m.get('protein_g', 0))}г Б | "
@@ -601,7 +626,7 @@ def format_day_detail(date: str, meals: list[dict]) -> str:
             f"🧈 {round(m.get('fat_g', 0))}г Ж"
         )
         if m.get("allergen_warnings"):
-            names = ", ".join(a.get("allergen", "?") for a in m["allergen_warnings"])
+            names = ", ".join(_esc(a.get("allergen", "?")) for a in m["allergen_warnings"])
             lines.append(f"   ⚠️ Алергени: {names}")
         lines.append("")
 
@@ -729,4 +754,4 @@ def format_meal_list_entry(m: dict) -> str:
         desc = desc[:38] + "…"
     cal = round(m.get("calories") or 0)
     star = "⭐ " if m.get("is_favorite") else ""
-    return f"{star}{desc} · {cal} ккал"
+    return f"{star}{_esc(desc)} · {cal} ккал"

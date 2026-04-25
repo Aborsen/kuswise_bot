@@ -24,8 +24,21 @@ def _today_str() -> str:
     return datetime.now(LOCAL_TZ).strftime("%Y-%m-%d")
 
 
-def init_db(conn=None) -> None:
-    """Create tables if they don't exist. Idempotent — safe to call every request."""
+# Module-level flag so init_db only runs once per warm Vercel function instance.
+# psycopg's CREATE TABLE IF NOT EXISTS / ALTER TABLE … IF NOT EXISTS are
+# idempotent but cheap-to-skip — running them on every request is wasteful
+# and creates concurrent-DDL load on Neon during deploys.
+_SCHEMA_INITIALISED = False
+
+
+def init_db(conn=None, force: bool = False) -> None:
+    """Create tables if they don't exist. Idempotent — but cached after the
+    first call within a function instance. Pass force=True to bypass the cache
+    (e.g. for local migrations)."""
+    global _SCHEMA_INITIALISED
+    if _SCHEMA_INITIALISED and not force:
+        return
+
     close_after = False
     if conn is None:
         conn = get_conn()
@@ -182,7 +195,20 @@ def init_db(conn=None) -> None:
             "CREATE INDEX IF NOT EXISTS idx_weight_user_time "
             "ON weight_history(user_id, recorded_at DESC)"
         )
+        # Per-user daily action quotas (rate limiting). One row per
+        # (user_id, action, day). consume_quota() does an atomic upsert+increment.
+        # Old days are pruned by the midnight cron.
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS usage_quota (
+                user_id BIGINT NOT NULL,
+                action TEXT NOT NULL,
+                day TEXT NOT NULL,
+                count INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY (user_id, action, day)
+            )
+        """)
     conn.commit()
+    _SCHEMA_INITIALISED = True
     if close_after:
         try:
             conn.close()
@@ -304,25 +330,36 @@ def list_onboarded_user_ids(conn) -> list[int]:
 # ---------- Pending photos ----------
 
 def save_pending_photo(conn, user_id: int, photo_file_id: str) -> None:
-    with conn.cursor() as cur:
-        cur.execute("DELETE FROM pending_photos WHERE user_id = %s", (user_id,))
-        cur.execute(
-            "INSERT INTO pending_photos (user_id, photo_file_id, text_description, created_at) "
-            "VALUES (%s, %s, NULL, %s)",
-            (user_id, photo_file_id, _now_iso()),
-        )
-    conn.commit()
+    # DELETE+INSERT must commit atomically; psycopg connections default to
+    # autocommit=False so the implicit transaction covers both statements
+    # before the single conn.commit().
+    try:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM pending_photos WHERE user_id = %s", (user_id,))
+            cur.execute(
+                "INSERT INTO pending_photos (user_id, photo_file_id, text_description, created_at) "
+                "VALUES (%s, %s, NULL, %s)",
+                (user_id, photo_file_id, _now_iso()),
+            )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
 
 
 def save_pending_text(conn, user_id: int, text_description: str) -> None:
-    with conn.cursor() as cur:
-        cur.execute("DELETE FROM pending_photos WHERE user_id = %s", (user_id,))
-        cur.execute(
-            "INSERT INTO pending_photos (user_id, photo_file_id, text_description, created_at) "
-            "VALUES (%s, NULL, %s, %s)",
-            (user_id, text_description, _now_iso()),
-        )
-    conn.commit()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM pending_photos WHERE user_id = %s", (user_id,))
+            cur.execute(
+                "INSERT INTO pending_photos (user_id, photo_file_id, text_description, created_at) "
+                "VALUES (%s, NULL, %s, %s)",
+                (user_id, text_description, _now_iso()),
+            )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
 
 
 def pop_pending_entry(conn, user_id: int) -> Optional[tuple[Optional[str], Optional[str]]]:
@@ -360,25 +397,31 @@ def save_pending_analysis(
     text_description: Optional[str],
     raw_response: str,
 ) -> None:
-    """Store an AI analysis for user review. One row per user (replaces previous)."""
-    with conn.cursor() as cur:
-        cur.execute("DELETE FROM pending_analyses WHERE user_id = %s", (user_id,))
-        cur.execute(
-            """INSERT INTO pending_analyses
-               (user_id, meal_type, analysis_json, photo_file_id, text_description,
-                raw_response, awaiting_manual, created_at)
-               VALUES (%s, %s, %s, %s, %s, %s, 0, %s)""",
-            (
-                user_id,
-                meal_type,
-                json.dumps(analysis, ensure_ascii=False),
-                photo_file_id,
-                text_description,
-                raw_response,
-                _now_iso(),
-            ),
-        )
-    conn.commit()
+    """Store an AI analysis for user review. One row per user (replaces previous).
+    DELETE + INSERT run in a single autocommit=False transaction so concurrent
+    callers can never see "deleted but not yet inserted" state."""
+    try:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM pending_analyses WHERE user_id = %s", (user_id,))
+            cur.execute(
+                """INSERT INTO pending_analyses
+                   (user_id, meal_type, analysis_json, photo_file_id, text_description,
+                    raw_response, awaiting_manual, created_at)
+                   VALUES (%s, %s, %s, %s, %s, %s, 0, %s)""",
+                (
+                    user_id,
+                    meal_type,
+                    json.dumps(analysis, ensure_ascii=False),
+                    photo_file_id,
+                    text_description,
+                    raw_response,
+                    _now_iso(),
+                ),
+            )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
 
 
 def get_pending_analysis(conn, user_id: int) -> Optional[dict]:
@@ -460,12 +503,21 @@ def get_chat_history(conn, user_id: int, limit: int = 10, minutes: int = 60) -> 
     return [{"role": r[0], "content": r[1]} for r in reversed(rows)]
 
 
+# Cap on stored chat content. Bounds the size of every replay into the LLM
+# context and the storage footprint per row. Anything longer is truncated
+# with an ellipsis so the model still sees the start of the message.
+_MAX_CHAT_CONTENT_CHARS = 2000
+
+
 def append_chat_message(conn, user_id: int, role: str, content: str) -> None:
+    safe_content = content or ""
+    if len(safe_content) > _MAX_CHAT_CONTENT_CHARS:
+        safe_content = safe_content[: _MAX_CHAT_CONTENT_CHARS - 1] + "…"
     with conn.cursor() as cur:
         cur.execute(
             "INSERT INTO chat_sessions (user_id, role, content, created_at) "
             "VALUES (%s, %s, %s, %s)",
-            (user_id, role, content, _now_iso()),
+            (user_id, role, safe_content, _now_iso()),
         )
     conn.commit()
 
@@ -1081,6 +1133,35 @@ def get_users_due_weekly_checkin(conn, min_days_since_last: int = 6) -> list[int
         )
         rows = cur.fetchall()
     return [r[0] for r in rows]
+
+
+# ---------- Usage quota (per-user daily rate limit) ----------
+
+def consume_quota(conn, user_id: int, action: str) -> int:
+    """Atomically increment today's quota counter for (user_id, action) and
+    return the new total. Caller compares against the per-action limit."""
+    today = _today_str()
+    with conn.cursor() as cur:
+        cur.execute(
+            """INSERT INTO usage_quota (user_id, action, day, count)
+               VALUES (%s, %s, %s, 1)
+               ON CONFLICT (user_id, action, day) DO UPDATE
+                   SET count = usage_quota.count + 1
+               RETURNING count""",
+            (user_id, action, today),
+        )
+        new_count = cur.fetchone()[0]
+    conn.commit()
+    return int(new_count)
+
+
+def cleanup_old_quotas(conn, keep_days: int = 7) -> None:
+    """Delete quota rows older than `keep_days` days. Called from midnight cron."""
+    from datetime import date as _date, timedelta as _td
+    cutoff = (_date.today() - _td(days=keep_days)).isoformat()
+    with conn.cursor() as cur:
+        cur.execute("DELETE FROM usage_quota WHERE day < %s", (cutoff,))
+    conn.commit()
 
 
 def get_history_range(conn, user_id: int, start_date: str, end_date: str) -> list[dict]:

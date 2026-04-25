@@ -424,24 +424,23 @@ _BOOTSTRAP_HTML = """<!DOCTYPE html>
       try { tg.ready(); } catch(e) {}
       try { tg.expand && tg.expand(); } catch(e) {}
     }
-    var body = 'initData=' + encodeURIComponent(initDataStr);
-    fetch(window.location.pathname, {
-      method: 'POST',
-      headers: {'Content-Type': 'application/x-www-form-urlencoded'},
-      body: body,
-      credentials: 'same-origin'
-    }).then(function(r) {
-      if (!r.ok) throw new Error('HTTP ' + r.status);
-      return r.text();
-    }).then(function(html) {
-      document.open(); document.write(html); document.close();
-    }).catch(function(e) {
-      document.getElementById('loading').style.display = 'none';
-      var err = document.getElementById('error');
-      err.innerHTML = '<h2 class="err">Помилка завантаження</h2><p>' + e.message + '</p>' +
-        '<button onclick="location.reload()">🔄 Спробувати ще раз</button>';
-      err.style.display = 'block';
-    });
+    // Submit a real form POST instead of fetch + document.write. With the
+    // strict CSP nonce in place, document.write keeps the original page's
+    // CSP active, which has the bootstrap's nonce — not the rendered
+    // dashboard's nonce — so the rendered page's inline scripts get blocked.
+    // A full form navigation lets the browser apply the new response's CSP
+    // (and matching nonce) to the new document.
+    var form = document.createElement('form');
+    form.method = 'POST';
+    form.action = window.location.pathname;
+    form.style.display = 'none';
+    var inp = document.createElement('input');
+    inp.type = 'hidden';
+    inp.name = 'initData';
+    inp.value = initDataStr;
+    form.appendChild(inp);
+    document.body.appendChild(form);
+    form.submit();
   }
 
   var attempts = 0;

@@ -215,10 +215,16 @@ _SCAN_HTML = r"""<!DOCTYPE html>
       sent = false;
       return;
     }
-    var form = new FormData();
-    form.append('ean', ean);
-    form.append('initData', initData);
-    fetch('/api/barcode', { method: 'POST', body: form })
+    // Use URL-encoded form (parse_qs server-side) instead of multipart/FormData
+    // — multipart parsing was occasionally returning empty `ean`, which the
+    // server then rejected as "Bad EAN".
+    var body = 'ean=' + encodeURIComponent(ean) +
+               '&initData=' + encodeURIComponent(initData);
+    fetch('/api/barcode', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+      body: body,
+    })
       .then(function (r) {
         return r.json().catch(function () { return {}; });
       })

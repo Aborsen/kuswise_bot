@@ -235,9 +235,44 @@ class handler(BaseHTTPRequestHandler):
 def _parse_multipart(body: bytes, content_type: str) -> tuple[str, str]:
     """Best-effort multipart/form-data extraction for ``ean`` + ``initData``.
 
-    We only need two short text fields, so we don't pull in the full
-    ``email.parser`` machinery — keeps cold-start cheap.
+    Uses Python's stdlib ``email.parser`` — robust against the boundary +
+    encoding edge cases the previous hand-rolled parser tripped on. Falls
+    back to the lighter custom parser if email.parser somehow blows up
+    (defensive — has not been observed in practice).
     """
+    # Strategy 1: stdlib email.parser (RFC 2046 compliant, handles all the
+    # CRLF-vs-LF, trailing-boundary, and Content-Transfer-Encoding edge cases).
+    try:
+        from email.parser import BytesParser
+        from email.policy import default as _email_default
+
+        msg = BytesParser(policy=_email_default).parsebytes(
+            b"Content-Type: " + content_type.encode("utf-8") + b"\r\n\r\n" + body
+        )
+        if msg.is_multipart():
+            out_msg: dict[str, str] = {}
+            for part in msg.iter_parts():
+                disp = part.get("Content-Disposition", "")
+                # form-data; name="ean"
+                name = ""
+                for piece in str(disp).split(";"):
+                    piece = piece.strip()
+                    if piece.startswith("name="):
+                        name = piece[5:].strip().strip('"').strip("'")
+                        break
+                if not name:
+                    continue
+                payload = part.get_content()
+                if isinstance(payload, bytes):
+                    payload = payload.decode("utf-8", errors="replace")
+                out_msg[name] = str(payload).strip()
+            if out_msg.get("ean") or out_msg.get("initData"):
+                return out_msg.get("ean", ""), out_msg.get("initData", "")
+    except Exception:
+        pass  # fall through to the legacy parser
+
+    # Strategy 2: legacy hand-rolled parser. Kept as a backstop in case the
+    # stdlib path can't recover the fields.
     try:
         boundary_marker = "boundary="
         idx = content_type.find(boundary_marker)

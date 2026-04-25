@@ -286,6 +286,32 @@ class handler(BaseHTTPRequestHandler):
             return
 
         user_id = user["id"]
+        first_name = user.get("first_name") or None
+
+        # F-12.5 (dashboard share): generate the weekly recap PNG and send it
+        # to the user's chat via the bot. Mini App stays on screen so the JS
+        # can show "✓ Картка в чаті" → tg.close() shortly after.
+        if action == "request_recap":
+            from lib.recap import build_user_recap
+            from lib.database import get_profile
+            from lib.telegram_helpers import send_photo
+            conn = get_conn()
+            try:
+                init_db(conn)
+                profile = get_profile(conn, user_id)
+                png, caption = build_user_recap(conn, user_id, profile, first_name)
+                resp = send_photo(user_id, png, caption=caption)
+            except Exception:
+                print("dashboard recap error:", traceback.format_exc(), flush=True)
+                self._send_json(500, {"ok": False, "error": "internal"})
+                return
+            finally:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+            self._send_json(200, {"ok": bool(resp.get("ok"))})
+            return
 
         # JSON endpoint for historical day fetches
         if action == "day_data":
@@ -798,6 +824,19 @@ _DASHBOARD_HTML = r"""<!DOCTYPE html>
 
   /* Meals tab: hero summary card */
   .meals-summary-card { text-align: center; padding: 16px 14px; }
+  /* F-12.5 share-card on overview tab */
+  .share-card { padding: 16px 14px 14px; }
+  .share-card h2 { margin: 0 0 8px; }
+  .share-blurb { margin: 0 0 12px; font-size: 0.95em; line-height: 1.4;
+                 color: var(--tg-theme-hint-color, #9a9aa6); }
+  .share-card button { width: 100%; padding: 13px 18px; font-size: 1.05em;
+                       font-weight: 600; margin-top: 0; }
+  .share-card button[disabled] { opacity: 0.55; cursor: default; }
+  .share-status { margin-top: 10px; font-size: 0.9em; min-height: 1.1em;
+                  text-align: center;
+                  color: var(--tg-theme-hint-color, #9a9aa6); }
+  .share-status.ok  { color: #4caf50; }
+  .share-status.err { color: var(--tg-theme-destructive-text-color, #ef5b5b); }
   .meals-summary-head {
     font-size: 0.85em; color: var(--hint);
     text-transform: uppercase; letter-spacing: 0.04em;
@@ -940,6 +979,16 @@ _DASHBOARD_HTML = r"""<!DOCTYPE html>
     <div class="card summary-card">
       <h2>Підсумок</h2>
       <p class="summary-text" id="daySummary">—</p>
+    </div>
+
+    <div class="card share-card">
+      <h2>Поділись тижнем</h2>
+      <p class="share-blurb">
+        📸 Картка з твоїми результатами за останні 7 днів — серія,
+        середні калорії, макро. З QR на бот, щоб друзі могли спробувати.
+      </p>
+      <button type="button" id="shareBtn">📸 Поділитись тижнем</button>
+      <div class="share-status" id="shareStatus"></div>
     </div>
   </section>
 
@@ -1146,6 +1195,46 @@ _DASHBOARD_HTML = r"""<!DOCTYPE html>
   document.querySelectorAll('#bottomNav button').forEach(function(b){
     b.addEventListener('click', function(){ setTab(b.dataset.tab); });
   });
+
+  // --- Share-week button (overview tab) ---
+  // Posts action=request_recap → server generates the PNG via the same
+  // build_user_recap path /recap uses, sends it to the user's chat, and
+  // we just close the Mini App so they see it land.
+  var shareBtn    = document.getElementById('shareBtn');
+  var shareStatus = document.getElementById('shareStatus');
+  if (shareBtn) {
+    shareBtn.addEventListener('click', function() {
+      shareBtn.disabled = true;
+      shareStatus.className = 'share-status';
+      shareStatus.textContent = '🍳 Готую картку…';
+      var initData = (TG && TG.initData) || '';
+      var body = 'action=request_recap&initData=' + encodeURIComponent(initData);
+      fetch(window.location.pathname, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+        body: body,
+        credentials: 'same-origin'
+      }).then(function(r){
+        return r.json().catch(function(){ return {ok: false}; });
+      }).then(function(j){
+        if (j && j.ok) {
+          shareStatus.className = 'share-status ok';
+          shareStatus.textContent = '✓ Картка в чаті — закриваю';
+          setTimeout(function(){
+            try { TG && TG.close(); } catch(e) {}
+          }, 900);
+        } else {
+          shareStatus.className = 'share-status err';
+          shareStatus.textContent = '❌ Не вдалось — спробуй ще раз';
+          shareBtn.disabled = false;
+        }
+      }).catch(function(){
+        shareStatus.className = 'share-status err';
+        shareStatus.textContent = '❌ Помилка мережі';
+        shareBtn.disabled = false;
+      });
+    });
+  }
 
   // --- Day selection + render ---
   function selectDate(iso) {

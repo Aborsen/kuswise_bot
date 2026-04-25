@@ -219,6 +219,63 @@ def compute_weekly_stats(
     }
 
 
+def build_user_recap(
+    conn,
+    user_id: int,
+    profile: Optional[dict],
+    first_name: Optional[str],
+) -> tuple[bytes, str]:
+    """F-12: assemble the weekly recap PNG + caption for a user.
+
+    Pulls last-7d meals + weight history + streak, computes stats, renders
+    the PNG, and builds the caption. Used by both the on-demand ``/recap``
+    command and the dashboard's "Share my week" button.
+
+    Returns ``(png_bytes, caption)``. Raises on hard DB / render failures —
+    callers wrap.
+    """
+    # Imports kept local to avoid cycles: lib.recap is leaf-level math, but
+    # build_user_recap glues database + datehelpers, which sit higher up.
+    from lib.database import get_meals_in_range, get_weight_history, get_streak
+    from lib.datehelpers import now_user
+
+    try:
+        end_date_obj = now_user(profile).date() if profile else date.today()
+    except Exception:
+        end_date_obj = date.today()
+    start_date_obj = end_date_obj - timedelta(days=6)
+
+    meals_7d = get_meals_in_range(
+        conn, user_id,
+        start_date_obj.isoformat(),
+        end_date_obj.isoformat(),
+    )
+    weights_recent = get_weight_history(conn, user_id, limit=20)
+    try:
+        streak_row = get_streak(conn, user_id)
+    except Exception:
+        streak_row = None
+
+    stats = compute_weekly_stats(
+        meals_last_7d=meals_7d,
+        weight_history_recent=weights_recent,
+        streak_row=streak_row,
+        end_date=end_date_obj,
+    )
+    png = render_recap_png(stats, first_name=first_name)
+
+    # Caption nudges the user to forward — Telegram's native share button
+    # does the rest of the heavy lifting.
+    caption = (
+        f"🔥 <b>Мій тиждень з KusWise</b>\n"
+        f"Серія: {stats['streak']} · "
+        f"Середньо: {stats['avg_kcal']} ккал/день · "
+        f"Залогованих днів: {stats['days_logged']}/7\n\n"
+        f"<i>Поділись цим — натисни на картинку → 📤 Поділитись.</i>"
+    )
+    return png, caption
+
+
 def render_recap_png(stats: dict, first_name: Optional[str] = None) -> bytes:
     """Render the recap card. Returns PNG bytes (no temp file).
 

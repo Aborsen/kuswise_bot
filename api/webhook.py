@@ -2407,7 +2407,7 @@ def handle_command(conn, message: dict, text: str, first_name: str | None, profi
     # F-12: shareable PNG recap card on demand.
     if cmd == "/recap":
         try:
-            png, caption = build_user_recap(conn, user_id, profile, first_name)
+            png, caption = recap_mod.build_user_recap(conn, user_id, profile, first_name)
         except Exception as e:
             error("recap_build_failed", exc=e, user_id=user_id)
             send_message(chat_id, "❌ Не зміг скласти recap. Спробуй пізніше.",
@@ -2581,57 +2581,6 @@ def handle_command(conn, message: dict, text: str, first_name: str | None, profi
 
 
 # ---------- Favorites / Recent / Undo callbacks ----------
-
-def build_user_recap(
-    conn,
-    user_id: int,
-    profile: dict | None,
-    first_name: str | None,
-) -> tuple[bytes, str]:
-    """F-12: assemble the weekly recap PNG + caption for a user.
-
-    Returns ``(png_bytes, caption)``. Caller decides whether to send via
-    /recap (interactive) or the Sunday cron (push).
-    """
-    from datetime import date as _date, timedelta as _td
-
-    # Use the user's local date to define the 7-day window when we have their tz.
-    try:
-        end_date_obj = now_user(profile).date() if profile else _date.today()
-    except Exception:
-        end_date_obj = _date.today()
-    start_date_obj = end_date_obj - _td(days=6)
-
-    meals_7d = get_meals_in_range(
-        conn, user_id,
-        start_date_obj.isoformat(),
-        end_date_obj.isoformat(),
-    )
-    weights_recent = get_weight_history(conn, user_id, limit=20)
-    try:
-        streak_row = get_streak(conn, user_id)
-    except Exception:
-        streak_row = None
-
-    stats = recap_mod.compute_weekly_stats(
-        meals_last_7d=meals_7d,
-        weight_history_recent=weights_recent,
-        streak_row=streak_row,
-        end_date=end_date_obj,
-    )
-    png = recap_mod.render_recap_png(stats, first_name=first_name)
-
-    # Caption ends with a sharing nudge — Telegram's "Forward / Share" button
-    # does the rest of the heavy lifting (built-in virality).
-    caption = (
-        f"🔥 <b>Мій тиждень з KusWise</b>\n"
-        f"Серія: {stats['streak']} · "
-        f"Середньо: {stats['avg_kcal']} ккал/день · "
-        f"Залогованих днів: {stats['days_logged']}/7\n\n"
-        f"<i>Поділись цим, якщо хочеш — натисни на картинку → 📤 Поділитись.</i>"
-    )
-    return png, caption
-
 
 def _meal_type_by_local_hour(profile: dict | None = None) -> str:
     """Pick a default meal type from the user's local clock.

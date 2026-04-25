@@ -353,16 +353,21 @@ def main_menu_keyboard() -> dict:
 
     All buttons are plain-text — tapping sends the label as a message and
     webhook.py routes it.
+
+    Note: 🔢 Штрих Код and 📋 Скануй Меню are intentionally NOT on this
+    keyboard. Their commands (``/scan`` and ``/menu``) still work, and the
+    button labels remain in ``MENU_BUTTON_LABELS`` + the webhook dispatcher
+    so users with a stale keyboard cached on their phone don't tap into a
+    void. Removed from the visible UI to reduce clutter — most users use
+    photo / text / voice for meal entry.
     """
     from lib.formatters import (
         BTN_ASK, BTN_FAV, BTN_WATER, BTN_MEALS, BTN_SUGGEST, BTN_PROFILE,
-        BTN_SCAN, BTN_MENU_OCR,
     )
     return {
         "keyboard": [
             [{"text": BTN_ASK},     {"text": BTN_FAV}],
             [{"text": BTN_WATER},   {"text": BTN_MEALS}],
-            [{"text": BTN_SCAN},    {"text": BTN_MENU_OCR}],
             [{"text": BTN_SUGGEST}, {"text": BTN_PROFILE}],
         ],
         "resize_keyboard": True,

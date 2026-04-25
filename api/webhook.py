@@ -74,6 +74,8 @@ from lib.telegram_helpers import (
     meal_type_keyboard,
     moderation_keyboard,
     alternates_keyboard,
+    scanner_inline_keyboard,
+    menu_log_keyboard,
     meals_list_keyboard,
     main_menu_keyboard,
     dashboard_inline_keyboard,
@@ -101,6 +103,7 @@ from lib.openai_vision import (
     normalize_candidates,
     is_ambiguous,
     candidate_to_analysis,
+    analyze_menu,
 )
 from lib.openai_voice import transcribe_voice
 from lib.openai_nutrition import suggest_meal
@@ -118,6 +121,16 @@ from lib.formatters import (
     format_meal_preview,
     format_alternates_intro,
     format_aliases,
+    BARCODE_SCAN_INTRO,
+    BARCODE_GRAMS_PROMPT,
+    BARCODE_GRAMS_INVALID,
+    BARCODE_PENDING_EXPIRED,
+    MENU_PROMPT_INTRO,
+    MENU_NO_DISHES,
+    MENU_OCR_FAILED,
+    MENU_PENDING_EXPIRED,
+    format_menu_dishes_intro,
+    format_menu_dish_row,
     format_meals_list,
     format_profile,
     format_recommendation,
@@ -167,6 +180,7 @@ from lib.formatters import (
     BTN_DASHBOARD,
     BTN_FAV,
     BTN_WATER,
+    BTN_SCAN,
     MENU_BUTTON_LABELS,
     format_water,
     format_meal_list_entry,
@@ -222,9 +236,12 @@ from lib.database import (
     get_streak,
     update_streak_for_meal,
     get_weight_history,
+    save_menu_ocr_result,
+    get_menu_ocr_result,
 )
 from lib import goals as goals_mod
 from lib import personalization as personalization_mod
+from lib import off as off_mod
 from lib.health import (
     ALLERGENS as HEALTH_ALLERGENS,
     CONDITIONS as HEALTH_CONDITIONS,
@@ -264,6 +281,7 @@ DAILY_QUOTAS: dict[str, int] = {
     "voice_transcribe": 30, # Whisper transcription (cheap but bandwidth-heavy)
     "ask": 50,              # /ask chat (GPT-4.1-mini)
     "suggest": 20,          # /suggest_meal recipe generator (GPT-4o)
+    "menu_ocr": 5,          # F-9: /menu restaurant menu scan (GPT-4o vision, multi-image)
 }
 
 QUOTA_ACTION_LABELS = {
@@ -271,6 +289,7 @@ QUOTA_ACTION_LABELS = {
     "voice_transcribe": "голосове повідомлення",
     "ask": "запит до ШІ",
     "suggest": "ідея страви",
+    "menu_ocr": "сканер меню",
 }
 
 QUOTA_REJECT_TEMPLATE = (
@@ -439,6 +458,12 @@ def process_update(update: dict) -> None:
             handle_voice(conn, message)
             return
 
+        # F-9: when the user is in /menu mode, photos go to the OCR path
+        # instead of the standard meal-analysis flow.
+        if message.get("photo") and profile and profile.get("awaiting_input_type") == "menu_photo":
+            handle_menu_photo(conn, message, profile)
+            return
+
         if message.get("photo"):
             handle_photo(conn, message)
             return
@@ -464,6 +489,7 @@ def process_update(update: dict) -> None:
                 BTN_MEALS: "/meals",
                 BTN_PROFILE: "/profile",
                 BTN_SUGGEST: "/suggest_meal",
+                BTN_SCAN: "/scan",
             }.get(text)
             if mapped:
                 handle_command(conn, message, mapped, first_name, profile)
@@ -508,6 +534,16 @@ def process_update(update: dict) -> None:
             and text.lower().strip() != "/cancel"
         ):
             handle_weekly_delta_input(conn, chat_id, user_id, text, profile)
+            return
+
+        # F-8: custom barcode portion grams input.
+        if (
+            user_id
+            and profile
+            and profile.get("awaiting_input_type") == "barcode_grams"
+            and text.lower().strip() != "/cancel"
+        ):
+            handle_barcode_grams_input(conn, chat_id, user_id, first_name, text, profile)
             return
 
         # Free-text IANA timezone from /timezone → ✏️ Інша зона.
@@ -1175,6 +1211,10 @@ def handle_callback(conn, cb: dict) -> None:
         handle_moderation_callback(conn, cb, profile)
     elif data.startswith("pick:"):
         handle_alternates_pick(conn, cb, profile)
+    elif data.startswith("barcode:"):
+        handle_barcode_callback(conn, cb, profile)
+    elif data.startswith("menu:"):
+        handle_menu_callback(conn, cb, profile)
     elif data.startswith("meal_del:") or data.startswith("meal_edit:"):
         handle_meal_manage_callback(conn, cb)
     elif data.startswith("fav:"):
@@ -1532,6 +1572,281 @@ def handle_alternates_pick(conn, cb: dict, profile: dict) -> None:
     )
 
 
+def _save_barcode_meal(
+    conn,
+    chat_id: int,
+    user_id: int,
+    first_name: str | None,
+    profile: dict,
+    pending: dict,
+    grams: float,
+) -> None:
+    """F-8: turn a pending barcode lookup + chosen grams into a logged meal.
+
+    Reuses the standard save_meal → daily-log → streak → alias pipeline so
+    the barcode entry behaves identically to a photo-analyzed meal.
+    """
+    pseudo = pending.get("analysis") or {}
+    if pseudo.get("_pending_kind") != "barcode":
+        send_message(chat_id, BARCODE_PENDING_EXPIRED)
+        return
+
+    product = {
+        "ean":            pseudo.get("ean", ""),
+        "name":           pseudo.get("name", ""),
+        "brand":          pseudo.get("brand", ""),
+        "per_100g":       pseudo.get("per_100g", {}) or {},
+        "serving_size_g": pseudo.get("serving_size_g"),
+    }
+    analysis = off_mod.product_to_analysis(product, grams)
+
+    meal_id = save_meal(
+        conn, user_id, pending["meal_type"], analysis,
+        photo_file_id="", raw_response=pending.get("raw_response", ""),
+    )
+    upsert_daily_log_from_meal(conn, user_id, analysis)
+    try:
+        update_streak_for_meal(conn, user_id, today_str_user(profile))
+    except Exception as _streak_exc:
+        error("streak_update_failed", exc=_streak_exc, user_id=user_id)
+    try:
+        personalization_mod.upsert_alias_from_meal(conn, user_id, analysis)
+    except Exception as _alias_exc:
+        error("upsert_alias_failed", exc=_alias_exc, user_id=user_id)
+
+    pop_pending_analysis(conn, user_id)
+    set_awaiting_input(conn, user_id, None)
+
+    today_log = get_today_log(conn, user_id)
+    cal_target = profile.get("daily_calorie_target") or 2000
+    send_message(
+        chat_id,
+        format_meal_logged(pending["meal_type"], analysis, today_log, cal_target, first_name),
+        reply_markup=meal_logged_actions_keyboard(meal_id, is_fav=False),
+    )
+
+
+def handle_barcode_callback(conn, cb: dict, profile: dict) -> None:
+    """F-8: portion-picker buttons under a barcode-found message.
+
+    Callback shapes:
+        barcode:g:<int>      — grams (one of the preset chips or serving size)
+        barcode:g:custom     — prompt the user to type a number
+        barcode:cancel       — clear pending + go back to main menu
+    """
+    cb_id = cb["id"]
+    user_id = cb["from"]["id"]
+    first_name = cb["from"].get("first_name")
+    message = cb.get("message", {})
+    chat_id = message.get("chat", {}).get("id", user_id)
+    data = cb["data"]
+
+    if data == "barcode:cancel":
+        answer_callback_query(cb_id, "Скасовано")
+        pop_pending_analysis(conn, user_id)
+        set_awaiting_input(conn, user_id, None)
+        send_message(chat_id, MEAL_CANCELLED, reply_markup=main_menu_keyboard())
+        return
+
+    if data == "barcode:g:custom":
+        answer_callback_query(cb_id, "✏️ Чекаю на грами")
+        set_awaiting_input(conn, user_id, "barcode_grams")
+        send_message(chat_id, BARCODE_GRAMS_PROMPT)
+        return
+
+    if data.startswith("barcode:g:"):
+        try:
+            grams = int(data.split(":", 2)[2])
+        except (ValueError, IndexError):
+            answer_callback_query(cb_id, "Неправильна кількість")
+            return
+        if not (1 <= grams <= 5000):
+            answer_callback_query(cb_id, "Неправильна кількість")
+            return
+        pending = get_pending_analysis(conn, user_id)
+        if not pending:
+            answer_callback_query(cb_id)
+            send_message(chat_id, BARCODE_PENDING_EXPIRED)
+            return
+        answer_callback_query(cb_id, f"{grams}г · записую")
+        _save_barcode_meal(conn, chat_id, user_id, first_name, profile, pending, float(grams))
+        return
+
+    answer_callback_query(cb_id, "Невідома дія")
+
+
+def handle_menu_photo(conn, message: dict, profile: dict) -> None:
+    """F-9: user is in /menu mode and sent a photo — run menu OCR.
+
+    For v1 we accept a single photo per /menu invocation. Multi-photo
+    (multi-page menus) is deferred — most users will scan a single page
+    and the prompt is already capped at 25 dishes.
+    """
+    chat_id = message["chat"]["id"]
+    user_id = message["from"]["id"]
+
+    if not _enforce_quota(conn, chat_id, user_id, "menu_ocr"):
+        # Clear the awaiting state so the user isn't trapped in menu mode.
+        set_awaiting_input(conn, user_id, None)
+        return
+
+    photos = message.get("photo") or []
+    if not photos:
+        send_message(chat_id, MENU_OCR_FAILED)
+        return
+
+    # Telegram sends multiple resolutions — pick the largest (last entry).
+    largest = photos[-1]
+    file_id = largest.get("file_id")
+    if not file_id:
+        send_message(chat_id, MENU_OCR_FAILED)
+        return
+
+    send_message(chat_id, "🔎 Читаю меню… це може зайняти 5-10 секунд.")
+
+    try:
+        image_bytes = get_file_bytes(file_id)
+    except Exception as e:
+        error("menu_photo_download_failed", exc=e, user_id=user_id)
+        send_message(chat_id, MENU_OCR_FAILED)
+        set_awaiting_input(conn, user_id, None)
+        return
+
+    try:
+        dishes, _raw = analyze_menu([image_bytes])
+    except Exception as e:
+        error("menu_analyze_failed", exc=e, user_id=user_id)
+        send_message(chat_id, MENU_OCR_FAILED)
+        set_awaiting_input(conn, user_id, None)
+        return
+
+    set_awaiting_input(conn, user_id, None)
+
+    if not dishes:
+        send_message(chat_id, MENU_NO_DISHES, reply_markup=main_menu_keyboard())
+        return
+
+    try:
+        save_menu_ocr_result(conn, user_id, dishes)
+    except Exception as e:
+        error("menu_save_result_failed", exc=e, user_id=user_id)
+        send_message(chat_id, MENU_OCR_FAILED)
+        return
+
+    # Build the results message: header + one line per dish.
+    lines = [format_menu_dishes_intro(len(dishes))]
+    for d in dishes[:15]:  # cap message length; keyboard buttons go up to 25
+        lines.append(format_menu_dish_row(d))
+    send_message(
+        chat_id,
+        "\n".join(lines),
+        reply_markup=menu_log_keyboard(dishes),
+    )
+
+
+def handle_menu_callback(conn, cb: dict, profile: dict) -> None:
+    """F-9: user tapped one of the menu OCR result buttons.
+
+    ``menu:log:<idx>`` → start the standard meal-confirmation flow with the
+    dish name pre-filled (no extra GPT call — we already have macros).
+    ``menu:cancel`` → close the menu list.
+    """
+    cb_id = cb["id"]
+    user_id = cb["from"]["id"]
+    first_name = cb["from"].get("first_name")
+    message = cb.get("message", {})
+    chat_id = message.get("chat", {}).get("id", user_id)
+    data = cb["data"]
+
+    if data == "menu:cancel":
+        answer_callback_query(cb_id, "Закрив")
+        send_message(chat_id, MEAL_CANCELLED, reply_markup=main_menu_keyboard())
+        return
+
+    if not data.startswith("menu:log:"):
+        answer_callback_query(cb_id, "Невідома дія")
+        return
+
+    try:
+        idx = int(data.split(":", 2)[2])
+    except (ValueError, IndexError):
+        answer_callback_query(cb_id, "Поза діапазоном")
+        return
+
+    dishes = get_menu_ocr_result(conn, user_id) or []
+    if not dishes or idx < 0 or idx >= len(dishes):
+        answer_callback_query(cb_id)
+        send_message(chat_id, MENU_PENDING_EXPIRED)
+        return
+
+    chosen = dishes[idx]
+    answer_callback_query(cb_id, f"➕ {chosen.get('name', '')[:40]}")
+
+    # Promote the menu dish into a standard analysis dict and route through
+    # _send_analysis_preview so the user gets the normal accept/recalc
+    # moderation card. We pass NO photo_file_id and a synthetic
+    # text_description (so /recalc has something sensible to retry against).
+    portion_note = chosen.get("portion_note", "")
+    analysis = {
+        "dish_name":         chosen["name"],
+        "description":       chosen["name"],
+        "estimated_portion": portion_note or "ресторанна порція",
+        "portion_reasoning": f"Меню OCR · впевненість {int(round(chosen.get('confidence', 0) * 100))}%",
+        "ingredients":       [],
+        "allergen_flags":    [],
+        "crohn_flags":       [],
+        "nutrition": {
+            "calories":  float(chosen.get("calories")  or 0),
+            "protein_g": float(chosen.get("protein_g") or 0),
+            "carbs_g":   float(chosen.get("carbs_g")   or 0),
+            "fat_g":     float(chosen.get("fat_g")     or 0),
+            "fiber_g":   0.0,
+            "sugar_g":   0.0,
+        },
+        "glycemic_index":     {"level": "", "note": ""},
+        "overall_assessment": "",
+        "_source": {"kind": "menu_ocr"},
+    }
+
+    meal_type = _meal_type_by_local_hour(profile)
+    _send_analysis_preview(
+        conn, chat_id, user_id, meal_type, analysis,
+        photo_file_id=None,
+        text_description=chosen["name"],
+        raw="",
+    )
+
+
+def handle_barcode_grams_input(
+    conn,
+    chat_id: int,
+    user_id: int,
+    first_name: str | None,
+    text: str,
+    profile: dict,
+) -> None:
+    """F-8: custom-grams typed reply for a pending barcode lookup."""
+    cleaned = text.strip().replace(",", ".").replace("г", "").replace("g", "").strip()
+    if cleaned.lower() in ("/skip", "skip", "/cancel", "cancel"):
+        set_awaiting_input(conn, user_id, None)
+        pop_pending_analysis(conn, user_id)
+        send_message(chat_id, MEAL_CANCELLED, reply_markup=main_menu_keyboard())
+        return
+
+    grams = _parse_float(cleaned)
+    if grams is None or not (1 <= grams <= 5000):
+        send_message(chat_id, BARCODE_GRAMS_INVALID)
+        return
+
+    pending = get_pending_analysis(conn, user_id)
+    if not pending:
+        set_awaiting_input(conn, user_id, None)
+        send_message(chat_id, BARCODE_PENDING_EXPIRED, reply_markup=main_menu_keyboard())
+        return
+
+    _save_barcode_meal(conn, chat_id, user_id, first_name, profile, pending, float(grams))
+
+
 # ---------- Meal management: Delete / Edit ----------
 
 def handle_meal_manage_callback(conn, cb: dict) -> None:
@@ -1621,6 +1936,21 @@ def handle_command(conn, message: dict, text: str, first_name: str | None, profi
             format_streak_summary(streak_row, first_name),
             reply_markup=main_menu_keyboard(),
         )
+        return
+
+    # F-8: open the barcode scanner Mini App.
+    if cmd == "/scan":
+        send_message(
+            chat_id,
+            BARCODE_SCAN_INTRO,
+            reply_markup=scanner_inline_keyboard(),
+        )
+        return
+
+    # F-9: restaurant menu OCR — set state + ask for a photo.
+    if cmd == "/menu":
+        set_awaiting_input(conn, user_id, "menu_photo")
+        send_message(chat_id, MENU_PROMPT_INTRO, reply_markup=cancel_only_keyboard())
         return
 
     # F-7: user's learned food aliases (read-only view; auto-built from accepted meals).

@@ -56,6 +56,14 @@ def _dashboard_url() -> str:
     return f"{base}?v={sha}" if sha else base
 
 
+def _scan_url() -> str:
+    """Absolute HTTPS URL for the F-8 barcode scanner Mini App page."""
+    host = _resolve_host() or "invalid.invalid"
+    base = f"https://{host}/api/scan"
+    sha = os.environ.get("VERCEL_GIT_COMMIT_SHA", "")[:8]
+    return f"{base}?v={sha}" if sha else base
+
+
 def send_message(chat_id: int, text: str, reply_markup: dict | None = None) -> dict:
     payload: dict = {
         "chat_id": chat_id,
@@ -184,6 +192,38 @@ def cancel_only_keyboard() -> dict:
     }
 
 
+def menu_log_keyboard(dishes: list[dict]) -> dict:
+    """F-9: one button per OCR'd dish that triggers the standard log flow.
+
+    Telegram inline-button labels are limited to ~64 chars. We trim each
+    name and append the kcal so the user can compare at a glance.
+    """
+    rows = []
+    for i, d in enumerate(dishes[:25]):
+        name = (d.get("name") or "")[:32]
+        kcal = int(round(float(d.get("calories") or 0)))
+        rows.append([{
+            "text": f"➕ {name} · {kcal} ккал",
+            "callback_data": f"menu:log:{i}",
+        }])
+    rows.append([{"text": "❌ Закрити меню", "callback_data": "menu:cancel"}])
+    return {"inline_keyboard": rows}
+
+
+def scanner_inline_keyboard() -> dict:
+    """F-8: single button that opens the barcode scanner Mini App.
+
+    Telegram requires the ``inline_keyboard`` (NOT reply ``keyboard``) form
+    of ``web_app`` to deliver signed ``initData`` to our scanner page.
+    """
+    return {
+        "inline_keyboard": [
+            [{"text": "📷 Відкрити сканер", "web_app": {"url": _scan_url()}}],
+            [{"text": "❌ Скасувати", "callback_data": "barcode:cancel"}],
+        ]
+    }
+
+
 def alternates_keyboard(candidates: list[dict]) -> dict:
     """F-6: 1-3 numbered candidate buttons + manual + cancel.
 
@@ -223,13 +263,14 @@ def main_menu_keyboard() -> dict:
     webhook.py routes it.
     """
     from lib.formatters import (
-        BTN_ASK, BTN_FAV, BTN_WATER, BTN_MEALS, BTN_SUGGEST, BTN_PROFILE,
+        BTN_ASK, BTN_FAV, BTN_WATER, BTN_MEALS, BTN_SUGGEST, BTN_PROFILE, BTN_SCAN,
     )
     return {
         "keyboard": [
             [{"text": BTN_ASK},     {"text": BTN_FAV}],
             [{"text": BTN_WATER},   {"text": BTN_MEALS}],
-            [{"text": BTN_SUGGEST}, {"text": BTN_PROFILE}],
+            [{"text": BTN_SCAN},    {"text": BTN_SUGGEST}],
+            [{"text": BTN_PROFILE}],
         ],
         "resize_keyboard": True,
         "is_persistent": True,

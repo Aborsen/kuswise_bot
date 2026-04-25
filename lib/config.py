@@ -224,6 +224,41 @@ Return ONLY valid JSON, no markdown fences, no extra text.
 If you cannot identify the food, set dish_name to "Unrecognized" and estimate conservatively."""
 
 
+ANALYZE_MENU_PROMPT = """You are reading one or more photos of a restaurant / café menu.
+Extract every visible dish (skip section headers, prices, drinks lists with no
+food, decorative text). For each dish, estimate kcal + macros for a typical
+single restaurant portion.
+
+Return ONLY valid JSON, no markdown fences, no extra text. Schema:
+
+{
+  "dishes": [
+    {
+      "name": "Dish name as printed (Ukrainian / English / language as on menu)",
+      "calories": 520,
+      "protein_g": 35,
+      "carbs_g": 30,
+      "fat_g": 25,
+      "confidence": 0.7,
+      "portion_note": "Optional: '1 порція', '~250г', 'без гарніру' тощо"
+    }
+  ]
+}
+
+Rules:
+- Output 5-25 dishes. If the menu has more, prioritize main courses + popular items.
+- Skip: drinks (coffee/wine/etc), bread baskets, condiments, prices, addresses.
+- ``confidence`` is 0-1. Use 0.5+ for clearly-readable named dishes; lower for
+  blurry or ambiguous text.
+- Estimate macros conservatively for a typical restaurant portion (~350-600 kcal
+  for mains, ~150-300 for starters / sides). Use cuisine knowledge.
+- ``name`` should be the dish as printed on the menu, not a translation. Keep it
+  short (≤ 60 chars).
+- Return an empty ``dishes`` array if you can't read any dish names — DO NOT
+  invent items.
+"""
+
+
 RECALC_PROMPT = (
     "Перерахуй уважніше, покроково:\n"
     "1) Вкажи чітко, який референсний об'єкт використав (тарілка, виделка, ложка, рука, телефон). "

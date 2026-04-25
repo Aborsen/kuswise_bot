@@ -15,6 +15,7 @@ if _ROOT not in sys.path:
 from lib.config import CRON_SECRET
 from lib.database import (
     cleanup_old_quotas,
+    cleanup_old_menu_ocr_results,
     get_conn,
     init_db,
     mark_all_previous_summaries_sent,
@@ -69,6 +70,8 @@ def run_midnight_reset() -> dict:
         conn.commit()
         # Prune usage_quota rows older than 7 days so the table stays small.
         cleanup_old_quotas(conn, keep_days=7)
+        # F-9: drop menu OCR results > 1h old so abandoned menus don't pile up.
+        cleanup_old_menu_ocr_results(conn, max_age_hours=1)
         # F-4: refill streak freezes on the 1st of each UTC month.
         # Trade-off: not per-user-tz (same as the existing cron design); a
         # Kyiv user at 02:00 local on Feb 1 gets the refill ~24h later.

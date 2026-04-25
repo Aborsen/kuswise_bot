@@ -511,6 +511,8 @@ def help_message() -> str:
         "/streak — 🔥 серія логів і заморозки\n"
         "/goals — 🎯 цілі та прогноз досягнення\n"
         "/aliases — 📚 твої звичні страви (бот вчиться)\n"
+        "/scan — 🔢 сканер штрих-кодів (Open Food Facts)\n"
+        "/menu — 📋 OCR меню в кафе/ресторані\n"
         "/meals — список страв (видалити / змінити)\n"
         "/fav — ⭐ улюблені страви\n"
         "/recent — 🕘 останні страви (швидкий повтор)\n"
@@ -701,6 +703,67 @@ def format_projection_line(projection, status: str | None = None) -> str | None:
     elif status == "on_track":
         head = "🟡 В графіку — "
     return f"{head}прогноз цілі: <b>{date_str}</b> (~{weeks:g} тижнів)"
+
+
+# F-9: menu OCR strings
+MENU_PROMPT_INTRO = (
+    "📋 <b>Сканер меню</b>\n"
+    "Сфотографуй меню кафе чи ресторану — я витягну страви з оцінкою калорій. "
+    "Поряд з кожною стравою буде кнопка «Залогувати», яка додасть її в твій день.\n\n"
+    "<i>Надішли фото зараз. Або /cancel — скасувати.</i>"
+)
+MENU_NO_DISHES = (
+    "🤷 Не вдалось розпізнати жодної страви на цьому фото. "
+    "Спробуй чіткіший знімок або введи страву текстом."
+)
+MENU_OCR_FAILED = "❌ Не вдалось обробити фото. Спробуй ще раз."
+MENU_RESULTS_HEADER = "📋 <b>Знайшов {n} страв(и):</b>"
+MENU_PENDING_EXPIRED = "Меню більше не активне. Відскануй ще раз через /menu."
+
+
+def format_menu_dishes_intro(n: int) -> str:
+    return MENU_RESULTS_HEADER.format(n=n)
+
+
+def format_menu_dish_row(dish: dict) -> str:
+    """Single-dish line for the menu results message."""
+    name = dish.get("name", "")
+    kcal = int(round(float(dish.get("calories")  or 0)))
+    p    = int(round(float(dish.get("protein_g") or 0)))
+    f    = int(round(float(dish.get("fat_g")     or 0)))
+    c    = int(round(float(dish.get("carbs_g")   or 0)))
+    portion = (dish.get("portion_note") or "").strip()
+    portion_part = f" · <i>{portion}</i>" if portion else ""
+    return f"<b>{name}</b> — {kcal} ккал · Б{p} Ж{f} В{c}{portion_part}"
+
+
+# F-8: barcode scanner strings
+BARCODE_SCAN_INTRO = (
+    "📷 <b>Сканер штрих-кодів</b>\n"
+    "Натисни кнопку нижче, щоб відкрити камеру в Telegram. "
+    "Наведи на штрих-код — я знайду продукт у Open Food Facts (3 млн+ позицій) "
+    "і запропоную обрати порцію.\n\n"
+    "<i>Якщо продукту немає в базі — підкажу, як ввести його вручну.</i>"
+)
+BARCODE_FOUND_HEADER = (
+    "✓ Знайшов: <b>{name}</b>\n"
+    "Бренд: {brand}\n"
+    "На 100г: <b>{kcal} ккал</b> · Б{p} Ж{f} В{c}\n\n"
+    "Скільки грамів?"
+)
+BARCODE_NOT_FOUND = (
+    "🤷 Не знайшов штрих-код <code>{ean}</code> у базі.\n\n"
+    "Спробуй ввести продукт текстом (наприклад: «йогурт натуральний 150г»), "
+    "або просто сфотографуй його — я проаналізую візуально."
+)
+BARCODE_LOOKUP_FAILED = (
+    "❌ Не зміг звернутися до бази продуктів. Спробуй ще раз або введи продукт текстом."
+)
+BARCODE_GRAMS_PROMPT = "✏️ <b>Скільки грамів?</b>\nНапиши число (наприклад: <code>180</code>):"
+BARCODE_GRAMS_INVALID = "Кількість має бути числом від 1 до 5000 г. Спробуй ще раз 🙂"
+BARCODE_PENDING_EXPIRED = (
+    "Сканована позиція уже не активна. Спробуй просканувати ще раз через 🔢 Сканер."
+)
 
 
 def format_aliases(aliases: list[dict], first_name: str | None = None) -> str:
@@ -1038,8 +1101,9 @@ BTN_PROFILE = "⚙️ Профіль"
 BTN_YESTERDAY = "📆 Вчора"
 BTN_MEALS = "📋 Мої страви"
 BTN_DASHBOARD = "📱 Dashboard"
+BTN_SCAN = "🔢 Сканер"
 
-MENU_BUTTON_LABELS = {BTN_ASK, BTN_FAV, BTN_WATER, BTN_MEALS, BTN_SUGGEST, BTN_PROFILE}
+MENU_BUTTON_LABELS = {BTN_ASK, BTN_FAV, BTN_WATER, BTN_MEALS, BTN_SUGGEST, BTN_PROFILE, BTN_SCAN}
 
 
 # --- Water tracker ---

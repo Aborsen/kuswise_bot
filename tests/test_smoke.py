@@ -20,6 +20,7 @@ from lib import i18n as i18n_mod
 from lib import goals as gl
 from lib import openai_vision as ov
 from lib import personalization as pz
+from lib import off as off_mod
 
 
 # ---------- macro / calorie math (lib.config) ----------
@@ -993,3 +994,129 @@ def test_delete_alias_removes_row():
     assert conn.store["aliases"] == {}
     # Idempotent — second delete reports False.
     assert pz.delete_alias(conn, 1, "Курка") is False
+
+
+# ---------- Open Food Facts (lib.off, F-8) ----------
+
+def test_looks_like_ean_accepts_8_to_13_digits():
+    assert off_mod.looks_like_ean("12345678") is True       # EAN-8
+    assert off_mod.looks_like_ean("123456789012") is True    # UPC-A
+    assert off_mod.looks_like_ean("5449000000996") is True   # EAN-13
+    assert off_mod.looks_like_ean(None) is False
+    assert off_mod.looks_like_ean("") is False
+    assert off_mod.looks_like_ean("12345") is False          # too short
+    assert off_mod.looks_like_ean("12345678901234") is False # too long
+    assert off_mod.looks_like_ean("ABC1234567") is False     # has letters
+    assert off_mod.looks_like_ean("123 456 789 012") is False  # spaces
+
+
+def test_normalize_kcal_from_kj_when_kcal_missing():
+    """OFF sometimes reports only kJ; we should convert at 4.184."""
+    raw = {
+        "product_name": "Olive oil",
+        "nutriments": {"energy-kj_100g": 3700},  # ≈ 884 kcal
+    }
+    out = off_mod._normalize(raw, "1234567890123")
+    assert out is not None
+    assert 880 <= out["per_100g"]["calories"] <= 890
+
+
+def test_normalize_drops_product_with_no_calorie_data():
+    raw = {"product_name": "Air", "nutriments": {}}
+    assert off_mod._normalize(raw, "1234567890123") is None
+
+
+def test_normalize_drops_product_with_blank_name():
+    raw = {
+        "product_name": "",
+        "nutriments": {"energy-kcal_100g": 100},
+    }
+    assert off_mod._normalize(raw, "1234567890123") is None
+
+
+def test_normalize_falls_back_to_localized_names():
+    raw = {
+        "product_name": "",
+        "product_name_en": "Yogurt",
+        "nutriments": {"energy-kcal_100g": 60, "proteins_100g": 4, "fat_100g": 3, "carbohydrates_100g": 4.5},
+    }
+    out = off_mod._normalize(raw, "1234567890123")
+    assert out is not None
+    assert out["name"] == "Yogurt"
+
+
+def test_parse_serving_size_grams_extracts_first_g_value():
+    assert off_mod._parse_serving_size_grams("30 g") == 30
+    assert off_mod._parse_serving_size_grams("125g") == 125
+    assert off_mod._parse_serving_size_grams("30g (1 bar)") == 30
+    assert off_mod._parse_serving_size_grams("1 cup (250ml)") is None
+    assert off_mod._parse_serving_size_grams("") is None
+
+
+def test_macros_for_grams_scales_linearly():
+    per_100g = {"calories": 100, "protein_g": 10, "carbs_g": 20, "fat_g": 5,
+                "fiber_g": 2, "sugar_g": 8}
+    out = off_mod.macros_for_grams(per_100g, 250)
+    assert out["calories"] == 250
+    assert out["protein_g"] == 25
+    assert out["fat_g"] == 12.5
+
+
+def test_normalize_menu_dishes_drops_invalid():
+    raw = [
+        {"name": "Цезар",   "calories": 520, "protein_g": 35, "carbs_g": 30, "fat_g": 25, "confidence": 0.7},
+        {"name": "",        "calories": 300, "confidence": 0.5},      # blank name
+        {"name": "Зразок",  "calories": 0,   "confidence": 0.4},      # zero kcal
+        "garbage",                                                     # not a dict
+        {"name": "Pasta",   "calories": "oops"},                       # bad number
+    ]
+    out = ov.normalize_menu_dishes(raw)
+    assert len(out) == 1
+    assert out[0]["name"] == "Цезар"
+
+
+def test_normalize_menu_dishes_caps_at_25():
+    raw = [{"name": f"opt{i}", "calories": 100, "confidence": 0.5} for i in range(50)]
+    out = ov.normalize_menu_dishes(raw)
+    assert len(out) == 25
+
+
+def test_normalize_menu_dishes_sorts_by_confidence():
+    raw = [
+        {"name": "low",  "calories": 100, "confidence": 0.2},
+        {"name": "high", "calories": 200, "confidence": 0.9},
+        {"name": "mid",  "calories": 150, "confidence": 0.5},
+    ]
+    out = ov.normalize_menu_dishes(raw)
+    assert [d["name"] for d in out] == ["high", "mid", "low"]
+
+
+def test_parse_menu_response_handles_fenced_json():
+    raw = '```json\n{"dishes": [{"name": "Стейк", "calories": 600, "confidence": 0.8}]}\n```'
+    out = ov._parse_menu_response(raw)
+    assert out is not None
+    assert out[0]["name"] == "Стейк"
+
+
+def test_parse_menu_response_returns_none_on_garbage():
+    assert ov._parse_menu_response("not json at all") is None
+    assert ov._parse_menu_response("{}") == []  # valid JSON but no dishes
+    assert ov._parse_menu_response('{"dishes": "not a list"}') is None
+
+
+def test_product_to_analysis_yields_save_meal_shape():
+    product = {
+        "ean": "5449000000996",
+        "name": "Coca-Cola Original 330 ml",
+        "brand": "Coca-Cola",
+        "per_100g": {"calories": 42, "protein_g": 0, "carbs_g": 10.6,
+                     "fat_g": 0, "fiber_g": 0, "sugar_g": 10.6},
+        "serving_size_g": 330,
+    }
+    a = off_mod.product_to_analysis(product, 330)
+    # Brand prepended once, name not duplicated.
+    assert "Coca-Cola" in a["dish_name"]
+    assert a["nutrition"]["calories"] == 138.6  # 42 * 3.3
+    assert a["estimated_portion"] == "330г"
+    assert a["_source"]["kind"] == "barcode"
+    assert a["_source"]["ean"] == "5449000000996"

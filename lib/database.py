@@ -283,6 +283,16 @@ def init_db(conn=None, force: bool = False) -> None:
                 PRIMARY KEY (user_id, alias)
             )
         """)
+        # F-9: menu OCR results — short-lived per-user cache. Replaced on every
+        # /menu invocation so callbacks can reference a stable list of dishes.
+        # Pruned aggressively (1h) by the midnight cron.
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS menu_ocr_results (
+                user_id BIGINT PRIMARY KEY,
+                dishes_json TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            )
+        """)
     conn.commit()
     _SCHEMA_INITIALISED = True
     if close_after:
@@ -380,7 +390,7 @@ def delete_user_all_data(conn, user_id: int) -> bool:
             "daily_recommendations", "daily_logs", "meals", "user_profiles",
             "water_logs", "water_prefs", "weight_history",
             "usage_quota", "user_health_profile", "user_streaks",
-            "corrections", "user_food_aliases",
+            "corrections", "user_food_aliases", "menu_ocr_results",
         ):
             cur.execute(f"DELETE FROM {table} WHERE user_id = %s", (user_id,))
         cur.execute("DELETE FROM users WHERE user_id = %s", (user_id,))
@@ -1579,3 +1589,50 @@ def reset_monthly_freezes(conn) -> int:
         n = cur.rowcount
     conn.commit()
     return int(n or 0)
+
+
+# ---------- Menu OCR results (F-9) ----------
+
+def save_menu_ocr_result(conn, user_id: int, dishes: list[dict]) -> None:
+    """Persist a fresh menu-OCR result, replacing any previous one.
+
+    One row per user. The midnight cron prunes rows > 1h old so abandoned
+    menus don't accumulate.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            """INSERT INTO menu_ocr_results (user_id, dishes_json, created_at)
+               VALUES (%s, %s, %s)
+               ON CONFLICT (user_id) DO UPDATE SET
+                   dishes_json = EXCLUDED.dishes_json,
+                   created_at  = EXCLUDED.created_at""",
+            (user_id, json.dumps(dishes, ensure_ascii=False), _now_iso()),
+        )
+    conn.commit()
+
+
+def get_menu_ocr_result(conn, user_id: int) -> Optional[list[dict]]:
+    """Return the user's most recent menu-OCR dishes list, or None."""
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT dishes_json FROM menu_ocr_results WHERE user_id = %s",
+            (user_id,),
+        )
+        row = cur.fetchone()
+    if not row or not row[0]:
+        return None
+    try:
+        data = json.loads(row[0])
+    except (TypeError, ValueError):
+        return None
+    if not isinstance(data, list):
+        return None
+    return data
+
+
+def cleanup_old_menu_ocr_results(conn, max_age_hours: int = 1) -> None:
+    """Drop menu OCR rows older than ``max_age_hours``. Run from midnight cron."""
+    cutoff = (datetime.now(timezone.utc) - timedelta(hours=max_age_hours)).isoformat()
+    with conn.cursor() as cur:
+        cur.execute("DELETE FROM menu_ocr_results WHERE created_at < %s", (cutoff,))
+    conn.commit()

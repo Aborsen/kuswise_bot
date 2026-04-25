@@ -548,6 +548,35 @@ def _render_dashboard(user: dict, nonce: str = "") -> str:
         }
 
     target_weight_kg = profile.get("target_weight_kg")
+    # F-5: pull goals projection + actual progress so the dashboard can render
+    # weeks-to-goal, projected date, and on-track classification.
+    try:
+        from lib import goals as _goals
+        from lib.database import get_weight_history as _gw
+        _proj = _goals.projection_for_profile(profile)
+        _hist = _gw(conn, user_id, limit=20)
+        _actual = _goals.actual_weekly_delta(_hist, window_weeks=4)
+        _status = (
+            _goals.classify_actual_vs_target(_actual, _proj.weekly_delta_kg)
+            if _actual is not None else None
+        )
+        goals_blob = {
+            "weekly_delta_kg":     _proj.weekly_delta_kg,
+            "weeks_to_goal":       _proj.weeks_to_goal,
+            "projected_date":      _proj.projected_date.isoformat() if _proj.projected_date else None,
+            "reason":              _proj.reason,
+            "actual_weekly_delta": _actual,
+            "status":              _status,
+        }
+    except Exception:
+        goals_blob = {
+            "weekly_delta_kg":     0.0,
+            "weeks_to_goal":       None,
+            "projected_date":      None,
+            "reason":              "no_current",
+            "actual_weekly_delta": None,
+            "status":              None,
+        }
     profile_blob = {
         "age":              profile.get("age"),
         "sex":              profile.get("sex") or "",
@@ -556,6 +585,8 @@ def _render_dashboard(user: dict, nonce: str = "") -> str:
         "gym_per_week":     profile.get("gym_per_week"),
         "goal":             goal or "",
         "target_weight_kg": float(target_weight_kg) if target_weight_kg else None,
+        "weekly_delta_kg":  profile.get("weekly_delta_kg"),  # raw user setting (None if unset)
+        "goals":            goals_blob,
     }
     targets_blob = {
         "calories":  cal_target,
@@ -1396,6 +1427,36 @@ _DASHBOARD_HTML = r"""<!DOCTYPE html>
         togoTxt = p.target_weight_kg + ' кг';
       }
       rows += idRow('Цільова вага', togoTxt);
+    }
+
+    // F-5: Goals projection block (weekly delta + projected date + status).
+    var g = p.goals || {};
+    if (g.weekly_delta_kg && (p.goal === 'lose' || p.goal === 'gain')) {
+      var deltaTxt = (g.weekly_delta_kg > 0 ? '+' : '') +
+                     Number(g.weekly_delta_kg).toFixed(2) + ' кг/тиждень';
+      rows += idRow('Тижнева ціль', deltaTxt);
+    }
+    if (g.reason === 'ok' && g.projected_date) {
+      // Format YYYY-MM-DD → DD.MM.YYYY for display.
+      var pd = String(g.projected_date);
+      var pdTxt = pd.length === 10
+                ? pd.substring(8, 10) + '.' + pd.substring(5, 7) + '.' + pd.substring(0, 4)
+                : pd;
+      var weeks = g.weeks_to_goal != null ? ' (~' + Number(g.weeks_to_goal) + ' тижнів)' : '';
+      rows += idRow('Прогноз цілі', pdTxt + weeks);
+    }
+    if (g.status) {
+      var statusTxt = g.status === 'ahead'    ? '🟢 Випереджаєш'
+                    : g.status === 'on_track' ? '🟡 У графіку'
+                    : g.status === 'behind'   ? '🔴 Відстаєш'
+                    : '';
+      if (statusTxt) {
+        var actualTxt = g.actual_weekly_delta != null
+          ? ' (' + (g.actual_weekly_delta > 0 ? '+' : '')
+                 + Number(g.actual_weekly_delta).toFixed(2) + ' кг/тижд)'
+          : '';
+        rows += idRow('Темп', statusTxt + actualTxt);
+      }
     }
     grid.innerHTML = rows;
 

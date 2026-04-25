@@ -7,6 +7,92 @@ from openai import OpenAI
 from lib.config import OPENAI_API_KEY, ANALYSIS_SYSTEM_PROMPT
 
 
+# F-6: ambiguity threshold. If the model's top guess has confidence below
+# this AND there are 2+ candidates, surface a picker instead of forcing
+# the user to either accept or recalculate.
+CONFIDENCE_THRESHOLD = 0.85
+
+
+def normalize_candidates(analysis: dict) -> list[dict]:
+    """Extract + sanitize the ``top_guesses`` list from an analysis result.
+
+    Returns a list with at most 3 candidates; each entry is guaranteed to have
+    string ``name`` and float fields (``calories``, ``protein_g``, ``carbs_g``,
+    ``fat_g``, ``confidence``). Bad rows are dropped silently. Returns ``[]``
+    when no usable candidates are present (the model didn't include the field
+    or it was empty / malformed).
+    """
+    raw = (analysis or {}).get("top_guesses") or []
+    if not isinstance(raw, list):
+        return []
+    out: list[dict] = []
+    for item in raw[:3]:
+        if not isinstance(item, dict):
+            continue
+        name = (item.get("name") or "").strip()
+        if not name:
+            continue
+        try:
+            cand = {
+                "name":       name[:80],
+                "calories":   float(item.get("calories") or 0),
+                "protein_g":  float(item.get("protein_g") or 0),
+                "carbs_g":    float(item.get("carbs_g") or 0),
+                "fat_g":      float(item.get("fat_g") or 0),
+                "confidence": max(0.0, min(1.0, float(item.get("confidence") or 0))),
+            }
+        except (TypeError, ValueError):
+            continue
+        out.append(cand)
+    # Always sort by confidence so the highest-confidence guess is first.
+    out.sort(key=lambda c: c["confidence"], reverse=True)
+    return out
+
+
+def is_ambiguous(candidates: list[dict]) -> bool:
+    """Returns True when the picker UI should be shown.
+
+    Requires at least 2 candidates AND the top one's confidence < threshold.
+    Single-candidate or fully-confident results route through the standard
+    preview flow.
+    """
+    if not candidates or len(candidates) < 2:
+        return False
+    top = candidates[0]
+    return float(top.get("confidence") or 0) < CONFIDENCE_THRESHOLD
+
+
+def candidate_to_analysis(candidate: dict, base: dict | None = None) -> dict:
+    """Build a full analysis-shaped dict from a chosen ``top_guesses`` entry.
+
+    The picker hands back a thin candidate (just name + macros + confidence);
+    the rest of the pipeline expects the richer analysis schema, so we backfill
+    the missing fields conservatively. Pass ``base`` to inherit pre-existing
+    fields like ``estimated_portion``, ``portion_reasoning``, ``glycemic_index``
+    when the picked candidate is the same as the original top guess.
+    """
+    base = base or {}
+    return {
+        "dish_name":         candidate.get("name") or base.get("dish_name") or "",
+        "description":       candidate.get("name") or base.get("description") or "",
+        "estimated_portion": base.get("estimated_portion", ""),
+        "portion_reasoning": base.get("portion_reasoning", ""),
+        "ingredients":       base.get("ingredients", []),
+        "allergen_flags":    base.get("allergen_flags", []),
+        "crohn_flags":       base.get("crohn_flags", []),
+        "nutrition": {
+            "calories":  float(candidate.get("calories")  or 0),
+            "protein_g": float(candidate.get("protein_g") or 0),
+            "carbs_g":   float(candidate.get("carbs_g")   or 0),
+            "fat_g":     float(candidate.get("fat_g")     or 0),
+            "fiber_g":   float(base.get("nutrition", {}).get("fiber_g") or 0),
+            "sugar_g":   float(base.get("nutrition", {}).get("sugar_g") or 0),
+        },
+        "glycemic_index":     base.get("glycemic_index", {}),
+        "overall_assessment": base.get("overall_assessment", ""),
+    }
+
+
 # Hard cap on user-supplied description length sent to GPT-4o. Anything longer
 # is truncated (with a "…" marker) so a malicious user can't blow the prompt
 # token budget. ~500 chars is well above any realistic meal description.
@@ -48,6 +134,7 @@ def analyze_photo(
     image_bytes: bytes,
     retry_prompt: str | None = None,
     health_addendum: str = "",
+    personalization_addendum: str = "",
 ) -> tuple[dict, str]:
     """Analyze a food photo. Returns (parsed_dict, raw_response_text).
 
@@ -55,6 +142,9 @@ def analyze_photo(
     If retry_prompt is provided (for recalculate), it's appended as an extra instruction.
     If ``health_addendum`` is non-empty, it is appended to the system prompt so
     the model has the user's allergens + chronic-condition context (F-1).
+    If ``personalization_addendum`` is non-empty (F-7), it's appended after the
+    health context so the model sees the user's recent meal patterns and can
+    anchor portion estimates on their usual amounts.
     """
     b64 = base64.b64encode(image_bytes).decode("ascii")
     client = _get_client()
@@ -66,6 +156,8 @@ def analyze_photo(
     system_prompt = ANALYSIS_SYSTEM_PROMPT
     if health_addendum:
         system_prompt = f"{system_prompt}\n\n{health_addendum}"
+    if personalization_addendum:
+        system_prompt = f"{system_prompt}\n\n{personalization_addendum}"
 
     messages = [
         {"role": "system", "content": system_prompt},
@@ -111,11 +203,13 @@ def analyze_text(
     description: str,
     retry_prompt: str | None = None,
     health_addendum: str = "",
+    personalization_addendum: str = "",
 ) -> tuple[dict, str]:
     """Analyze a user's free-text description of a meal.
 
     Returns (parsed_dict, raw_response_text) with the same JSON schema as analyze_photo.
-    See ``analyze_photo`` for ``health_addendum`` semantics.
+    See ``analyze_photo`` for ``health_addendum`` and ``personalization_addendum``
+    semantics.
     """
     client = _get_client()
 
@@ -137,6 +231,8 @@ def analyze_text(
     system_prompt = ANALYSIS_SYSTEM_PROMPT
     if health_addendum:
         system_prompt = f"{system_prompt}\n\n{health_addendum}"
+    if personalization_addendum:
+        system_prompt = f"{system_prompt}\n\n{personalization_addendum}"
 
     messages = [
         {"role": "system", "content": system_prompt},

@@ -184,6 +184,26 @@ def cancel_only_keyboard() -> dict:
     }
 
 
+def alternates_keyboard(candidates: list[dict]) -> dict:
+    """F-6: 1-3 numbered candidate buttons + manual + cancel.
+
+    Each button label fits Telegram's ~64-char inline-button limit; we trim
+    long candidate names. Callback data is ``pick:0/1/2``.
+    """
+    digits = ("1⃣", "2⃣", "3⃣")  # 1️⃣ 2️⃣ 3️⃣
+    rows = []
+    for i, cand in enumerate(candidates[:3]):
+        name = (cand.get("name") or "")[:32]
+        kcal = int(round(float(cand.get("calories") or 0)))
+        rows.append([{
+            "text": f"{digits[i]} {name} ({kcal} ккал)",
+            "callback_data": f"pick:{i}",
+        }])
+    rows.append([{"text": "✏️ Ввести вручну", "callback_data": "mod:manual"}])
+    rows.append([{"text": "❌ Скасувати",     "callback_data": "mod:cancel"}])
+    return {"inline_keyboard": rows}
+
+
 def meals_list_keyboard(meals: list[dict]) -> dict:
     """Build inline keyboard with Delete/Edit buttons for each meal."""
     rows = []
@@ -401,10 +421,28 @@ def profile_edit_keyboard() -> dict:
             ],
             [
                 {"text": "🏁 Цільова вага", "callback_data": "prof:target_weight"},
-                {"text": "💧 Ціль води", "callback_data": "prof:water"},
+                {"text": "📈 Тижнева ціль", "callback_data": "prof:weekly_delta"},
             ],
             [
+                {"text": "💧 Ціль води", "callback_data": "prof:water"},
                 {"text": "✏️ Все спочатку", "callback_data": "onb:restart"},
+            ],
+        ]
+    }
+
+
+def goals_edit_keyboard(has_target: bool, has_delta: bool) -> dict:
+    """Inline edit buttons shown under the /goals message."""
+    target_label = "🏁 Змінити ціль" if has_target else "🏁 Поставити ціль"
+    delta_label  = "📈 Змінити темп"  if has_delta  else "📈 Поставити темп"
+    return {
+        "inline_keyboard": [
+            [
+                {"text": target_label, "callback_data": "prof:target_weight"},
+                {"text": delta_label,  "callback_data": "prof:weekly_delta"},
+            ],
+            [
+                {"text": "⚖️ Записати вагу", "callback_data": "prof:weight"},
             ],
         ]
     }

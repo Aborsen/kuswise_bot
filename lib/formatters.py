@@ -509,6 +509,8 @@ def help_message() -> str:
         "/today — прогрес за сьогодні\n"
         "/yesterday — вчорашній день\n"
         "/streak — 🔥 серія логів і заморозки\n"
+        "/goals — 🎯 цілі та прогноз досягнення\n"
+        "/aliases — 📚 твої звичні страви (бот вчиться)\n"
         "/meals — список страв (видалити / змінити)\n"
         "/fav — ⭐ улюблені страви\n"
         "/recent — 🕘 останні страви (швидкий повтор)\n"
@@ -604,6 +606,168 @@ def format_today_progress(
         f"Залишилось: ~{round(remaining)} ккал\n\n"
         f"<i>{quip}</i>"
     )
+
+
+def format_goals(
+    profile: dict | None,
+    projection,                 # lib.goals.Projection (avoid circular import)
+    actual_weekly_delta: float | None = None,
+    status: str | None = None,  # "ahead" | "on_track" | "behind"
+    first_name: str | None = None,
+) -> str:
+    """Render the /goals command response.
+
+    ``projection`` is a :class:`lib.goals.Projection` dataclass. ``status`` and
+    ``actual_weekly_delta`` come from comparing recent weight history against
+    the target rate; pass None when there's not enough data.
+    """
+    name = _name_or_default(first_name)
+    if not profile:
+        return GOALS_NO_PROFILE
+
+    current = profile.get("weight_kg")
+    target = profile.get("target_weight_kg")
+    goal = profile.get("goal") or "maintain"
+    weekly_delta = projection.weekly_delta_kg
+
+    lines = [
+        GOALS_HEADER.format(name=name),
+        "━━━━━━━━━━━━━━━━━━━━━",
+    ]
+    if current is not None:
+        lines.append(f"⚖️ Поточна вага: <b>{float(current):.1f} кг</b>")
+    if target is not None:
+        lines.append(f"🏁 Ціль: <b>{float(target):.1f} кг</b>")
+    else:
+        lines.append("🏁 Ціль: <i>не задана</i>")
+
+    if goal == "maintain":
+        lines.append("🎯 Мета: <b>Підтримувати вагу</b>")
+    elif weekly_delta:
+        lines.append(f"📈 Тижнева ціль: <b>{weekly_delta:+.2f} кг/тиждень</b>")
+    else:
+        lines.append("📈 Тижнева ціль: <i>не задана</i>")
+
+    # Projection block.
+    lines.append("━━━━━━━━━━━━━━━━━━━━━")
+    if projection.reason == "ok":
+        weeks = projection.weeks_to_goal or 0
+        d = projection.projected_date
+        date_str = f"{d.day:02d}.{d.month:02d}.{d.year}" if d else "—"
+        lines.append(f"⏳ Орієнтовно <b>{weeks:g}</b> тижнів до цілі")
+        lines.append(f"📅 Прогноз: <b>{date_str}</b>")
+    elif projection.reason == "at_target":
+        lines.append(GOALS_PROJECTION_AT_TARGET)
+    elif projection.reason == "no_target":
+        lines.append(GOALS_NO_TARGET)
+    elif projection.reason == "zero_delta":
+        lines.append(GOALS_PROJECTION_ZERO_DELTA)
+    elif projection.reason == "wrong_direction":
+        lines.append(GOALS_PROJECTION_WRONG_DIRECTION)
+    elif projection.reason == "no_current":
+        lines.append("⚖️ Поточна вага не задана. Запиши через /profile.")
+
+    # Status from actual progress (when available).
+    if status == "ahead":
+        lines.append(GOALS_STATUS_AHEAD)
+    elif status == "on_track":
+        lines.append(GOALS_STATUS_ON_TRACK)
+    elif status == "behind":
+        lines.append(GOALS_STATUS_BEHIND)
+    if actual_weekly_delta is not None:
+        lines.append(f"<i>Фактично за останні тижні: {actual_weekly_delta:+.2f} кг/тиждень</i>")
+
+    return "\n".join(lines)
+
+
+def format_projection_line(projection, status: str | None = None) -> str | None:
+    """One-line projection summary for the Monday weigh-in reply.
+
+    Returns None when projection isn't meaningful (no target, maintain, etc.) —
+    callers omit the line entirely in that case rather than pad noise.
+    """
+    if projection.reason != "ok":
+        return None
+    d = projection.projected_date
+    if d is None:
+        return None
+    date_str = f"{d.day:02d}.{d.month:02d}.{d.year}"
+    weeks = projection.weeks_to_goal or 0
+    head = ""
+    if status == "ahead":
+        head = "🟢 Випереджаєш план — "
+    elif status == "behind":
+        head = "🔴 Відстаєш — "
+    elif status == "on_track":
+        head = "🟡 В графіку — "
+    return f"{head}прогноз цілі: <b>{date_str}</b> (~{weeks:g} тижнів)"
+
+
+def format_aliases(aliases: list[dict], first_name: str | None = None) -> str:
+    """F-7: render the /aliases command response.
+
+    ``aliases`` is the list returned by :func:`lib.personalization.recent_aliases`.
+    Empty list → friendly placeholder explaining how the bot learns.
+    """
+    name = _name_or_default(first_name)
+    if not aliases:
+        return (
+            f"📚 <b>Твої страви</b> · {name}\n"
+            f"━━━━━━━━━━━━━━━━━━━━━\n"
+            f"Поки нічого не накопичено. Бот вчиться з прийнятих страв — "
+            f"наступного разу, коли логуватимеш «куряча грудка», запам'ятає твою "
+            f"звичну порцію.\n\n"
+            f"<i>Допомагає вгадувати грами точніше після ~5 повторень одного блюда.</i>"
+        )
+    lines = [
+        f"📚 <b>Твої страви</b> · {name}",
+        "━━━━━━━━━━━━━━━━━━━━━",
+        "Бот використовує ці звичні порції щоб точніше оцінювати фото.",
+        "",
+    ]
+    for a in aliases[:12]:
+        kcal = int(round(float(a.get("default_kcal") or 0)))
+        grams = float(a.get("default_grams") or 0)
+        portion_txt = f"~{int(round(grams))}г · " if grams > 0 else ""
+        samples = int(a.get("sample_count") or 0)
+        sample_tag = f" <i>({samples}×)</i>" if samples > 1 else ""
+        lines.append(
+            f"• <b>{a.get('normalized_name', a.get('alias', ''))}</b> — "
+            f"{portion_txt}{kcal} ккал{sample_tag}"
+        )
+    if len(aliases) > 12:
+        lines.append(f"<i>…ще {len(aliases) - 12}</i>")
+    return "\n".join(lines)
+
+
+def format_alternates_intro(meal_type: str, candidates: list[dict]) -> str:
+    """F-6: header shown above the alternates keyboard when the photo is ambiguous.
+
+    Lists the candidates as a quick legend so the user can compare numbers
+    before tapping a button.
+    """
+    meal_label_map = {
+        "breakfast": "Сніданок", "lunch": "Обід", "dinner": "Вечеря",
+        "snack": "Перекус", "other": "Прийом їжі",
+    }
+    label = meal_label_map.get(meal_type, "Прийом їжі")
+    lines = [
+        f"🤔 <b>Не на 100% впевнений у стравi ({label})</b>",
+        "Обери правильний варіант або введи вручну:",
+        "",
+    ]
+    digits = ("1⃣", "2⃣", "3⃣")
+    for i, c in enumerate(candidates[:3]):
+        kcal = int(round(float(c.get("calories")  or 0)))
+        p    = int(round(float(c.get("protein_g") or 0)))
+        cb   = int(round(float(c.get("carbs_g")   or 0)))
+        f    = int(round(float(c.get("fat_g")     or 0)))
+        conf = int(round(float(c.get("confidence") or 0) * 100))
+        lines.append(
+            f"{digits[i]} <b>{c.get('name','')}</b> · {kcal} ккал · "
+            f"Б{p} Ж{f} В{cb} · ~{conf}%"
+        )
+    return "\n".join(lines)
 
 
 def format_streak_summary(streak: dict | None, first_name: str | None = None) -> str:
@@ -816,6 +980,51 @@ TARGET_WEIGHT_LOSE_MISMATCH = "Ціль схуднення, але цільов�
 TARGET_WEIGHT_GAIN_MISMATCH = "Ціль набору, але цільова вага ≤ поточної ({current} кг). Напиши більшу цифру або зміни мету через /profile."
 TARGET_WEIGHT_SAVED = "🎯 Цільова вага: <b>{target} кг</b>."
 TARGET_WEIGHT_CLEARED = "🎯 Для мети «Підтримувати вагу» цільова вага не потрібна — очистив."
+
+# F-5: weekly delta + goals dashboard strings
+WEEKLY_DELTA_ASK_LOSE = (
+    "📈 <b>Скільки кг на тиждень хочеш скидати?</b>\n"
+    "Напиши число — наприклад: <code>0.5</code> (повільне зниження) "
+    "або <code>1</code> (агресивне).\n\n"
+    "<i>Безпечний діапазон для більшості людей — 0.3-1.0 кг/тиждень.</i>"
+)
+WEEKLY_DELTA_ASK_GAIN = (
+    "📈 <b>Скільки кг на тиждень хочеш набирати?</b>\n"
+    "Напиши число — наприклад: <code>0.3</code> (чистий ріст м'язів) "
+    "або <code>0.5</code> (з невеликим жиром).\n\n"
+    "<i>Безпечний діапазон — 0.2-0.5 кг/тиждень.</i>"
+)
+WEEKLY_DELTA_INVALID = (
+    "Тижнева дельта має бути числом від 0.1 до 2 кг. Спробуй ще раз 🙂"
+)
+WEEKLY_DELTA_WRONG_SIGN = (
+    "Знак не збігається з твоєю метою. Напиши додатне число — я сам "
+    "зроблю мінус для схуднення / плюс для набору."
+)
+WEEKLY_DELTA_SAVED = "📈 Тижнева ціль: <b>{delta:+.2f} кг/тиждень</b>."
+WEEKLY_DELTA_NOT_FOR_MAINTAIN = (
+    "Для мети «Підтримувати вагу» тижнева дельта не потрібна — пропускаю."
+)
+
+GOALS_HEADER = "🎯 <b>Цілі</b> · {name}"
+GOALS_NO_PROFILE = (
+    "Ще не пройшов онбординг. Натисни /start, я задам кілька питань — "
+    "після цього /goals покаже план."
+)
+GOALS_NO_TARGET = (
+    "Цільова вага не задана. Постав її через /profile → 🏁 Цільова вага."
+)
+GOALS_PROJECTION_AT_TARGET = "🎉 Ти вже на цільовій вазі! Тримай темп."
+GOALS_PROJECTION_ZERO_DELTA = (
+    "Тижнева дельта = 0 — постав ціль через /goals → 📈 Тижнева ціль."
+)
+GOALS_PROJECTION_WRONG_DIRECTION = (
+    "Тижнева дельта спрямована не туди — наприклад, мета «схуднути», "
+    "але ти задав плюс. Поправ через /goals → 📈 Тижнева ціль."
+)
+GOALS_STATUS_AHEAD    = "🟢 Випереджаєш план"
+GOALS_STATUS_ON_TRACK = "🟡 У графіку"
+GOALS_STATUS_BEHIND   = "🔴 Відстаєш від плану"
 
 # --- Reply-keyboard button labels (must match the strings used in main_menu_keyboard) ---
 # When a user taps one of these buttons, Telegram sends its label as a message.

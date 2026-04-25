@@ -73,6 +73,7 @@ from lib.telegram_helpers import (
     send_chat_action,
     meal_type_keyboard,
     moderation_keyboard,
+    alternates_keyboard,
     meals_list_keyboard,
     main_menu_keyboard,
     dashboard_inline_keyboard,
@@ -83,6 +84,7 @@ from lib.telegram_helpers import (
     confirm_calories_keyboard,
     profile_edit_keyboard,
     profile_goal_keyboard,
+    goals_edit_keyboard,
     cancel_only_keyboard,
     recent_meals_keyboard,
     meal_logged_actions_keyboard,
@@ -93,7 +95,13 @@ from lib.telegram_helpers import (
     health_menu_keyboard,
     language_keyboard,
 )
-from lib.openai_vision import analyze_photo, analyze_text
+from lib.openai_vision import (
+    analyze_photo,
+    analyze_text,
+    normalize_candidates,
+    is_ambiguous,
+    candidate_to_analysis,
+)
 from lib.openai_voice import transcribe_voice
 from lib.openai_nutrition import suggest_meal
 from lib.openai_chat import ask_chat
@@ -108,6 +116,8 @@ from lib.formatters import (
     format_day_detail,
     format_meal_logged,
     format_meal_preview,
+    format_alternates_intro,
+    format_aliases,
     format_meals_list,
     format_profile,
     format_recommendation,
@@ -184,6 +194,15 @@ from lib.formatters import (
     TARGET_WEIGHT_GAIN_MISMATCH,
     TARGET_WEIGHT_SAVED,
     TARGET_WEIGHT_CLEARED,
+    WEEKLY_DELTA_ASK_LOSE,
+    WEEKLY_DELTA_ASK_GAIN,
+    WEEKLY_DELTA_INVALID,
+    WEEKLY_DELTA_WRONG_SIGN,
+    WEEKLY_DELTA_SAVED,
+    WEEKLY_DELTA_NOT_FOR_MAINTAIN,
+    GOALS_NO_PROFILE,
+    format_goals,
+    format_projection_line,
     ONBOARDING_ASK_TZ,
     ONBOARDING_TZ_CUSTOM_PROMPT,
     ONBOARDING_TZ_INVALID,
@@ -202,7 +221,10 @@ from lib.database import (
     clear_health_profile,
     get_streak,
     update_streak_for_meal,
+    get_weight_history,
 )
+from lib import goals as goals_mod
+from lib import personalization as personalization_mod
 from lib.health import (
     ALLERGENS as HEALTH_ALLERGENS,
     CONDITIONS as HEALTH_CONDITIONS,
@@ -476,6 +498,16 @@ def process_update(update: dict) -> None:
             and text.lower().strip() != "/cancel"
         ):
             handle_target_weight_input(conn, chat_id, user_id, text, profile)
+            return
+
+        # F-5: weekly delta input (kg/week target).
+        if (
+            user_id
+            and profile
+            and profile.get("awaiting_input_type") == "weekly_delta"
+            and text.lower().strip() != "/cancel"
+        ):
+            handle_weekly_delta_input(conn, chat_id, user_id, text, profile)
             return
 
         # Free-text IANA timezone from /timezone → ✏️ Інша зона.
@@ -1141,6 +1173,8 @@ def handle_callback(conn, cb: dict) -> None:
         handle_meal_type_callback(conn, cb, profile)
     elif data.startswith("mod:"):
         handle_moderation_callback(conn, cb, profile)
+    elif data.startswith("pick:"):
+        handle_alternates_pick(conn, cb, profile)
     elif data.startswith("meal_del:") or data.startswith("meal_edit:"):
         handle_meal_manage_callback(conn, cb)
     elif data.startswith("fav:"):
@@ -1197,6 +1231,11 @@ def handle_meal_type_callback(conn, cb: dict, profile: dict) -> None:
     send_message(chat_id, ANALYZING_WAIT)
 
     health_ctx = addendum_for_profile(get_health_profile(conn, user_id))
+    personal_ctx = ""
+    try:
+        personal_ctx = personalization_mod.aliases_prompt_block(conn, user_id)
+    except Exception as _px:
+        error("personalization_prompt_failed", exc=_px, user_id=user_id)
     analysis, raw = None, ""
     try:
         if file_id:
@@ -1206,9 +1245,17 @@ def handle_meal_type_callback(conn, cb: dict, profile: dict) -> None:
                 print("getFile error:", e, flush=True)
                 send_message(chat_id, PHOTO_DOWNLOAD_FAILED)
                 return
-            analysis, raw = analyze_photo(image_bytes, health_addendum=health_ctx)
+            analysis, raw = analyze_photo(
+                image_bytes,
+                health_addendum=health_ctx,
+                personalization_addendum=personal_ctx,
+            )
         elif text_description:
-            analysis, raw = analyze_text(text_description, health_addendum=health_ctx)
+            analysis, raw = analyze_text(
+                text_description,
+                health_addendum=health_ctx,
+                personalization_addendum=personal_ctx,
+            )
         else:
             send_message(chat_id, PENDING_EXPIRED)
             return
@@ -1217,8 +1264,49 @@ def handle_meal_type_callback(conn, cb: dict, profile: dict) -> None:
         send_message(chat_id, TEXT_ANALYSIS_FAILED if text_description else PHOTO_ANALYSIS_FAILED)
         return
 
-    save_pending_analysis(conn, user_id, meal_type, analysis, file_id, text_description, raw)
-    send_message(chat_id, format_meal_preview(meal_type, analysis), reply_markup=moderation_keyboard())
+    _send_analysis_preview(
+        conn, chat_id, user_id, meal_type, analysis,
+        photo_file_id=file_id, text_description=text_description, raw=raw,
+    )
+
+
+def _send_analysis_preview(
+    conn,
+    chat_id: int,
+    user_id: int,
+    meal_type: str,
+    analysis: dict,
+    photo_file_id: str | None,
+    text_description: str | None,
+    raw: str,
+) -> None:
+    """F-6: dispatch to alternates picker (when ambiguous) or normal preview.
+
+    Single source of truth for "show the user what we got and ask them to
+    confirm". Persists pending state in either branch so the moderation /
+    pick callbacks can find it.
+    """
+    candidates = normalize_candidates(analysis)
+    if is_ambiguous(candidates):
+        save_pending_analysis(
+            conn, user_id, meal_type, analysis,
+            photo_file_id, text_description, raw, candidates=candidates,
+        )
+        send_message(
+            chat_id,
+            format_alternates_intro(meal_type, candidates),
+            reply_markup=alternates_keyboard(candidates),
+        )
+        return
+    save_pending_analysis(
+        conn, user_id, meal_type, analysis,
+        photo_file_id, text_description, raw,
+    )
+    send_message(
+        chat_id,
+        format_meal_preview(meal_type, analysis),
+        reply_markup=moderation_keyboard(),
+    )
 
 
 # ---------- Moderation: Accept / Recalculate / Manual ----------
@@ -1245,6 +1333,11 @@ def handle_moderation_callback(conn, cb: dict, profile: dict) -> None:
             update_streak_for_meal(conn, user_id, today_str_user(profile))
         except Exception as _streak_exc:  # never break the meal-save UX
             error("streak_update_failed", exc=_streak_exc, user_id=user_id)
+        # F-7: EWMA-update the user's "usual" portion for this dish.
+        try:
+            personalization_mod.upsert_alias_from_meal(conn, user_id, analysis)
+        except Exception as _alias_exc:
+            error("upsert_alias_failed", exc=_alias_exc, user_id=user_id)
         today_log = get_today_log(conn, user_id)
         cal_target = profile.get("daily_calorie_target") or 2000
         send_message(
@@ -1264,6 +1357,11 @@ def handle_moderation_callback(conn, cb: dict, profile: dict) -> None:
         send_message(chat_id, RECALC_WAIT)
 
         health_ctx = addendum_for_profile(get_health_profile(conn, user_id))
+        personal_ctx = ""
+        try:
+            personal_ctx = personalization_mod.aliases_prompt_block(conn, user_id)
+        except Exception as _px:
+            error("personalization_prompt_failed", exc=_px, user_id=user_id)
         try:
             if pending["photo_file_id"]:
                 image_bytes = get_file_bytes(pending["photo_file_id"])
@@ -1271,12 +1369,14 @@ def handle_moderation_callback(conn, cb: dict, profile: dict) -> None:
                     image_bytes,
                     retry_prompt=RECALC_PROMPT,
                     health_addendum=health_ctx,
+                    personalization_addendum=personal_ctx,
                 )
             elif pending["text_description"]:
                 analysis, raw = analyze_text(
                     pending["text_description"],
                     retry_prompt=RECALC_PROMPT,
                     health_addendum=health_ctx,
+                    personalization_addendum=personal_ctx,
                 )
             else:
                 send_message(chat_id, PENDING_EXPIRED)
@@ -1286,8 +1386,26 @@ def handle_moderation_callback(conn, cb: dict, profile: dict) -> None:
             send_message(chat_id, PHOTO_ANALYSIS_FAILED)
             return
 
-        save_pending_analysis(conn, user_id, pending["meal_type"], analysis, pending["photo_file_id"], pending["text_description"], raw)
-        send_message(chat_id, format_meal_preview(pending["meal_type"], analysis), reply_markup=moderation_keyboard())
+        # F-7: recalc that produced a *meaningfully different* analysis IS a
+        # correction. Skip recording when the model returned the same numbers.
+        try:
+            original = pending.get("analysis") or {}
+            old_kcal = float((original.get("nutrition") or {}).get("calories") or 0)
+            new_kcal = float((analysis.get("nutrition")  or {}).get("calories") or 0)
+            if original and abs(new_kcal - old_kcal) > max(20.0, 0.05 * old_kcal):
+                personalization_mod.record_correction(
+                    conn, user_id, source="recalc",
+                    original=original, corrected=analysis,
+                )
+        except Exception as _cx:
+            error("record_correction_failed", exc=_cx, user_id=user_id)
+
+        _send_analysis_preview(
+            conn, chat_id, user_id, pending["meal_type"], analysis,
+            photo_file_id=pending["photo_file_id"],
+            text_description=pending["text_description"],
+            raw=raw,
+        )
 
     elif action == "manual":
         answer_callback_query(cb_id, "✏️ Чекаю на текст")
@@ -1315,15 +1433,103 @@ def handle_manual_text_input(conn, message: dict, text: str, pending: dict, prof
     send_message(chat_id, ANALYZING_WAIT)
 
     health_ctx = addendum_for_profile(get_health_profile(conn, user_id))
+    personal_ctx = ""
     try:
-        analysis, raw = analyze_text(text, health_addendum=health_ctx)
+        personal_ctx = personalization_mod.aliases_prompt_block(conn, user_id)
+    except Exception as _px:
+        error("personalization_prompt_failed", exc=_px, user_id=user_id)
+    try:
+        analysis, raw = analyze_text(
+            text,
+            health_addendum=health_ctx,
+            personalization_addendum=personal_ctx,
+        )
     except Exception as e:
         print("manual text analysis error:", e, flush=True)
         send_message(chat_id, TEXT_ANALYSIS_FAILED)
         return
 
-    save_pending_analysis(conn, user_id, pending["meal_type"], analysis, pending["photo_file_id"], text, raw)
-    send_message(chat_id, format_meal_preview(pending["meal_type"], analysis), reply_markup=moderation_keyboard())
+    # F-7: a manual text override after a photo IS a correction. Record it
+    # for the audit trail + future alias derivation.
+    try:
+        original = pending.get("analysis") or {}
+        if original:  # only record when there was a previous analysis to correct
+            personalization_mod.record_correction(
+                conn, user_id, source="manual",
+                original=original, corrected=analysis,
+            )
+    except Exception as _cx:
+        error("record_correction_failed", exc=_cx, user_id=user_id)
+
+    _send_analysis_preview(
+        conn, chat_id, user_id, pending["meal_type"], analysis,
+        photo_file_id=pending["photo_file_id"],
+        text_description=text,
+        raw=raw,
+    )
+
+
+def handle_alternates_pick(conn, cb: dict, profile: dict) -> None:
+    """F-6: user tapped one of the 1-3 numbered alternate buttons.
+
+    Behaviour:
+      1. Pull the chosen ``top_guesses`` candidate from ``pending.candidates``.
+      2. Promote it to a full analysis dict (inheriting ingredients/portion
+         from the original whenever the picked candidate is the top guess).
+      3. Save it as the new pending analysis WITHOUT the candidates list, so
+         subsequent moderation taps see a normal single-result preview.
+      4. Send the standard meal preview + moderation keyboard.
+    """
+    cb_id = cb["id"]
+    user_id = cb["from"]["id"]
+    message = cb.get("message", {})
+    chat_id = message.get("chat", {}).get("id", user_id)
+
+    try:
+        idx = int(cb["data"].split(":", 1)[1])
+    except (ValueError, IndexError):
+        answer_callback_query(cb_id, "Невідомий варіант")
+        return
+
+    pending = get_pending_analysis(conn, user_id)
+    if not pending:
+        answer_callback_query(cb_id)
+        send_message(chat_id, PENDING_EXPIRED)
+        return
+
+    candidates = pending.get("candidates") or []
+    if idx < 0 or idx >= len(candidates):
+        answer_callback_query(cb_id, "Варіант недоступний")
+        return
+
+    chosen = candidates[idx]
+    answer_callback_query(cb_id, f"✓ {chosen.get('name', '')[:40]}")
+
+    new_analysis = candidate_to_analysis(chosen, base=pending.get("analysis"))
+
+    # F-7: picking a non-top alternate is a correction signal — the model's
+    # top guess was wrong. idx == 0 means the top stays; skip recording.
+    if idx > 0:
+        try:
+            personalization_mod.record_correction(
+                conn, user_id, source="pick_alt",
+                original=pending.get("analysis") or {}, corrected=new_analysis,
+            )
+        except Exception as _cx:
+            error("record_correction_failed", exc=_cx, user_id=user_id)
+
+    save_pending_analysis(
+        conn, user_id, pending["meal_type"], new_analysis,
+        pending.get("photo_file_id"), pending.get("text_description"),
+        pending.get("raw_response", ""),
+        # Drop candidates so the next "Прийняти" goes through the normal path.
+        candidates=None,
+    )
+    send_message(
+        chat_id,
+        format_meal_preview(pending["meal_type"], new_analysis),
+        reply_markup=moderation_keyboard(),
+    )
 
 
 # ---------- Meal management: Delete / Edit ----------
@@ -1414,6 +1620,49 @@ def handle_command(conn, message: dict, text: str, first_name: str | None, profi
             chat_id,
             format_streak_summary(streak_row, first_name),
             reply_markup=main_menu_keyboard(),
+        )
+        return
+
+    # F-7: user's learned food aliases (read-only view; auto-built from accepted meals).
+    if cmd == "/aliases":
+        try:
+            aliases = personalization_mod.recent_aliases(conn, user_id, limit=20)
+        except Exception as _ax:
+            error("aliases_fetch_failed", exc=_ax, user_id=user_id)
+            aliases = []
+        send_message(
+            chat_id,
+            format_aliases(aliases, first_name),
+            reply_markup=main_menu_keyboard(),
+        )
+        return
+
+    # F-5: dedicated goals view + weekly-delta editor.
+    if cmd == "/goals":
+        if not profile:
+            send_message(chat_id, GOALS_NO_PROFILE)
+            return
+        projection = goals_mod.projection_for_profile(profile)
+        # Compute actual weekly delta from recent weight history (best-effort).
+        actual = None
+        status = None
+        try:
+            history = get_weight_history(conn, user_id, limit=20)
+            actual = goals_mod.actual_weekly_delta(history, window_weeks=4)
+            if actual is not None:
+                status = goals_mod.classify_actual_vs_target(
+                    actual, projection.weekly_delta_kg
+                )
+        except Exception as _gx:  # never block /goals on history fetch
+            error("goals_history_failed", exc=_gx, user_id=user_id)
+        send_message(
+            chat_id,
+            format_goals(profile, projection, actual_weekly_delta=actual,
+                         status=status, first_name=first_name),
+            reply_markup=goals_edit_keyboard(
+                has_target=bool(profile.get("target_weight_kg")),
+                has_delta=profile.get("weekly_delta_kg") is not None,
+            ),
         )
         return
 
@@ -1883,13 +2132,38 @@ def handle_weight_input(
     result = _apply_new_weight(conn, user_id, float(new_weight), goal, source)
     set_awaiting_input(conn, user_id, None)
 
+    body = _weight_change_reply(
+        float(new_weight), old_weight,
+        result["calories"], result["macros"],
+        goal=goal, target_weight=target_weight,
+    )
+
+    # F-5: append a one-line projection / on-track-ness summary when meaningful.
+    try:
+        # `profile` is stale (still has old weight); patch the new weight in
+        # so projection_for_profile uses the freshly-saved value.
+        live_profile = {**profile, "weight_kg": float(new_weight)}
+        projection = goals_mod.projection_for_profile(live_profile)
+        actual = None
+        status = None
+        try:
+            history = get_weight_history(conn, user_id, limit=20)
+            actual = goals_mod.actual_weekly_delta(history, window_weeks=4)
+            if actual is not None:
+                status = goals_mod.classify_actual_vs_target(
+                    actual, projection.weekly_delta_kg
+                )
+        except Exception as _hx:
+            error("goals_history_failed", exc=_hx, user_id=user_id)
+        line = format_projection_line(projection, status=status)
+        if line:
+            body = body + "\n" + line
+    except Exception as _px:
+        error("goals_projection_failed", exc=_px, user_id=user_id)
+
     send_message(
         chat_id,
-        _weight_change_reply(
-            float(new_weight), old_weight,
-            result["calories"], result["macros"],
-            goal=goal, target_weight=target_weight,
-        ),
+        body,
         reply_markup=main_menu_keyboard(),
     )
 
@@ -1965,6 +2239,59 @@ def handle_target_weight_input(
     )
 
 
+def handle_weekly_delta_input(
+    conn,
+    chat_id: int,
+    user_id: int,
+    text: str,
+    profile: dict,
+) -> None:
+    """Process a weekly_delta_kg reply from the /goals (or /profile) edit flow.
+
+    The user types an unsigned magnitude (e.g. "0.5"); we sign it based on the
+    profile's goal direction so they don't have to think about minus signs.
+    """
+    cleaned = text.strip().replace(",", ".")
+    if cleaned.lower() in ("/skip", "skip", "/cancel", "cancel"):
+        set_awaiting_input(conn, user_id, None)
+        send_message(chat_id, "👌 Скасовано.", reply_markup=main_menu_keyboard())
+        return
+
+    raw = _parse_float(cleaned)
+    if raw is None:
+        send_message(chat_id, WEEKLY_DELTA_INVALID)
+        return
+
+    magnitude = abs(raw)
+    if not (0.1 <= magnitude <= 2.0):
+        send_message(chat_id, WEEKLY_DELTA_INVALID)
+        return
+
+    goal = profile.get("goal") or "maintain"
+    if goal == "maintain":
+        send_message(chat_id, WEEKLY_DELTA_NOT_FOR_MAINTAIN, reply_markup=main_menu_keyboard())
+        set_awaiting_input(conn, user_id, None)
+        return
+
+    # If the user typed a signed number that disagrees with their goal direction,
+    # let them know rather than silently flipping the sign.
+    if raw < 0 and goal == "gain":
+        send_message(chat_id, WEEKLY_DELTA_WRONG_SIGN)
+        return
+    if raw > 0 and goal == "lose":
+        send_message(chat_id, WEEKLY_DELTA_WRONG_SIGN)
+        return
+
+    signed = -magnitude if goal == "lose" else magnitude
+    update_profile(conn, user_id, weekly_delta_kg=float(signed))
+    set_awaiting_input(conn, user_id, None)
+    send_message(
+        chat_id,
+        WEEKLY_DELTA_SAVED.format(delta=signed),
+        reply_markup=main_menu_keyboard(),
+    )
+
+
 def handle_profile_edit_callback(conn, cb: dict, profile: dict) -> None:
     """Handle inline buttons from the /profile screen: weight / goal / water edit."""
     cb_id = cb["id"]
@@ -2031,6 +2358,21 @@ def handle_profile_edit_callback(conn, cb: dict, profile: dict) -> None:
         set_awaiting_input(conn, user_id, "target_weight")
         send_message(chat_id,
                      TARGET_WEIGHT_ASK_LOSE if goal == "lose" else TARGET_WEIGHT_ASK_GAIN)
+        return
+
+    # F-5: prof:weekly_delta → prompt for kg/week target.
+    if data == "prof:weekly_delta":
+        goal = profile.get("goal") or "maintain"
+        if goal == "maintain":
+            answer_callback_query(cb_id, "Для цієї мети не потрібна")
+            send_message(chat_id, WEEKLY_DELTA_NOT_FOR_MAINTAIN, reply_markup=main_menu_keyboard())
+            return
+        answer_callback_query(cb_id, "📈 Чекаю на число")
+        set_awaiting_input(conn, user_id, "weekly_delta")
+        send_message(
+            chat_id,
+            WEEKLY_DELTA_ASK_LOSE if goal == "lose" else WEEKLY_DELTA_ASK_GAIN,
+        )
         return
 
     # prof:water → show preset picker (reuses the existing water_goal_keyboard).

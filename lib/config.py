@@ -198,6 +198,28 @@ IMPORTANT for ingredients: Be SPECIFIC about types. Instead of "м'ясо" say "
 
 portion_reasoning MUST be present and non-empty.
 
+============================================================
+AMBIGUITY HANDLING — top_guesses (OPTIONAL)
+============================================================
+If the photo is genuinely ambiguous between multiple plausible dishes (e.g.
+a bowl that could be Caesar, Greek salad, OR pasta with cream sauce), include
+an OPTIONAL "top_guesses" array with up to 3 candidates ranked by confidence.
+
+- The first element MUST match the main dish_name + nutrition above (so the
+  default flow stays consistent when no ambiguity exists).
+- Include 2-3 candidates ONLY when there is real ambiguity. Skip the field
+  entirely when you're confident — DO NOT pad with low-confidence noise.
+- "confidence" is a float in [0, 1]. Sum of confidences should ≈ 1.0 across
+  candidates.
+- name should be in UKRAINIAN. Numeric fields are calories + macro grams.
+
+"top_guesses": [
+  {"name": "Цезар з куркою", "calories": 520, "protein_g": 35, "carbs_g": 30, "fat_g": 25, "confidence": 0.55},
+  {"name": "Грецький салат з куркою", "calories": 380, "protein_g": 30, "carbs_g": 18, "fat_g": 22, "confidence": 0.30},
+  {"name": "Паста з куркою у вершковому соусі", "calories": 610, "protein_g": 28, "carbs_g": 55, "fat_g": 28, "confidence": 0.15}
+]
+============================================================
+
 Return ONLY valid JSON, no markdown fences, no extra text.
 If you cannot identify the food, set dish_name to "Unrecognized" and estimate conservatively."""
 

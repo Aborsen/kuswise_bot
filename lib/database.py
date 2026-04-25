@@ -117,9 +117,15 @@ def init_db(conn=None, force: bool = False) -> None:
                 text_description TEXT,
                 raw_response TEXT,
                 awaiting_manual INTEGER DEFAULT 0,
-                created_at TEXT NOT NULL
+                created_at TEXT NOT NULL,
+                candidates_json TEXT
             )
         """)
+        # F-6: in-flight ambiguous-photo candidates list. NULL = unambiguous
+        # (use the standard preview flow). Backfilled on first init.
+        cur.execute(
+            "ALTER TABLE pending_analyses ADD COLUMN IF NOT EXISTS candidates_json TEXT"
+        )
         cur.execute("""
             CREATE TABLE IF NOT EXISTS chat_sessions (
                 id BIGSERIAL PRIMARY KEY,
@@ -188,6 +194,11 @@ def init_db(conn=None, force: bool = False) -> None:
         cur.execute(
             "ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS lang TEXT NOT NULL DEFAULT 'en'"
         )
+        # F-5: weekly weight-change goal in kg (negative for "lose", positive
+        # for "gain"). NULL = use sane defaults derived from goal direction.
+        cur.execute(
+            "ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS weekly_delta_kg DOUBLE PRECISION"
+        )
         cur.execute("""
             CREATE TABLE IF NOT EXISTS weight_history (
                 id BIGSERIAL PRIMARY KEY,
@@ -238,6 +249,40 @@ def init_db(conn=None, force: bool = False) -> None:
                 updated_at TEXT
             )
         """)
+        # F-7: audit trail of every analysis the user corrected (manual edit,
+        # recalc, picked alternate). Read by /aliases and aggregated into
+        # user_food_aliases below.
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS corrections (
+                id BIGSERIAL PRIMARY KEY,
+                user_id BIGINT NOT NULL,
+                source TEXT NOT NULL,
+                original_json TEXT NOT NULL,
+                corrected_json TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            )
+        """)
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_corrections_user_time "
+            "ON corrections(user_id, created_at DESC)"
+        )
+        # F-7: per-user food aliases. Maintained as an EWMA of recent accepted
+        # meals so the user's "usual" portion drifts with their habits.
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS user_food_aliases (
+                user_id BIGINT NOT NULL,
+                alias TEXT NOT NULL,
+                normalized_name TEXT NOT NULL,
+                default_grams DOUBLE PRECISION,
+                default_kcal DOUBLE PRECISION,
+                default_protein_g DOUBLE PRECISION,
+                default_fat_g DOUBLE PRECISION,
+                default_carbs_g DOUBLE PRECISION,
+                sample_count INTEGER NOT NULL DEFAULT 1,
+                updated_at TEXT,
+                PRIMARY KEY (user_id, alias)
+            )
+        """)
     conn.commit()
     _SCHEMA_INITIALISED = True
     if close_after:
@@ -266,7 +311,7 @@ PROFILE_COLUMNS = [
     "goal", "daily_calorie_target", "recommended_calorie_target",
     "onboarding_step", "created_at", "updated_at",
     "awaiting_input_type", "weekly_checkin_sent_at", "target_weight_kg",
-    "tz", "lang",
+    "tz", "lang", "weekly_delta_kg",
 ]
 
 
@@ -305,7 +350,7 @@ _ALLOWED_PROFILE_FIELDS = {
     "age", "sex", "weight_kg", "height_cm", "gym_per_week", "goal",
     "daily_calorie_target", "recommended_calorie_target", "onboarding_step",
     "awaiting_input_type", "weekly_checkin_sent_at", "target_weight_kg",
-    "tz", "lang",
+    "tz", "lang", "weekly_delta_kg",
 }
 
 
@@ -335,6 +380,7 @@ def delete_user_all_data(conn, user_id: int) -> bool:
             "daily_recommendations", "daily_logs", "meals", "user_profiles",
             "water_logs", "water_prefs", "weight_history",
             "usage_quota", "user_health_profile", "user_streaks",
+            "corrections", "user_food_aliases",
         ):
             cur.execute(f"DELETE FROM {table} WHERE user_id = %s", (user_id,))
         cur.execute("DELETE FROM users WHERE user_id = %s", (user_id,))
@@ -430,18 +476,27 @@ def save_pending_analysis(
     photo_file_id: Optional[str],
     text_description: Optional[str],
     raw_response: str,
+    candidates: Optional[list] = None,
 ) -> None:
     """Store an AI analysis for user review. One row per user (replaces previous).
+
+    ``candidates`` (F-6) is the optional top_guesses list when the photo is
+    ambiguous. NULL = use the standard moderation keyboard.
+
     DELETE + INSERT run in a single autocommit=False transaction so concurrent
-    callers can never see "deleted but not yet inserted" state."""
+    callers can never see "deleted but not yet inserted" state.
+    """
     try:
+        candidates_json = (
+            json.dumps(candidates, ensure_ascii=False) if candidates else None
+        )
         with conn.cursor() as cur:
             cur.execute("DELETE FROM pending_analyses WHERE user_id = %s", (user_id,))
             cur.execute(
                 """INSERT INTO pending_analyses
                    (user_id, meal_type, analysis_json, photo_file_id, text_description,
-                    raw_response, awaiting_manual, created_at)
-                   VALUES (%s, %s, %s, %s, %s, %s, 0, %s)""",
+                    raw_response, awaiting_manual, created_at, candidates_json)
+                   VALUES (%s, %s, %s, %s, %s, %s, 0, %s, %s)""",
                 (
                     user_id,
                     meal_type,
@@ -450,6 +505,7 @@ def save_pending_analysis(
                     text_description,
                     raw_response,
                     _now_iso(),
+                    candidates_json,
                 ),
             )
         conn.commit()
@@ -463,13 +519,19 @@ def get_pending_analysis(conn, user_id: int) -> Optional[dict]:
     with conn.cursor() as cur:
         cur.execute(
             """SELECT id, meal_type, analysis_json, photo_file_id, text_description,
-                      raw_response, awaiting_manual, created_at
+                      raw_response, awaiting_manual, created_at, candidates_json
                FROM pending_analyses WHERE user_id = %s ORDER BY id DESC LIMIT 1""",
             (user_id,),
         )
         row = cur.fetchone()
     if not row:
         return None
+    candidates = []
+    if row[8]:
+        try:
+            candidates = json.loads(row[8]) or []
+        except (TypeError, ValueError):
+            candidates = []
     return {
         "id": row[0],
         "meal_type": row[1],
@@ -479,6 +541,7 @@ def get_pending_analysis(conn, user_id: int) -> Optional[dict]:
         "raw_response": row[5],
         "awaiting_manual": bool(row[6]),
         "created_at": row[7],
+        "candidates": candidates,
     }
 
 

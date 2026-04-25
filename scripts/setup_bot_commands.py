@@ -36,6 +36,7 @@ except ImportError:
 COMMANDS: list[dict] = [
     {"command": "today",       "description": "📊 Прогрес за сьогодні"},
     {"command": "yesterday",   "description": "📆 Вчорашній день"},
+    {"command": "history",     "description": "📈 Історія за 7 днів"},
     {"command": "streak",      "description": "🔥 Серія логів і заморозки"},
     {"command": "goals",       "description": "🎯 Цілі та прогноз досягнення"},
     {"command": "recap",       "description": "📸 Тижнева PNG-картка"},
@@ -53,6 +54,7 @@ COMMANDS: list[dict] = [
     {"command": "language",    "description": "🌐 Мова інтерфейсу"},
     {"command": "timezone",    "description": "🕒 Часовий пояс"},
     {"command": "profile",     "description": "⚙️ Профіль (вага, ціль, вода)"},
+    {"command": "cancel",      "description": "❌ Скасувати поточну дію"},
     {"command": "help",        "description": "ℹ️ Допомога"},
     {"command": "start",       "description": "👋 Привітання + меню"},
 ]

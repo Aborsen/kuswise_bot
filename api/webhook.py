@@ -518,6 +518,9 @@ def process_update(update: dict) -> None:
                 BTN_SUGGEST: "/suggest_meal",
                 BTN_SCAN: "/scan",
                 BTN_MENU_OCR: "/menu",
+                # Legacy labels still on phones with stale reply keyboards.
+                "🔢 Сканер": "/scan",
+                "📋 Меню":    "/menu",
             }.get(text)
             if mapped:
                 handle_command(conn, message, mapped, first_name, profile)

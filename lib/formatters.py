@@ -1162,10 +1162,20 @@ BTN_PROFILE = "⚙️ Профіль"
 BTN_YESTERDAY = "📆 Вчора"
 BTN_MEALS = "📋 Мої страви"
 BTN_DASHBOARD = "📱 Dashboard"
-BTN_SCAN = "🔢 Сканер"
-BTN_MENU_OCR = "📋 Меню"
+BTN_SCAN = "🔢 Штрих Код"
+BTN_MENU_OCR = "📋 Скануй Меню"
 
-MENU_BUTTON_LABELS = {BTN_ASK, BTN_FAV, BTN_WATER, BTN_MEALS, BTN_SUGGEST, BTN_PROFILE, BTN_SCAN, BTN_MENU_OCR}
+# Legacy labels — kept in the lookup set so users whose phones still have the
+# OLD reply keyboard cached don't get a "I don't understand" reaction when
+# they tap. Removed in a follow-up once we're sure clients have refreshed.
+_LEGACY_BTN_SCAN = "🔢 Сканер"
+_LEGACY_BTN_MENU_OCR = "📋 Меню"
+
+MENU_BUTTON_LABELS = {
+    BTN_ASK, BTN_FAV, BTN_WATER, BTN_MEALS, BTN_SUGGEST, BTN_PROFILE,
+    BTN_SCAN, BTN_MENU_OCR,
+    _LEGACY_BTN_SCAN, _LEGACY_BTN_MENU_OCR,
+}
 
 
 # --- Water tracker ---

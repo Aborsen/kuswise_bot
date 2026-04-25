@@ -1226,13 +1226,15 @@ def test_recap_avg_kcal_basic():
     assert stats["streak"] == 5
 
 
-def test_recap_top_food_picks_most_frequent():
+def test_recap_macro_distribution_pct_sums_to_100():
+    """Each macro rounds independently; we patch fat_pct to make the
+    three values sum to 100 exactly so the share card never reads 99% / 101%."""
     end = _date(2026, 4, 25)
+    # 100g protein (400 kcal) + 100g carbs (400 kcal) + 50g fat (450 kcal)
+    # → total 1250 kcal → 32% / 32% / 36%
     meals = [
-        {"date": "2026-04-25", "description": "Курка з рисом", "calories": 600},
-        {"date": "2026-04-24", "description": "Курка з рисом", "calories": 600},
-        {"date": "2026-04-23", "description": "курка з рисом", "calories": 600},  # case-insens
-        {"date": "2026-04-22", "description": "Салат",          "calories": 300},
+        {"date": "2026-04-25", "description": "x", "calories": 1250,
+         "protein_g": 100, "carbs_g": 100, "fat_g": 50},
     ]
     stats = recap_mod.compute_weekly_stats(
         meals_last_7d=meals,
@@ -1240,8 +1242,22 @@ def test_recap_top_food_picks_most_frequent():
         streak_row=None,
         end_date=end,
     )
-    assert stats["top_food"] == "Курка з рисом"  # display capitalization preserved
-    assert stats["top_food_count"] == 3
+    assert stats["protein_pct"] == 32
+    assert stats["carbs_pct"] == 32
+    assert stats["fat_pct"] == 36
+    assert stats["protein_pct"] + stats["carbs_pct"] + stats["fat_pct"] == 100
+
+
+def test_recap_macro_pct_none_when_no_macros():
+    """No macros logged → pct fields are None, not zero (avoids 0/0/0 spam)."""
+    end = _date(2026, 4, 25)
+    stats = recap_mod.compute_weekly_stats(
+        meals_last_7d=[], weight_history_recent=[],
+        streak_row=None, end_date=end,
+    )
+    assert stats["protein_pct"] is None
+    assert stats["carbs_pct"] is None
+    assert stats["fat_pct"] is None
 
 
 def test_recap_weight_delta_basic():
@@ -1271,8 +1287,8 @@ def test_recap_handles_empty_inputs():
     assert stats["days_logged"] == 0
     assert stats["avg_kcal"] == 0
     assert stats["streak"] == 0
-    assert stats["top_food"] is None
     assert stats["weight_delta"] is None
+    assert stats["protein_pct"] is None
 
 
 def test_recap_window_excludes_old_meals():
@@ -1295,8 +1311,8 @@ def test_render_recap_png_returns_pngsignature_bytes():
     """Renderer returns valid PNG bytes (smoke; Pillow available in CI)."""
     stats = {
         "end_date": "2026-04-25", "days_logged": 5, "avg_kcal": 1820,
-        "streak": 12, "top_food": "Курка з рисом", "top_food_count": 4,
-        "weight_delta": -0.6,
+        "streak": 12, "weight_delta": -0.6,
+        "protein_pct": 30, "carbs_pct": 45, "fat_pct": 25,
     }
     out = recap_mod.render_recap_png(stats, first_name="Vic")
     assert isinstance(out, bytes)

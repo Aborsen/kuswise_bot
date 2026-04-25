@@ -20,7 +20,16 @@ from collections import Counter
 from datetime import date, timedelta
 from typing import Optional
 
+import qrcode
+from qrcode.constants import ERROR_CORRECT_M
 from PIL import Image, ImageDraw, ImageFont
+
+
+# Bot URL embedded in the recap card's QR code.
+_BOT_URL = "https://t.me/kuswise_bot"
+# QR target size on the canvas (square). Width includes a few px of white
+# padding so the code scans cleanly against the dark background.
+_QR_PX = 280
 
 
 # Bundled font (Apache-2.0, ships in the repo at assets/fonts/). Noto Sans
@@ -43,6 +52,26 @@ _BG_BOTTOM = (15, 18, 28)
 _FG        = (240, 240, 245)
 _DIM       = (160, 165, 180)
 _ACCENT    = (255, 138, 30)
+
+
+def _make_qr_image(url: str, target_px: int = _QR_PX) -> Image.Image:
+    """Render a QR code as a square PIL Image with white padding so it
+    scans reliably against the dark recap canvas.
+
+    ERROR_CORRECT_M (~15% damage tolerance) is enough headroom for the
+    PNG to survive Telegram's image re-compression on share.
+    """
+    qr = qrcode.QRCode(
+        version=None,                 # auto-pick the smallest version that fits
+        error_correction=ERROR_CORRECT_M,
+        box_size=10,                  # final size scaled by .resize() below
+        border=2,                     # white quiet zone, in modules
+    )
+    qr.add_data(url)
+    qr.make(fit=True)
+    img = qr.make_image(fill_color="black", back_color="white").convert("RGB")
+    # Square resize. NEAREST keeps the modules crisp (no anti-alias smearing).
+    return img.resize((target_px, target_px), Image.NEAREST)
 
 
 def _try_truetype(size: int, *, bold: bool = True) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
@@ -106,10 +135,12 @@ def compute_weekly_stats(
         end_date = date.today()
     start_date = end_date - timedelta(days=6)
 
-    # --- Days logged + average kcal ---
+    # --- Days logged, average kcal, and macro totals (for distribution) ---
     days_with_meals: set[str] = set()
     cal_per_day: dict[str, float] = {}
-    food_counter: Counter[str] = Counter()
+    total_protein_g = 0.0
+    total_carbs_g   = 0.0
+    total_fat_g     = 0.0
     for m in meals_last_7d or []:
         d = (m.get("date") or "")[:10]
         if not d:
@@ -123,27 +154,28 @@ def compute_weekly_stats(
             continue
         days_with_meals.add(d)
         cal_per_day[d] = cal_per_day.get(d, 0.0) + float(m.get("calories") or 0)
-        desc = (m.get("description") or "").strip()
-        if desc:
-            # Light normalization so "Курка з рисом" and "курка з рисом " group.
-            food_counter[desc.lower()[:60]] += 1
+        try:
+            total_protein_g += float(m.get("protein_g") or 0)
+            total_carbs_g   += float(m.get("carbs_g")   or 0)
+            total_fat_g     += float(m.get("fat_g")     or 0)
+        except (TypeError, ValueError):
+            continue
 
     days_logged = len(days_with_meals)
     avg_kcal = round(sum(cal_per_day.values()) / days_logged) if days_logged else 0
 
-    # --- Top food: most-frequent description, tie-break by alphabetic ---
-    top_food = None
-    top_food_count = 0
-    if food_counter:
-        winners = food_counter.most_common(1)
-        top_food = winners[0][0]
-        top_food_count = winners[0][1]
-        # Restore display capitalization from the most recent matching meal.
-        for m in meals_last_7d or []:
-            d = (m.get("description") or "").strip()
-            if d.lower()[:60] == top_food:
-                top_food = d
-                break
+    # --- Macro distribution as % of total kcal (4/4/9) ---
+    p_kcal = total_protein_g * 4
+    c_kcal = total_carbs_g   * 4
+    f_kcal = total_fat_g     * 9
+    macro_kcal = p_kcal + c_kcal + f_kcal
+    if macro_kcal > 0:
+        protein_pct = round(p_kcal / macro_kcal * 100)
+        carbs_pct   = round(c_kcal / macro_kcal * 100)
+        # Force the three values to sum to exactly 100 (round-trip safety).
+        fat_pct = 100 - protein_pct - carbs_pct
+    else:
+        protein_pct = carbs_pct = fat_pct = None
 
     # --- Weight delta over the window (newest in window − oldest in window) ---
     def _as_date(row) -> Optional[date]:
@@ -180,9 +212,10 @@ def compute_weekly_stats(
         "days_logged":    days_logged,
         "avg_kcal":       int(avg_kcal),
         "streak":         int((streak_row or {}).get("current_streak") or 0),
-        "top_food":       top_food,
-        "top_food_count": int(top_food_count),
         "weight_delta":   weight_delta,
+        "protein_pct":    protein_pct,  # None when no logged meals
+        "carbs_pct":      carbs_pct,
+        "fat_pct":        fat_pct,
     }
 
 
@@ -228,8 +261,15 @@ def render_recap_png(stats: dict, first_name: Optional[str] = None) -> bytes:
 
     # Note: bundled fallback fonts don't include emoji glyphs, so labels
     # are emoji-free here. The big numbers carry the visual hierarchy.
+    #
+    # Vertical budget on a 1080×1350 canvas:
+    #   header (~220) + 4 stat blocks (~190 each) + bottom QR/footer (~330)
+    # = 1310. Section spacing kept tight to leave room for the QR tile.
 
-    # ----- Big stats -----
+    big_font_mid = _try_truetype(96)   # slightly smaller "big" so 4 stats fit
+    macro_font   = _try_truetype(60)   # macro line is one row, can be modest
+    section_dy   = 190
+
     # Streak
     streak = stats.get("streak", 0)
     streak_label = (
@@ -238,49 +278,79 @@ def render_recap_png(stats: dict, first_name: Optional[str] = None) -> bytes:
         else f"{streak} днів поспіль"
     )
     draw.text((pad, y), "СЕРІЯ", font=label_font, fill=_ACCENT)
-    draw.text((pad, y + 40), str(streak), font=big_font, fill=_FG)
-    draw.text((pad, y + 170), streak_label, font=sub_font, fill=_DIM)
-    y += 230
+    draw.text((pad, y + 36), str(streak), font=big_font_mid, fill=_FG)
+    draw.text((pad, y + 140), streak_label, font=sub_font, fill=_DIM)
+    y += section_dy
 
     # Avg kcal
     draw.text((pad, y), "СЕРЕДНЬО ККАЛ/ДЕНЬ", font=label_font, fill=_ACCENT)
-    draw.text((pad, y + 40), f"{stats.get('avg_kcal', 0):,}".replace(",", " "),
-              font=big_font, fill=_FG)
+    draw.text((pad, y + 36), f"{stats.get('avg_kcal', 0):,}".replace(",", " "),
+              font=big_font_mid, fill=_FG)
     days = stats.get("days_logged", 0)
     days_label = (
         "за 1 залогований день" if days == 1
         else f"за {days} залоговані дні" if 2 <= days <= 4
         else f"за {days} залогованих днів" if days else "ще нічого не логували"
     )
-    draw.text((pad, y + 170), days_label, font=sub_font, fill=_DIM)
-    y += 230
+    draw.text((pad, y + 140), days_label, font=sub_font, fill=_DIM)
+    y += section_dy
 
     # Weight delta
     delta = stats.get("weight_delta")
     if delta is not None:
-        # Use ASCII "-" rather than the typographic U+2212 MINUS so all
-        # bundled fonts can render it. Same for "±" we just write "≈".
         sign = "+" if delta > 0 else "-" if delta < 0 else "~"
         delta_str = f"{sign}{abs(delta):.1f} кг"
         draw.text((pad, y), "ЗМІНА ВАГИ", font=label_font, fill=_ACCENT)
-        draw.text((pad, y + 40), delta_str, font=big_font, fill=_FG)
-        y += 200
+        draw.text((pad, y + 36), delta_str, font=big_font_mid, fill=_FG)
+        y += section_dy
 
-    # Top food
-    top = stats.get("top_food")
-    if top:
-        draw.text((pad, y), "ЧАСТО ЇЛИ", font=label_font, fill=_ACCENT)
-        # Crop long dish names so they fit on one line.
-        display = top if len(top) <= 26 else top[:25] + "…"
-        draw.text((pad, y + 40), display, font=name_font, fill=_FG)
-        cnt = stats.get("top_food_count", 0)
-        if cnt:
-            cnt_label = "1 раз" if cnt == 1 else f"{cnt} рази" if 2 <= cnt <= 4 else f"{cnt} разів"
-            draw.text((pad, y + 90), cnt_label, font=sub_font, fill=_DIM)
+    # Macro distribution — % of total kcal (4/4/9). Shown only when there's
+    # actually macro data, otherwise we just skip and leave whitespace for
+    # the QR tile below.
+    p_pct = stats.get("protein_pct")
+    c_pct = stats.get("carbs_pct")
+    f_pct = stats.get("fat_pct")
+    if p_pct is not None and c_pct is not None and f_pct is not None:
+        draw.text((pad, y), "СПІВВІДНОШЕННЯ МАКРО", font=label_font, fill=_ACCENT)
+        macros_str = f"Б {p_pct}%  В {c_pct}%  Ж {f_pct}%"
+        draw.text((pad, y + 36), macros_str, font=macro_font, fill=_FG)
+        draw.text((pad, y + 110), "за весь логований тиждень", font=sub_font, fill=_DIM)
 
-    # Footer watermark
-    foot_text = "@kuswise_bot · твій трекер їжі"
-    draw.text((pad, H - pad - 30), foot_text, font=foot_font, fill=_DIM)
+    # ----- Bottom row: QR (right) + footer text (left) -----
+    qr_size = _QR_PX
+    # QR rounded-corner backdrop: white tile with 14px padding on each side.
+    qr_pad = 14
+    tile_size = qr_size + qr_pad * 2
+    tile_x = W - pad - tile_size
+    tile_y = H - pad - tile_size
+    # White rounded tile so the QR has high contrast even when Telegram
+    # crunches the JPEG quality on share.
+    draw.rounded_rectangle(
+        [(tile_x, tile_y), (tile_x + tile_size, tile_y + tile_size)],
+        radius=20, fill="white",
+    )
+    try:
+        qr_img = _make_qr_image(_BOT_URL, target_px=qr_size)
+        img.paste(qr_img, (tile_x + qr_pad, tile_y + qr_pad))
+    except Exception:
+        # Renderer must never crash on QR failure — drop it silently and
+        # the white tile becomes a small blank square. Worst case is ugly,
+        # not broken.
+        pass
+
+    # "Скан → @kuswise_bot" line right under the QR tile in white.
+    qr_caption = "Скан → @kuswise_bot"
+    cap_y = tile_y + tile_size + 8
+    cap_bbox = draw.textbbox((0, 0), qr_caption, font=sub_font)
+    cap_w = cap_bbox[2] - cap_bbox[0]
+    cap_x = tile_x + (tile_size - cap_w) // 2
+    if cap_y + 30 < H - pad:  # only show caption if it fits without overlap
+        draw.text((cap_x, cap_y), qr_caption, font=sub_font, fill=_DIM)
+
+    # Footer watermark on the left, vertically centered against the QR tile.
+    foot_text = "бот який знає кожний кусь"
+    foot_y = tile_y + tile_size // 2 - 16
+    draw.text((pad, foot_y), foot_text, font=foot_font, fill=_DIM)
 
     buf = io.BytesIO()
     img.save(buf, format="PNG", optimize=True)

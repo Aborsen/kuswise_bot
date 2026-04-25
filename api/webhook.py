@@ -102,6 +102,7 @@ from lib.formatters import (
     welcome_message,
     help_message,
     format_today_progress,
+    format_streak_summary,
     format_yesterday,
     format_history,
     format_day_detail,
@@ -193,12 +194,14 @@ from lib.formatters import (
     TIMEZONE_CUSTOM_PROMPT,
     TIMEZONE_CANCELLED,
 )
-from lib.datehelpers import is_valid_tz, now_user
+from lib.datehelpers import is_valid_tz, now_user, today_str_user
 from lib.database import (
     get_health_profile,
     set_health_allergens,
     set_health_conditions,
     clear_health_profile,
+    get_streak,
+    update_streak_for_meal,
 )
 from lib.health import (
     ALLERGENS as HEALTH_ALLERGENS,
@@ -1237,6 +1240,11 @@ def handle_moderation_callback(conn, cb: dict, profile: dict) -> None:
         analysis = pending["analysis"]
         meal_id = save_meal(conn, user_id, pending["meal_type"], analysis, pending["photo_file_id"] or "", pending["raw_response"])
         upsert_daily_log_from_meal(conn, user_id, analysis)
+        # F-4: bump engagement streak using the user's local "today".
+        try:
+            update_streak_for_meal(conn, user_id, today_str_user(profile))
+        except Exception as _streak_exc:  # never break the meal-save UX
+            error("streak_update_failed", exc=_streak_exc, user_id=user_id)
         today_log = get_today_log(conn, user_id)
         cal_target = profile.get("daily_calorie_target") or 2000
         send_message(
@@ -1384,7 +1392,29 @@ def handle_command(conn, message: dict, text: str, first_name: str | None, profi
 
     if cmd == "/today":
         log = get_today_log(conn, user_id)
-        send_message(chat_id, format_today_progress(log, cal_target, first_name, profile=profile), reply_markup=main_menu_keyboard())
+        streak_row = None
+        try:
+            streak_row = get_streak(conn, user_id)
+        except Exception as _streak_exc:  # don't block /today on streak issues
+            error("streak_fetch_failed", exc=_streak_exc, user_id=user_id)
+        send_message(
+            chat_id,
+            format_today_progress(log, cal_target, first_name, profile=profile, streak=streak_row),
+            reply_markup=main_menu_keyboard(),
+        )
+        return
+
+    if cmd == "/streak":
+        try:
+            streak_row = get_streak(conn, user_id)
+        except Exception as _streak_exc:
+            error("streak_fetch_failed", exc=_streak_exc, user_id=user_id)
+            streak_row = None
+        send_message(
+            chat_id,
+            format_streak_summary(streak_row, first_name),
+            reply_markup=main_menu_keyboard(),
+        )
         return
 
     if cmd == "/yesterday":

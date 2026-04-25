@@ -364,3 +364,158 @@ def test_normalize_lang_neighbors_default_to_uk():
 def test_normalize_lang_other_defaults_to_en():
     for code in ("en", "en-US", "fr", "de", "es", None, ""):
         assert i18n_mod.normalize_lang(code) == "en", code
+
+
+# ---------- engagement streaks (lib.database, F-4) ----------
+
+class _StreakFakeCursor:
+    """psycopg-like cursor backed by a single-row user_streaks dict."""
+    def __init__(self, store):
+        self.store = store           # {user_id: row_dict} or None
+        self._last = None
+        self._rowcount = 0
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    @property
+    def rowcount(self):
+        return self._rowcount
+
+    def execute(self, sql, params=None):
+        s = " ".join(sql.split()).upper()  # collapse whitespace for matching
+        params = params or ()
+
+        if s.startswith("SELECT") and "FROM USER_STREAKS" in s:
+            uid = params[0]
+            row = self.store.get(uid)
+            if row is None:
+                self._last = None
+            else:
+                self._last = (
+                    row["current_streak"],
+                    row["longest_streak"],
+                    row["last_log_date"],
+                    row["freeze_days_remaining"],
+                    row["updated_at"],
+                )
+            return
+
+        if s.startswith("INSERT INTO USER_STREAKS"):
+            # INSERT (user_id, current_streak, longest_streak, last_log_date,
+            #         freeze_days_remaining, updated_at)
+            # VALUES (%s, 1, 1, %s, 3, %s)
+            uid, last_log, updated_at = params
+            self.store[uid] = {
+                "current_streak": 1,
+                "longest_streak": 1,
+                "last_log_date": last_log,
+                "freeze_days_remaining": 3,
+                "updated_at": updated_at,
+            }
+            self._rowcount = 1
+            return
+
+        if s.startswith("UPDATE USER_STREAKS"):
+            if "WHERE USER_ID" in s:
+                # Per-user UPDATE from update_streak_for_meal: params order is
+                # (current, longest, last_log, freezes, updated_at, user_id).
+                cur, lng, last_log, freezes, updated_at, uid = params
+                row = self.store.get(uid)
+                if row is None:
+                    self._rowcount = 0
+                    return
+                row.update({
+                    "current_streak": cur,
+                    "longest_streak": lng,
+                    "last_log_date": last_log,
+                    "freeze_days_remaining": freezes,
+                    "updated_at": updated_at,
+                })
+                self._rowcount = 1
+                return
+            # Bulk UPDATE from reset_monthly_freezes: SET freezes = 3 for all rows.
+            (updated_at,) = params
+            n = 0
+            for row in self.store.values():
+                row["freeze_days_remaining"] = 3
+                row["updated_at"] = updated_at
+                n += 1
+            self._rowcount = n
+            return
+
+        # Other SQL is unexpected here — fail loudly to surface drift.
+        raise AssertionError(f"unexpected SQL in streak fake: {sql!r}")
+
+    def fetchone(self):
+        return self._last
+
+
+class _StreakFakeConn:
+    def __init__(self):
+        self.store = {}
+
+    def cursor(self):
+        return _StreakFakeCursor(self.store)
+
+    def commit(self):
+        pass
+
+
+def test_streak_first_meal_creates_row():
+    conn = _StreakFakeConn()
+    row = db.update_streak_for_meal(conn, user_id=1, today_local="2026-04-25")
+    assert row["current_streak"] == 1
+    assert row["longest_streak"] == 1
+    assert row["last_log_date"] == "2026-04-25"
+    assert row["freeze_days_remaining"] == 3
+
+
+def test_streak_same_day_meal_is_noop():
+    conn = _StreakFakeConn()
+    db.update_streak_for_meal(conn, 1, "2026-04-25")
+    row2 = db.update_streak_for_meal(conn, 1, "2026-04-25")
+    assert row2["current_streak"] == 1
+    assert row2["freeze_days_remaining"] == 3
+    assert row2["last_log_date"] == "2026-04-25"
+
+
+def test_streak_next_day_increments():
+    conn = _StreakFakeConn()
+    db.update_streak_for_meal(conn, 1, "2026-04-25")  # Mon
+    row = db.update_streak_for_meal(conn, 1, "2026-04-26")  # Tue
+    assert row["current_streak"] == 2
+    assert row["longest_streak"] == 2
+    assert row["freeze_days_remaining"] == 3
+    assert row["last_log_date"] == "2026-04-26"
+
+
+def test_streak_skip_one_day_consumes_freeze():
+    conn = _StreakFakeConn()
+    db.update_streak_for_meal(conn, 1, "2026-04-25")  # Mon
+    row = db.update_streak_for_meal(conn, 1, "2026-04-27")  # Wed (skipped Tue)
+    # Streak unchanged, but one freeze consumed.
+    assert row["current_streak"] == 1
+    assert row["freeze_days_remaining"] == 2
+    assert row["last_log_date"] == "2026-04-27"
+
+
+def test_streak_skip_two_days_resets():
+    conn = _StreakFakeConn()
+    db.update_streak_for_meal(conn, 1, "2026-04-25")  # Mon
+    row = db.update_streak_for_meal(conn, 1, "2026-04-28")  # Thu (skipped Tue+Wed)
+    assert row["current_streak"] == 1
+    assert row["last_log_date"] == "2026-04-28"
+
+
+def test_streak_monthly_reset_restores_to_3():
+    conn = _StreakFakeConn()
+    # Seed a row with depleted freezes.
+    db.update_streak_for_meal(conn, 1, "2026-04-25")
+    conn.store[1]["freeze_days_remaining"] = 0
+    n = db.reset_monthly_freezes(conn)
+    assert n == 1
+    assert conn.store[1]["freeze_days_remaining"] == 3

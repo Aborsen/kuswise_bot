@@ -508,6 +508,7 @@ def help_message() -> str:
         "/ask — 💬 запитати ШІ про їжу, рецепти, покупки\n"
         "/today — прогрес за сьогодні\n"
         "/yesterday — вчорашній день\n"
+        "/streak — 🔥 серія логів і заморозки\n"
         "/meals — список страв (видалити / змінити)\n"
         "/fav — ⭐ улюблені страви\n"
         "/recent — 🕘 останні страви (швидкий повтор)\n"
@@ -522,11 +523,37 @@ def help_message() -> str:
     )
 
 
+def _streak_word_uk(n: int) -> str:
+    """Ukrainian plural for 'день' — 1 → 'день', 2-4 → 'дні', 0/5+ → 'днів'.
+    Russian-style 11-14 exception applies."""
+    n = abs(int(n))
+    if 11 <= (n % 100) <= 14:
+        return "днів"
+    last = n % 10
+    if last == 1:
+        return "день"
+    if 2 <= last <= 4:
+        return "дні"
+    return "днів"
+
+
+def _format_streak_line(streak: dict | None) -> str | None:
+    """Return the /today header streak line, or None if no streak to show."""
+    if not streak:
+        return None
+    cur = int(streak.get("current_streak") or 0)
+    if cur < 1:
+        return None
+    freezes = int(streak.get("freeze_days_remaining") or 0)
+    return f"🔥 Серія: {cur} {_streak_word_uk(cur)} · 🧊 Заморозок: {freezes}"
+
+
 def format_today_progress(
     log: dict,
     daily_cal_target: int,
     first_name: str | None = None,
     profile: dict | None = None,
+    streak: dict | None = None,
 ) -> str:
     date_display = _ua_date_long(datetime.now(LOCAL_TZ))
     if profile and profile.get("weight_kg") and profile.get("goal"):
@@ -554,10 +581,14 @@ def format_today_progress(
     else:
         quip = "Сьогодні ми святкували. Завтра — легше. 😉"
 
+    streak_line = _format_streak_line(streak)
+    streak_block = f"{streak_line}\n" if streak_line else ""
+
     return (
         f"📊 <b>Прогрес на сьогодні ({date_display})</b>\n"
         f"━━━━━━━━━━━━━━━━━━━━━\n"
         f"👤 {name}\n"
+        f"{streak_block}"
         f"🔥 Калорії:  {round(cal)} / {daily_cal_target} ({_pct(cal, daily_cal_target)}%)\n"
         f"   {_bar(cal, daily_cal_target)}\n"
         f"🥩 Білки:    {round(p)}г / {macros['protein']}г ({_pct(p, macros['protein'])}%)\n"
@@ -572,6 +603,36 @@ def format_today_progress(
         f"Прийомів їжі: {meals}\n"
         f"Залишилось: ~{round(remaining)} ккал\n\n"
         f"<i>{quip}</i>"
+    )
+
+
+def format_streak_summary(streak: dict | None, first_name: str | None = None) -> str:
+    """Render the /streak command response.
+
+    ``streak`` is the row dict from :func:`lib.database.get_streak`, or ``None``
+    when the user has never logged a meal.
+    """
+    name = _name_or_default(first_name)
+    if not streak or int(streak.get("current_streak") or 0) < 1:
+        return (
+            f"🔥 <b>Серія</b> · {name}\n"
+            f"━━━━━━━━━━━━━━━━━━━━━\n"
+            f"Ще не починали серію — залогуйте першу страву й поїхали! 🚀\n\n"
+            f"<i>Серія росте, коли ви заносите хоча б одну страву щодня. "
+            f"3 «заморозки» на місяць рятують пропущений день.</i>"
+        )
+    cur = int(streak.get("current_streak") or 0)
+    longest = int(streak.get("longest_streak") or 0)
+    freezes = int(streak.get("freeze_days_remaining") or 0)
+    last = streak.get("last_log_date") or "—"
+    return (
+        f"🔥 <b>Серія</b> · {name}\n"
+        f"━━━━━━━━━━━━━━━━━━━━━\n"
+        f"Поточна серія: <b>{cur}</b> {_streak_word_uk(cur)}\n"
+        f"Найкраща серія: <b>{longest}</b> {_streak_word_uk(longest)}\n"
+        f"🧊 Заморозок цього місяця: <b>{freezes}</b>/3\n"
+        f"Останній лог: {last}\n\n"
+        f"<i>Заморозки відновлюються 1 числа кожного місяця.</i>"
     )
 
 

@@ -18,6 +18,7 @@ from lib.database import (
     get_conn,
     init_db,
     mark_all_previous_summaries_sent,
+    reset_monthly_freezes,
 )
 from lib.log import setup_sentry, http_handler, error
 
@@ -68,6 +69,11 @@ def run_midnight_reset() -> dict:
         conn.commit()
         # Prune usage_quota rows older than 7 days so the table stays small.
         cleanup_old_quotas(conn, keep_days=7)
+        # F-4: refill streak freezes on the 1st of each UTC month.
+        # Trade-off: not per-user-tz (same as the existing cron design); a
+        # Kyiv user at 02:00 local on Feb 1 gets the refill ~24h later.
+        if datetime.now(timezone.utc).day == 1:
+            reset_monthly_freezes(conn)
     finally:
         try:
             conn.close()

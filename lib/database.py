@@ -225,6 +225,19 @@ def init_db(conn=None, force: bool = False) -> None:
                 updated_at TEXT
             )
         """)
+        # Engagement streaks (F-4): consecutive-day meal-log streak per user,
+        # with 3 monthly "freeze" tokens that absorb a single missed day.
+        # Updated on every accepted meal; freezes reset to 3 on UTC day-1.
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS user_streaks (
+                user_id BIGINT PRIMARY KEY,
+                current_streak INTEGER NOT NULL DEFAULT 0,
+                longest_streak INTEGER NOT NULL DEFAULT 0,
+                last_log_date TEXT,
+                freeze_days_remaining INTEGER NOT NULL DEFAULT 3,
+                updated_at TEXT
+            )
+        """)
     conn.commit()
     _SCHEMA_INITIALISED = True
     if close_after:
@@ -321,7 +334,7 @@ def delete_user_all_data(conn, user_id: int) -> bool:
             "pending_photos", "pending_analyses", "chat_sessions",
             "daily_recommendations", "daily_logs", "meals", "user_profiles",
             "water_logs", "water_prefs", "weight_history",
-            "usage_quota", "user_health_profile",
+            "usage_quota", "user_health_profile", "user_streaks",
         ):
             cur.execute(f"DELETE FROM {table} WHERE user_id = %s", (user_id,))
         cur.execute("DELETE FROM users WHERE user_id = %s", (user_id,))
@@ -1350,3 +1363,156 @@ def get_adherence_stats(conn, user_id: int, tolerance: float = 0.15) -> dict:
         "c_target": c_target,
         "f_target": f_target,
     }
+
+
+# ---------- Engagement streaks (F-4) ----------
+
+def get_streak(conn, user_id: int) -> Optional[dict]:
+    """Return the user's streak row or None if they've never logged a meal.
+
+    Shape: ``{current_streak, longest_streak, last_log_date, freeze_days_remaining, updated_at}``.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT current_streak, longest_streak, last_log_date, "
+            "freeze_days_remaining, updated_at "
+            "FROM user_streaks WHERE user_id = %s",
+            (user_id,),
+        )
+        row = cur.fetchone()
+    if not row:
+        return None
+    return {
+        "current_streak":          int(row[0] or 0),
+        "longest_streak":          int(row[1] or 0),
+        "last_log_date":           row[2],
+        "freeze_days_remaining":   int(row[3] or 0),
+        "updated_at":              row[4],
+    }
+
+
+def update_streak_for_meal(conn, user_id: int, today_local: str) -> dict:
+    """Apply F-4 streak transition for an accepted meal.
+
+    ``today_local`` is the user's local date as ``YYYY-MM-DD`` (use
+    ``lib.datehelpers.today_str_user(profile)`` at the call site).
+
+    Logic:
+      - No row exists → INSERT with current=1, longest=1, freezes=3, last=today_local
+      - gap_days = (today_local - last_log_date)
+        - gap <= 0  → no-op (idempotent on multiple meals same day)
+        - gap == 1  → current += 1, last = today_local
+        - gap == 2 and freezes > 0 → freezes -= 1, last = today_local (streak unchanged)
+        - else      → current = 1, last = today_local (broken streak)
+      - Always: longest = max(longest, current); updated_at = now_iso
+
+    Returns the post-update streak row (same shape as ``get_streak``).
+    """
+    from datetime import date as _date
+
+    def _parse_date(s: Optional[str]) -> Optional[_date]:
+        if not s:
+            return None
+        try:
+            return _date.fromisoformat(s)
+        except (ValueError, TypeError):
+            return None
+
+    today_d = _parse_date(today_local)
+    if today_d is None:
+        # Caller passed garbage — bail out without touching state.
+        existing = get_streak(conn, user_id)
+        if existing is not None:
+            return existing
+        return {
+            "current_streak": 0,
+            "longest_streak": 0,
+            "last_log_date": None,
+            "freeze_days_remaining": 3,
+            "updated_at": None,
+        }
+
+    now = _now_iso()
+    existing = get_streak(conn, user_id)
+
+    if existing is None:
+        # First meal ever — seed the row.
+        with conn.cursor() as cur:
+            cur.execute(
+                """INSERT INTO user_streaks
+                   (user_id, current_streak, longest_streak, last_log_date,
+                    freeze_days_remaining, updated_at)
+                   VALUES (%s, 1, 1, %s, 3, %s)""",
+                (user_id, today_local, now),
+            )
+        conn.commit()
+        return {
+            "current_streak": 1,
+            "longest_streak": 1,
+            "last_log_date": today_local,
+            "freeze_days_remaining": 3,
+            "updated_at": now,
+        }
+
+    last_d = _parse_date(existing["last_log_date"])
+    current = existing["current_streak"]
+    longest = existing["longest_streak"]
+    freezes = existing["freeze_days_remaining"]
+
+    if last_d is None:
+        # Row exists but last_log_date is null/garbage — treat as fresh start.
+        gap = None
+    else:
+        gap = (today_d - last_d).days
+
+    if gap is not None and gap <= 0:
+        # Same day or earlier (clock skew) — no-op.
+        return existing
+
+    if gap == 1:
+        current = current + 1
+    elif gap == 2 and freezes > 0:
+        freezes = freezes - 1
+        # current unchanged
+    else:
+        # gap is None / >=3 / (gap==2 with no freezes) → streak resets
+        current = 1
+
+    longest = max(longest, current)
+
+    with conn.cursor() as cur:
+        cur.execute(
+            """UPDATE user_streaks SET
+                   current_streak = %s,
+                   longest_streak = %s,
+                   last_log_date = %s,
+                   freeze_days_remaining = %s,
+                   updated_at = %s
+               WHERE user_id = %s""",
+            (current, longest, today_local, freezes, now, user_id),
+        )
+    conn.commit()
+
+    return {
+        "current_streak": current,
+        "longest_streak": longest,
+        "last_log_date": today_local,
+        "freeze_days_remaining": freezes,
+        "updated_at": now,
+    }
+
+
+def reset_monthly_freezes(conn) -> int:
+    """Restore ``freeze_days_remaining`` to 3 for every existing streak row.
+
+    Called by the daily UTC midnight cron when ``date.today().day == 1``.
+    Returns the number of rows updated.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            "UPDATE user_streaks SET freeze_days_remaining = 3, updated_at = %s",
+            (_now_iso(),),
+        )
+        n = cur.rowcount
+    conn.commit()
+    return int(n or 0)

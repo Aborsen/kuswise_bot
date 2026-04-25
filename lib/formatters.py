@@ -78,7 +78,12 @@ _MEAL_TYPE_UA = {
 # --- Shared helpers ---
 
 def _format_ingredients(analysis: dict) -> list[str]:
-    """Build ingredient list lines from analysis.ingredients."""
+    """Build ingredient list lines from analysis.ingredients.
+
+    Each line shows ``• name — ~Ng · ~K ккал`` when both grams and calories
+    are present, gracefully degrading when one or both are missing
+    (older saved meals predate the per-ingredient kcal field).
+    """
     ingredients = analysis.get("ingredients") or []
     if not ingredients:
         return []
@@ -86,8 +91,17 @@ def _format_ingredients(analysis: dict) -> list[str]:
     for ing in ingredients:
         name = _esc(ing.get("name", "?"))
         grams = ing.get("estimated_grams")
+        kcal = ing.get("estimated_calories")
+        parts = []
         if grams:
-            lines.append(f"  • {name} — ~{round(grams)}г")
+            parts.append(f"~{round(float(grams))}г")
+        if kcal:
+            try:
+                parts.append(f"~{round(float(kcal))} ккал")
+            except (TypeError, ValueError):
+                pass
+        if parts:
+            lines.append(f"  • {name} — {' · '.join(parts)}")
         else:
             lines.append(f"  • {name}")
     return lines

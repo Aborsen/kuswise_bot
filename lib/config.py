@@ -157,6 +157,8 @@ STEP 3. Measure BOTH area AND height. The most common mistake is assuming food i
 
 STEP 4. Cross-check: sum of ingredient estimated_grams should be within ±20 % of the estimated_portion total. If not, revise one or the other.
 
+STEP 4b. Per-ingredient calories: each ingredient gets its own estimated_calories field. Sum of ingredient estimated_calories should be within ±10% of the top-level nutrition.calories total. This lets the user see which ingredient drives most of their kcal load.
+
 STEP 5. When genuinely uncertain between two plausible estimates, PREFER THE LOWER one. The user can always correct upward via "recalculate" or manual input.
 ============================================================
 
@@ -167,7 +169,7 @@ Return a JSON response with EXACTLY this structure:
   "estimated_portion": "e.g. ~350г",
   "portion_reasoning": "1-3 речення: який референс використав, як оцінював висоту, яку формулу застосував.",
   "ingredients": [
-    {"name": "ingredient name", "estimated_grams": 100}
+    {"name": "ingredient name", "estimated_grams": 100, "estimated_calories": 250}
   ],
   "allergen_flags": [],
   "crohn_flags": [
@@ -265,7 +267,8 @@ RECALC_PROMPT = (
     "Якщо референсу немає — напиши це прямо у portion_reasoning.\n"
     "2) Оціни ВИСОТУ/ТОВЩИНУ страви, а не лише площу на тарілці. Це найчастіша помилка.\n"
     "3) Перевір тип продукту ще раз: куряча грудка, свиняча вирізка, філе лосося тощо.\n"
-    "4) Сума estimated_grams інгредієнтів має бути в межах ±20% від estimated_portion.\n"
+    "4) Сума estimated_grams інгредієнтів має бути в межах ±20% від estimated_portion. "
+    "Сума estimated_calories інгредієнтів — у межах ±10% від nutrition.calories.\n"
     "5) Якщо сумніваєшся — обирай МЕНШУ оцінку ваги.\n"
     "Оновлене portion_reasoning обов'язкове, із новою математикою."
 )

@@ -1307,6 +1307,67 @@ def test_recap_window_excludes_old_meals():
     assert stats["avg_kcal"] == 500
 
 
+# ---------- per-ingredient calories rendering ----------
+
+from lib import formatters as fm
+
+
+def test_format_ingredients_shows_grams_and_kcal_when_both_present():
+    out = fm._format_ingredients({
+        "ingredients": [
+            {"name": "копчений сулугуні", "estimated_grams": 70,  "estimated_calories": 280},
+            {"name": "сушена свинина",     "estimated_grams": 50,  "estimated_calories": 250},
+            {"name": "пиво",               "estimated_grams": 1000, "estimated_calories": 350},
+        ],
+    })
+    body = "\n".join(out)
+    # New per-ingredient kcal renders correctly.
+    assert "копчений сулугуні — ~70г · ~280 ккал" in body
+    assert "сушена свинина — ~50г · ~250 ккал" in body
+    assert "пиво — ~1000г · ~350 ккал" in body
+
+
+def test_format_ingredients_falls_back_when_no_kcal():
+    """Older saved meals have only estimated_grams — must still render."""
+    out = fm._format_ingredients({
+        "ingredients": [
+            {"name": "курка", "estimated_grams": 200},
+        ],
+    })
+    body = "\n".join(out)
+    assert "курка — ~200г" in body
+    assert "ккал" not in body  # no calorie info to display
+
+
+def test_format_ingredients_handles_only_kcal():
+    """Edge case: model returns kcal but no grams (rare)."""
+    out = fm._format_ingredients({
+        "ingredients": [
+            {"name": "сир", "estimated_calories": 120},
+        ],
+    })
+    body = "\n".join(out)
+    assert "сир — ~120 ккал" in body
+
+
+def test_format_ingredients_empty_list_returns_no_lines():
+    assert fm._format_ingredients({"ingredients": []}) == []
+    assert fm._format_ingredients({}) == []
+
+
+def test_format_ingredients_handles_garbage_kcal():
+    """A non-numeric estimated_calories should be silently dropped, not crash."""
+    out = fm._format_ingredients({
+        "ingredients": [
+            {"name": "тест", "estimated_grams": 100, "estimated_calories": "oops"},
+        ],
+    })
+    body = "\n".join(out)
+    assert "тест — ~100г" in body
+    assert "oops" not in body
+    assert "ккал" not in body  # bad value swallowed
+
+
 def test_render_recap_png_returns_pngsignature_bytes():
     """Renderer returns valid PNG bytes (smoke; Pillow available in CI)."""
     stats = {

@@ -211,15 +211,22 @@ def menu_log_keyboard(dishes: list[dict]) -> dict:
 
 
 def scanner_inline_keyboard() -> dict:
-    """F-8: single button that opens the barcode scanner Mini App.
+    """F-8: launch buttons for the barcode scanner.
 
     Telegram requires the ``inline_keyboard`` (NOT reply ``keyboard``) form
     of ``web_app`` to deliver signed ``initData`` to our scanner page.
+
+    The manual-entry button is a **non-Mini-App fallback** for devices /
+    permission setups where the camera path fails (older iOS Telegram,
+    denied camera permission, browsers that block ``getUserMedia`` in
+    third-party WebViews, etc.) — it just sets an FSM flag and prompts
+    the user to type the digits.
     """
     return {
         "inline_keyboard": [
             [{"text": "📷 Відкрити сканер", "web_app": {"url": _scan_url()}}],
-            [{"text": "❌ Скасувати", "callback_data": "barcode:cancel"}],
+            [{"text": "✏️ Ввести цифрами", "callback_data": "barcode:manual"}],
+            [{"text": "❌ Скасувати",       "callback_data": "barcode:cancel"}],
         ]
     }
 

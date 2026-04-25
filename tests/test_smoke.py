@@ -1120,3 +1120,30 @@ def test_product_to_analysis_yields_save_meal_shape():
     assert a["estimated_portion"] == "330г"
     assert a["_source"]["kind"] == "barcode"
     assert a["_source"]["ean"] == "5449000000996"
+
+
+# ---------- F-8 manual-EAN entry validation ----------
+
+def test_manual_ean_strips_spaces_and_hyphens():
+    """The manual entry handler accepts user-friendly formatting."""
+    # The webhook handler does cleaned = text.strip().replace(" ", "").replace("-", "")
+    # then looks_like_ean. Ensure looks_like_ean accepts the cleaned form.
+    cleaned = "5449 000 000-996".replace(" ", "").replace("-", "")
+    assert cleaned == "5449000000996"
+    assert off_mod.looks_like_ean(cleaned)
+
+
+def test_manual_ean_rejects_non_digits():
+    # User typed "abc1234567890" or similar — should fail validation.
+    cleaned = "abc1234567890".replace(" ", "").replace("-", "")
+    assert not off_mod.looks_like_ean(cleaned)
+
+
+def test_manual_ean_rejects_short():
+    cleaned = "1234567"  # 7 digits — UPC/EAN minimum is 8
+    assert not off_mod.looks_like_ean(cleaned)
+
+
+def test_manual_ean_rejects_long():
+    cleaned = "12345678901234"  # 14 digits — > EAN-13 max
+    assert not off_mod.looks_like_ean(cleaned)

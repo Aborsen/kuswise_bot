@@ -125,6 +125,11 @@ from lib.formatters import (
     BARCODE_GRAMS_PROMPT,
     BARCODE_GRAMS_INVALID,
     BARCODE_PENDING_EXPIRED,
+    BARCODE_MANUAL_PROMPT,
+    BARCODE_MANUAL_INVALID,
+    BARCODE_NOT_FOUND,
+    BARCODE_LOOKUP_FAILED,
+    BARCODE_FOUND_HEADER,
     MENU_PROMPT_INTRO,
     MENU_NO_DISHES,
     MENU_OCR_FAILED,
@@ -544,6 +549,16 @@ def process_update(update: dict) -> None:
             and text.lower().strip() != "/cancel"
         ):
             handle_barcode_grams_input(conn, chat_id, user_id, first_name, text, profile)
+            return
+
+        # F-8: manual EAN entry (fallback when camera path fails).
+        if (
+            user_id
+            and profile
+            and profile.get("awaiting_input_type") == "barcode_manual"
+            and text.lower().strip() != "/cancel"
+        ):
+            handle_barcode_manual_input(conn, chat_id, user_id, text, profile)
             return
 
         # Free-text IANA timezone from /timezone → ✏️ Інша зона.
@@ -1632,6 +1647,8 @@ def handle_barcode_callback(conn, cb: dict, profile: dict) -> None:
     Callback shapes:
         barcode:g:<int>      — grams (one of the preset chips or serving size)
         barcode:g:custom     — prompt the user to type a number
+        barcode:manual       — fallback for when the camera path doesn't work:
+                               ask the user to type the EAN digits in chat
         barcode:cancel       — clear pending + go back to main menu
     """
     cb_id = cb["id"]
@@ -1646,6 +1663,14 @@ def handle_barcode_callback(conn, cb: dict, profile: dict) -> None:
         pop_pending_analysis(conn, user_id)
         set_awaiting_input(conn, user_id, None)
         send_message(chat_id, MEAL_CANCELLED, reply_markup=main_menu_keyboard())
+        return
+
+    # Manual EAN entry — fallback for devices where the Mini App camera
+    # doesn't work (older iOS, denied camera permission, etc.).
+    if data == "barcode:manual":
+        answer_callback_query(cb_id, "✏️ Чекаю на цифри")
+        set_awaiting_input(conn, user_id, "barcode_manual")
+        send_message(chat_id, BARCODE_MANUAL_PROMPT)
         return
 
     if data == "barcode:g:custom":
@@ -1814,6 +1839,110 @@ def handle_menu_callback(conn, cb: dict, profile: dict) -> None:
         photo_file_id=None,
         text_description=chosen["name"],
         raw="",
+    )
+
+
+def _portion_keyboard_for_product(product: dict) -> dict:
+    """Inline keyboard mirroring api/barcode.py's portion picker.
+
+    Kept here (not in lib/telegram_helpers.py) to avoid bloating that
+    module — only handle_barcode_manual_input needs it.
+    """
+    serving = product.get("serving_size_g")
+    rows = []
+    if serving and 5 <= serving <= 5000:
+        rows.append([{
+            "text": f"📦 Порція: {int(serving)}г",
+            "callback_data": f"barcode:g:{int(serving)}",
+        }])
+    rows.append([
+        {"text": "50г",  "callback_data": "barcode:g:50"},
+        {"text": "100г", "callback_data": "barcode:g:100"},
+        {"text": "150г", "callback_data": "barcode:g:150"},
+        {"text": "200г", "callback_data": "barcode:g:200"},
+    ])
+    rows.append([{"text": "✏️ Інша кількість", "callback_data": "barcode:g:custom"}])
+    rows.append([{"text": "❌ Скасувати",       "callback_data": "barcode:cancel"}])
+    return {"inline_keyboard": rows}
+
+
+def handle_barcode_manual_input(
+    conn,
+    chat_id: int,
+    user_id: int,
+    text: str,
+    profile: dict,
+) -> None:
+    """F-8 fallback: user typed an EAN directly instead of using the camera.
+
+    Mirrors the lookup + portion-picker flow in api/barcode.py but skips
+    the Mini App and the cookie-jar quota recheck (the same daily quota
+    counter under "meal_analysis" already protects this path).
+    """
+    cleaned = text.strip().replace(" ", "").replace("-", "")
+    if cleaned.lower() in ("/skip", "skip", "/cancel", "cancel"):
+        set_awaiting_input(conn, user_id, None)
+        send_message(chat_id, MEAL_CANCELLED, reply_markup=main_menu_keyboard())
+        return
+
+    if not off_mod.looks_like_ean(cleaned):
+        send_message(chat_id, BARCODE_MANUAL_INVALID)
+        return
+
+    if not _enforce_quota(conn, chat_id, user_id, "meal_analysis"):
+        set_awaiting_input(conn, user_id, None)
+        return
+
+    set_awaiting_input(conn, user_id, None)
+
+    try:
+        product = off_mod.lookup_product(cleaned)
+    except Exception as e:
+        error("off_lookup_failed", exc=e, ean=cleaned, user_id=user_id)
+        send_message(chat_id, BARCODE_LOOKUP_FAILED, reply_markup=main_menu_keyboard())
+        return
+
+    if product is None:
+        send_message(
+            chat_id,
+            BARCODE_NOT_FOUND.format(ean=cleaned),
+            reply_markup=main_menu_keyboard(),
+        )
+        return
+
+    # Stash a barcode-pending analysis so the existing barcode:g:* picker
+    # callbacks pick it up (same shape as api/barcode.py's _save).
+    meal_type = _meal_type_by_local_hour(profile)
+    pseudo = {
+        "_pending_kind":  "barcode",
+        "ean":            product["ean"],
+        "name":           product["name"],
+        "brand":          product["brand"],
+        "per_100g":       product["per_100g"],
+        "serving_size_g": product["serving_size_g"],
+    }
+    try:
+        save_pending_analysis(
+            conn, user_id, meal_type, pseudo,
+            photo_file_id=None, text_description=None,
+            raw_response=json.dumps(product, ensure_ascii=False),
+        )
+    except Exception as e:
+        error("barcode_save_pending_failed", exc=e, user_id=user_id)
+        send_message(chat_id, BARCODE_LOOKUP_FAILED)
+        return
+
+    send_message(
+        chat_id,
+        BARCODE_FOUND_HEADER.format(
+            name=product["name"],
+            brand=product["brand"] or "—",
+            kcal=int(round(product["per_100g"]["calories"])),
+            p=int(round(product["per_100g"]["protein_g"])),
+            f=int(round(product["per_100g"]["fat_g"])),
+            c=int(round(product["per_100g"]["carbs_g"])),
+        ),
+        reply_markup=_portion_keyboard_for_product(product),
     )
 
 

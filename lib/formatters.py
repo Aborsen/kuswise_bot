@@ -481,7 +481,7 @@ def _streak_word_uk(n: int) -> str:
     return "днів"
 
 
-def _format_streak_line(streak: dict | None) -> str | None:
+def _format_streak_line(streak: dict | None, locale: str = "en") -> str | None:
     """Return the /today header streak line, or None if no streak to show."""
     if not streak:
         return None
@@ -489,7 +489,15 @@ def _format_streak_line(streak: dict | None) -> str | None:
     if cur < 1:
         return None
     freezes = int(streak.get("freeze_days_remaining") or 0)
-    return f"🔥 Серія: {cur} {_streak_word_uk(cur)} · 🧊 Заморозок: {freezes}"
+    from lib.i18n import t
+    from lib.i18n.plurals import pluralize
+    word = pluralize(
+        cur, locale,
+        t("streak.day_singular", locale),
+        t("streak.day_few",      locale),
+        t("streak.day_many",     locale),
+    )
+    return t("streak.today_line", locale, n=cur, word=word, freezes=freezes)
 
 
 def format_today_progress(
@@ -525,7 +533,10 @@ def format_today_progress(
     else:
         quip = "Сьогодні ми святкували. Завтра — легше. 😉"
 
-    streak_line = _format_streak_line(streak)
+    locale = (profile or {}).get("lang") or "en"
+    if locale not in ("en", "uk"):
+        locale = "en"
+    streak_line = _format_streak_line(streak, locale)
     streak_block = f"{streak_line}\n" if streak_line else ""
 
     return (
@@ -556,93 +567,84 @@ def format_goals(
     actual_weekly_delta: float | None = None,
     status: str | None = None,  # "ahead" | "on_track" | "behind"
     first_name: str | None = None,
+    locale: str = "en",
 ) -> str:
-    """Render the /goals command response.
+    """Render the /goals command response (UA + EN, F-2b)."""
+    from lib.i18n import t
 
-    ``projection`` is a :class:`lib.goals.Projection` dataclass. ``status`` and
-    ``actual_weekly_delta`` come from comparing recent weight history against
-    the target rate; pass None when there's not enough data.
-    """
     name = _name_or_default(first_name)
     if not profile:
-        return GOALS_NO_PROFILE
+        return t("goals.no_profile", locale)
 
     current = profile.get("weight_kg")
     target = profile.get("target_weight_kg")
     goal = profile.get("goal") or "maintain"
     weekly_delta = projection.weekly_delta_kg
 
-    lines = [
-        GOALS_HEADER.format(name=name),
-        "━━━━━━━━━━━━━━━━━━━━━",
-    ]
+    sep = "━━━━━━━━━━━━━━━━━━━━━"
+    lines = [t("goals.header", locale, name=name), sep]
     if current is not None:
-        lines.append(f"⚖️ Поточна вага: <b>{float(current):.1f} кг</b>")
-    if target is not None:
-        lines.append(f"🏁 Ціль: <b>{float(target):.1f} кг</b>")
-    else:
-        lines.append("🏁 Ціль: <i>не задана</i>")
+        lines.append(t("goals.current_weight", locale, w=f"{float(current):.1f}"))
+    lines.append(
+        t("goals.target_weight", locale, w=f"{float(target):.1f}")
+        if target is not None else t("goals.target_unset", locale)
+    )
 
     if goal == "maintain":
-        lines.append("🎯 Мета: <b>Підтримувати вагу</b>")
+        lines.append(t("goals.maintain_label", locale))
     elif weekly_delta:
-        lines.append(f"📈 Тижнева ціль: <b>{weekly_delta:+.2f} кг/тиждень</b>")
+        lines.append(t("goals.weekly_label", locale, delta=weekly_delta))
     else:
-        lines.append("📈 Тижнева ціль: <i>не задана</i>")
+        lines.append(t("goals.weekly_unset", locale))
 
     # Projection block.
-    lines.append("━━━━━━━━━━━━━━━━━━━━━")
+    lines.append(sep)
     if projection.reason == "ok":
         weeks = projection.weeks_to_goal or 0
         d = projection.projected_date
         date_str = f"{d.day:02d}.{d.month:02d}.{d.year}" if d else "—"
-        lines.append(f"⏳ Орієнтовно <b>{weeks:g}</b> тижнів до цілі")
-        lines.append(f"📅 Прогноз: <b>{date_str}</b>")
+        lines.append(t("goals.weeks_to_goal", locale, weeks=f"{weeks:g}"))
+        lines.append(t("goals.projected_date", locale, date=date_str))
     elif projection.reason == "at_target":
-        lines.append(GOALS_PROJECTION_AT_TARGET)
+        lines.append(t("goals.projection_at_target", locale))
     elif projection.reason == "no_target":
-        lines.append(GOALS_NO_TARGET)
+        lines.append(t("goals.no_target", locale))
     elif projection.reason == "zero_delta":
-        lines.append(GOALS_PROJECTION_ZERO_DELTA)
+        lines.append(t("goals.projection_zero_delta", locale))
     elif projection.reason == "wrong_direction":
-        lines.append(GOALS_PROJECTION_WRONG_DIRECTION)
+        lines.append(t("goals.projection_wrong_direction", locale))
     elif projection.reason == "no_current":
-        lines.append("⚖️ Поточна вага не задана. Запиши через /profile.")
+        lines.append(t("goals.no_current_weight", locale))
 
     # Status from actual progress (when available).
     if status == "ahead":
-        lines.append(GOALS_STATUS_AHEAD)
+        lines.append(t("goals.status_ahead", locale))
     elif status == "on_track":
-        lines.append(GOALS_STATUS_ON_TRACK)
+        lines.append(t("goals.status_on_track", locale))
     elif status == "behind":
-        lines.append(GOALS_STATUS_BEHIND)
+        lines.append(t("goals.status_behind", locale))
     if actual_weekly_delta is not None:
-        lines.append(f"<i>Фактично за останні тижні: {actual_weekly_delta:+.2f} кг/тиждень</i>")
+        lines.append(t("goals.actual_line", locale, delta=actual_weekly_delta))
 
     return "\n".join(lines)
 
 
-def format_projection_line(projection, status: str | None = None) -> str | None:
-    """One-line projection summary for the Monday weigh-in reply.
-
-    Returns None when projection isn't meaningful (no target, maintain, etc.) —
-    callers omit the line entirely in that case rather than pad noise.
-    """
+def format_projection_line(
+    projection,
+    status: str | None = None,
+    locale: str = "en",
+) -> str | None:
+    """One-line projection summary for the Monday weigh-in reply (UA + EN)."""
     if projection.reason != "ok":
         return None
     d = projection.projected_date
     if d is None:
         return None
+    from lib.i18n import t
     date_str = f"{d.day:02d}.{d.month:02d}.{d.year}"
     weeks = projection.weeks_to_goal or 0
-    head = ""
-    if status == "ahead":
-        head = "🟢 Випереджаєш план — "
-    elif status == "behind":
-        head = "🔴 Відстаєш — "
-    elif status == "on_track":
-        head = "🟡 В графіку — "
-    return f"{head}прогноз цілі: <b>{date_str}</b> (~{weeks:g} тижнів)"
+    key = "goals.projection_line." + (status if status in ("ahead", "behind", "on_track") else "neutral")
+    return t(key, locale, date=date_str, weeks=f"{weeks:g}")
 
 
 # F-9: menu OCR strings
@@ -765,40 +767,45 @@ def format_meal_plan_day(day: dict, day_idx: int) -> str:
     return "\n".join(lines)
 
 
-def format_aliases(aliases: list[dict], first_name: str | None = None) -> str:
-    """F-7: render the /aliases command response.
+def format_aliases(
+    aliases: list[dict],
+    first_name: str | None = None,
+    locale: str = "en",
+) -> str:
+    """F-7: render the /aliases command response (UA + EN, F-2b).
 
     ``aliases`` is the list returned by :func:`lib.personalization.recent_aliases`.
     Empty list → friendly placeholder explaining how the bot learns.
     """
+    from lib.i18n import t
+
     name = _name_or_default(first_name)
+    sep = "━━━━━━━━━━━━━━━━━━━━━"
+    header = t("aliases.header", locale, name=name)
+
     if not aliases:
-        return (
-            f"📚 <b>Твої страви</b> · {name}\n"
-            f"━━━━━━━━━━━━━━━━━━━━━\n"
-            f"Поки нічого не накопичено. Бот вчиться з прийнятих страв — "
-            f"наступного разу, коли логуватимеш «куряча грудка», запам'ятає твою "
-            f"звичну порцію.\n\n"
-            f"<i>Допомагає вгадувати грами точніше після ~5 повторень одного блюда.</i>"
-        )
-    lines = [
-        f"📚 <b>Твої страви</b> · {name}",
-        "━━━━━━━━━━━━━━━━━━━━━",
-        "Бот використовує ці звичні порції щоб точніше оцінювати фото.",
-        "",
-    ]
+        return f"{header}\n{sep}\n" + t("aliases.empty", locale)
+
+    # Localized "g"/"г" + "kcal"/"ккал" inline. Tiny so we don't dict it.
+    g_unit = "г" if locale == "uk" else "g"
+
+    lines = [header, sep, t("aliases.intro", locale), ""]
     for a in aliases[:12]:
         kcal = int(round(float(a.get("default_kcal") or 0)))
         grams = float(a.get("default_grams") or 0)
-        portion_txt = f"~{int(round(grams))}г · " if grams > 0 else ""
+        portion = f"~{int(round(grams))}{g_unit} · " if grams > 0 else ""
         samples = int(a.get("sample_count") or 0)
         sample_tag = f" <i>({samples}×)</i>" if samples > 1 else ""
-        lines.append(
+        # Reuse the row template — but EN uses "kcal" and UA uses "ккал".
+        # We pre-format the kcal segment so the template stays language-neutral.
+        kcal_unit = "ккал" if locale == "uk" else "kcal"
+        row = (
             f"• <b>{a.get('normalized_name', a.get('alias', ''))}</b> — "
-            f"{portion_txt}{kcal} ккал{sample_tag}"
+            f"{portion}{kcal} {kcal_unit}{sample_tag}"
         )
+        lines.append(row)
     if len(aliases) > 12:
-        lines.append(f"<i>…ще {len(aliases) - 12}</i>")
+        lines.append(t("aliases.more", locale, n=len(aliases) - 12))
     return "\n".join(lines)
 
 
@@ -832,34 +839,49 @@ def format_alternates_intro(meal_type: str, candidates: list[dict]) -> str:
     return "\n".join(lines)
 
 
-def format_streak_summary(streak: dict | None, first_name: str | None = None) -> str:
+def format_streak_summary(
+    streak: dict | None,
+    first_name: str | None = None,
+    locale: str = "en",
+) -> str:
     """Render the /streak command response.
 
     ``streak`` is the row dict from :func:`lib.database.get_streak`, or ``None``
     when the user has never logged a meal.
     """
+    from lib.i18n import t
+    from lib.i18n.plurals import pluralize
+
     name = _name_or_default(first_name)
+    header = t("streak.summary_header", locale, name=name)
+    sep = "━━━━━━━━━━━━━━━━━━━━━"
+
     if not streak or int(streak.get("current_streak") or 0) < 1:
-        return (
-            f"🔥 <b>Серія</b> · {name}\n"
-            f"━━━━━━━━━━━━━━━━━━━━━\n"
-            f"Ще не починали серію — залогуйте першу страву й поїхали! 🚀\n\n"
-            f"<i>Серія росте, коли ви заносите хоча б одну страву щодня. "
-            f"3 «заморозки» на місяць рятують пропущений день.</i>"
-        )
+        return f"{header}\n{sep}\n" + t("streak.summary_empty", locale)
+
     cur = int(streak.get("current_streak") or 0)
     longest = int(streak.get("longest_streak") or 0)
     freezes = int(streak.get("freeze_days_remaining") or 0)
     last = streak.get("last_log_date") or "—"
-    return (
-        f"🔥 <b>Серія</b> · {name}\n"
-        f"━━━━━━━━━━━━━━━━━━━━━\n"
-        f"Поточна серія: <b>{cur}</b> {_streak_word_uk(cur)}\n"
-        f"Найкраща серія: <b>{longest}</b> {_streak_word_uk(longest)}\n"
-        f"🧊 Заморозок цього місяця: <b>{freezes}</b>/3\n"
-        f"Останній лог: {last}\n\n"
-        f"<i>Заморозки відновлюються 1 числа кожного місяця.</i>"
-    )
+
+    def _word(n: int) -> str:
+        return pluralize(
+            n, locale,
+            t("streak.day_singular", locale),
+            t("streak.day_few",      locale),
+            t("streak.day_many",     locale),
+        )
+
+    return "\n".join([
+        header,
+        sep,
+        t("streak.summary_current", locale, cur=cur, word=_word(cur)),
+        t("streak.summary_longest", locale, longest=longest, word=_word(longest)),
+        t("streak.summary_freezes", locale, freezes=freezes),
+        t("streak.summary_last_log", locale, last=last),
+        "",
+        t("streak.summary_freeze_note", locale),
+    ])
 
 
 def format_yesterday(

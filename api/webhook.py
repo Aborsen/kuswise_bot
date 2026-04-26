@@ -215,13 +215,7 @@ from lib.formatters import (
     TARGET_WEIGHT_GAIN_MISMATCH,
     TARGET_WEIGHT_SAVED,
     TARGET_WEIGHT_CLEARED,
-    WEEKLY_DELTA_ASK_LOSE,
-    WEEKLY_DELTA_ASK_GAIN,
-    WEEKLY_DELTA_INVALID,
-    WEEKLY_DELTA_WRONG_SIGN,
-    WEEKLY_DELTA_SAVED,
-    WEEKLY_DELTA_NOT_FOR_MAINTAIN,
-    GOALS_NO_PROFILE,
+    # WEEKLY_DELTA_* + GOALS_* migrated to lib/i18n (F-2b Phase 3)
     format_goals,
     format_projection_line,
     # ONBOARDING_TZ_* migrated to lib/i18n dict (F-2b Phase 2)
@@ -2399,7 +2393,7 @@ def handle_command(conn, message: dict, text: str, first_name: str | None, profi
             streak_row = None
         send_message(
             chat_id,
-            format_streak_summary(streak_row, first_name),
+            format_streak_summary(streak_row, first_name, locale=i18n_mod.locale_of(profile)),
             reply_markup=main_menu_keyboard(),
         )
         return
@@ -2449,7 +2443,7 @@ def handle_command(conn, message: dict, text: str, first_name: str | None, profi
             aliases = []
         send_message(
             chat_id,
-            format_aliases(aliases, first_name),
+            format_aliases(aliases, first_name, locale=i18n_mod.locale_of(profile)),
             reply_markup=main_menu_keyboard(),
         )
         return
@@ -2457,7 +2451,7 @@ def handle_command(conn, message: dict, text: str, first_name: str | None, profi
     # F-5: dedicated goals view + weekly-delta editor.
     if cmd == "/goals":
         if not profile:
-            send_message(chat_id, GOALS_NO_PROFILE)
+            send_message(chat_id, _t("goals.no_profile", profile))
             return
         projection = goals_mod.projection_for_profile(profile)
         # Compute actual weekly delta from recent weight history (best-effort).
@@ -2475,7 +2469,8 @@ def handle_command(conn, message: dict, text: str, first_name: str | None, profi
         send_message(
             chat_id,
             format_goals(profile, projection, actual_weekly_delta=actual,
-                         status=status, first_name=first_name),
+                         status=status, first_name=first_name,
+                         locale=i18n_mod.locale_of(profile)),
             reply_markup=goals_edit_keyboard(
                 has_target=bool(profile.get("target_weight_kg")),
                 has_delta=profile.get("weekly_delta_kg") is not None,
@@ -2961,7 +2956,7 @@ def handle_weight_input(
                 )
         except Exception as _hx:
             error("goals_history_failed", exc=_hx, user_id=user_id)
-        line = format_projection_line(projection, status=status)
+        line = format_projection_line(projection, status=status, locale=i18n_mod.locale_of(profile))
         if line:
             body = body + "\n" + line
     except Exception as _px:
@@ -3071,17 +3066,17 @@ def handle_weekly_delta_input(
 
     raw = _parse_float(cleaned)
     if raw is None:
-        send_message(chat_id, WEEKLY_DELTA_INVALID)
+        send_message(chat_id, _t("goals.weekly_invalid", profile))
         return
 
     magnitude = abs(raw)
     if not (0.1 <= magnitude <= 2.0):
-        send_message(chat_id, WEEKLY_DELTA_INVALID)
+        send_message(chat_id, _t("goals.weekly_invalid", profile))
         return
 
     goal = profile.get("goal") or "maintain"
     if goal == "maintain":
-        send_message(chat_id, WEEKLY_DELTA_NOT_FOR_MAINTAIN, reply_markup=main_menu_keyboard())
+        send_message(chat_id, _t("goals.weekly_not_for_maintain", profile), reply_markup=main_menu_keyboard())
         set_awaiting_input(conn, user_id, None)
         return
 
@@ -3090,7 +3085,7 @@ def handle_weekly_delta_input(
     #   - lose: + (as instructed) or − (already-signed) both accepted.
     #   - gain: − is wrong-direction (wants up, typed down) → reject.
     if raw < 0 and goal == "gain":
-        send_message(chat_id, WEEKLY_DELTA_WRONG_SIGN)
+        send_message(chat_id, _t("goals.weekly_wrong_sign", profile))
         return
 
     signed = -magnitude if goal == "lose" else magnitude
@@ -3098,7 +3093,7 @@ def handle_weekly_delta_input(
     set_awaiting_input(conn, user_id, None)
     send_message(
         chat_id,
-        WEEKLY_DELTA_SAVED.format(delta=signed),
+        _t("goals.weekly_saved", profile, delta=signed),
         reply_markup=main_menu_keyboard(),
     )
 
@@ -3176,13 +3171,13 @@ def handle_profile_edit_callback(conn, cb: dict, profile: dict) -> None:
         goal = profile.get("goal") or "maintain"
         if goal == "maintain":
             answer_callback_query(cb_id, "Для цієї мети не потрібна")
-            send_message(chat_id, WEEKLY_DELTA_NOT_FOR_MAINTAIN, reply_markup=main_menu_keyboard())
+            send_message(chat_id, _t("goals.weekly_not_for_maintain", profile), reply_markup=main_menu_keyboard())
             return
         answer_callback_query(cb_id, "📈 Чекаю на число")
         set_awaiting_input(conn, user_id, "weekly_delta")
         send_message(
             chat_id,
-            WEEKLY_DELTA_ASK_LOSE if goal == "lose" else WEEKLY_DELTA_ASK_GAIN,
+            _t("goals.weekly_ask_lose" if goal == "lose" else "goals.weekly_ask_gain", profile),
         )
         return
 

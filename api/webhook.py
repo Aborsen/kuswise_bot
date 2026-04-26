@@ -175,22 +175,8 @@ from lib.formatters import (
     ASK_PROMPT,
     ASK_THINKING,
     ASK_ERROR,
-    ONBOARDING_INTRO,
-    ONBOARDING_ASK_AGE,
-    ONBOARDING_ASK_SEX,
-    ONBOARDING_ASK_WEIGHT,
-    ONBOARDING_ASK_HEIGHT,
-    ONBOARDING_ASK_GYM,
-    ONBOARDING_ASK_GOAL,
-    ONBOARDING_INVALID_NUMBER,
-    ONBOARDING_AGE_RANGE,
-    ONBOARDING_WEIGHT_RANGE,
-    ONBOARDING_HEIGHT_RANGE,
-    ONBOARDING_CUSTOM_CAL_PROMPT,
-    ONBOARDING_CUSTOM_CAL_RANGE,
-    ONBOARDING_NEED_BUTTON,
-    ONBOARDING_DONE,
-    ONBOARDING_REQUIRED,
+    # Onboarding strings migrated to lib/i18n dict (F-2b Phase 2) — call
+    # sites use i18n_mod.t("onboarding.foo", locale=locale_of(profile)).
     BTN_ASK,
     BTN_TODAY,
     BTN_YESTERDAY,
@@ -238,10 +224,7 @@ from lib.formatters import (
     GOALS_NO_PROFILE,
     format_goals,
     format_projection_line,
-    ONBOARDING_ASK_TZ,
-    ONBOARDING_TZ_CUSTOM_PROMPT,
-    ONBOARDING_TZ_INVALID,
-    ONBOARDING_TZ_SAVED,
+    # ONBOARDING_TZ_* migrated to lib/i18n dict (F-2b Phase 2)
     TIMEZONE_PROMPT,
     TIMEZONE_NOT_ONBOARDED,
     TIMEZONE_SAVED,
@@ -277,6 +260,16 @@ from lib.health import (
     render_labels as render_health_labels,
 )
 from lib import i18n as i18n_mod
+
+
+def _t(key: str, profile=None, **kwargs):
+    """Localize ``key`` against the user's profile language.
+
+    Convenience wrapper for the very common
+    ``i18n_mod.t(key, locale=i18n_mod.locale_of(profile), **kwargs)``
+    pattern used at every send_message site that supports both UA + EN.
+    """
+    return i18n_mod.t(key, locale=i18n_mod.locale_of(profile), **kwargs)
 from lib.formatters import (
     HEALTH_HEADER,
     HEALTH_NOT_ONBOARDED,
@@ -475,7 +468,7 @@ def process_update(update: dict) -> None:
                 send_message(chat_id, help_message())
                 return
             if message.get("photo"):
-                send_message(chat_id, ONBOARDING_REQUIRED)
+                send_message(chat_id, _t("onboarding.required", profile))
                 return
             handle_onboarding_text(conn, chat_id, user_id, first_name, text, profile)
             return
@@ -732,7 +725,7 @@ def _finalize_onboarding(conn, chat_id: int, user_id: int, first_name: str | Non
     except Exception as e:
         error("water_target_upsert_failed", exc=e, user_id=user_id)
         water = None
-    done_text = ONBOARDING_DONE.format(name=first_name or "друже")
+    done_text = _t("onboarding.done", profile, name=first_name or _t("onboarding.default_name", profile))
     if water:
         done_text += (
             f"\n\n🎯 Калорії: <b>{cal} ккал/день</b>\n"
@@ -750,44 +743,44 @@ def handle_onboarding_text(conn, chat_id: int, user_id: int, first_name: str | N
     if step == "awaiting_age":
         age = _parse_int(text)
         if age is None:
-            send_message(chat_id, ONBOARDING_INVALID_NUMBER)
+            send_message(chat_id, _t("onboarding.invalid_number", profile))
             return
         if not (10 <= age <= 100):
-            send_message(chat_id, ONBOARDING_AGE_RANGE)
+            send_message(chat_id, _t("onboarding.age_range", profile))
             return
         update_profile(conn, user_id, age=age, onboarding_step="awaiting_sex")
-        send_message(chat_id, ONBOARDING_ASK_SEX, reply_markup=sex_keyboard())
+        send_message(chat_id, _t("onboarding.ask_sex", profile), reply_markup=sex_keyboard())
 
     elif step == "awaiting_sex":
-        send_message(chat_id, ONBOARDING_NEED_BUTTON, reply_markup=sex_keyboard())
+        send_message(chat_id, _t("onboarding.need_button", profile), reply_markup=sex_keyboard())
 
     elif step == "awaiting_weight":
         w = _parse_float(text)
         if w is None:
-            send_message(chat_id, ONBOARDING_INVALID_NUMBER)
+            send_message(chat_id, _t("onboarding.invalid_number", profile))
             return
         if not (30 <= w <= 300):
-            send_message(chat_id, ONBOARDING_WEIGHT_RANGE)
+            send_message(chat_id, _t("onboarding.weight_range", profile))
             return
         update_profile(conn, user_id, weight_kg=w, onboarding_step="awaiting_height")
-        send_message(chat_id, ONBOARDING_ASK_HEIGHT)
+        send_message(chat_id, _t("onboarding.ask_height", profile))
 
     elif step == "awaiting_height":
         h = _parse_int(text)
         if h is None:
-            send_message(chat_id, ONBOARDING_INVALID_NUMBER)
+            send_message(chat_id, _t("onboarding.invalid_number", profile))
             return
         if not (100 <= h <= 250):
-            send_message(chat_id, ONBOARDING_HEIGHT_RANGE)
+            send_message(chat_id, _t("onboarding.height_range", profile))
             return
         update_profile(conn, user_id, height_cm=h, onboarding_step="awaiting_gym")
-        send_message(chat_id, ONBOARDING_ASK_GYM, reply_markup=gym_keyboard())
+        send_message(chat_id, _t("onboarding.ask_gym", profile), reply_markup=gym_keyboard())
 
     elif step == "awaiting_gym":
-        send_message(chat_id, ONBOARDING_NEED_BUTTON, reply_markup=gym_keyboard())
+        send_message(chat_id, _t("onboarding.need_button", profile), reply_markup=gym_keyboard())
 
     elif step == "awaiting_goal":
-        send_message(chat_id, ONBOARDING_NEED_BUTTON, reply_markup=goal_keyboard())
+        send_message(chat_id, _t("onboarding.need_button", profile), reply_markup=goal_keyboard())
 
     elif step == "awaiting_target_weight":
         tw = _parse_float(text)
@@ -822,44 +815,44 @@ def handle_onboarding_text(conn, chat_id: int, user_id: int, first_name: str | N
         )
 
     elif step == "awaiting_confirm":
-        send_message(chat_id, ONBOARDING_NEED_BUTTON, reply_markup=confirm_calories_keyboard())
+        send_message(chat_id, _t("onboarding.need_button", profile), reply_markup=confirm_calories_keyboard())
 
     elif step == "awaiting_custom_cal":
         cal = _parse_int(text)
         if cal is None:
-            send_message(chat_id, ONBOARDING_INVALID_NUMBER)
+            send_message(chat_id, _t("onboarding.invalid_number", profile))
             return
         if not (1000 <= cal <= 6000):
-            send_message(chat_id, ONBOARDING_CUSTOM_CAL_RANGE)
+            send_message(chat_id, _t("onboarding.custom_cal_range", profile))
             return
         update_profile(
             conn, user_id,
             daily_calorie_target=cal,
             onboarding_step="awaiting_tz",
         )
-        send_message(chat_id, ONBOARDING_ASK_TZ, reply_markup=tz_keyboard(prefix="onb:tz"))
+        send_message(chat_id, _t("onboarding.ask_tz", profile), reply_markup=tz_keyboard(prefix="onb:tz"))
 
     elif step == "awaiting_tz":
         # User typed instead of tapping a preset — reshow the keyboard.
-        send_message(chat_id, ONBOARDING_NEED_BUTTON, reply_markup=tz_keyboard(prefix="onb:tz"))
+        send_message(chat_id, _t("onboarding.need_button", profile), reply_markup=tz_keyboard(prefix="onb:tz"))
 
     elif step == "awaiting_tz_custom":
         tz_input = text.strip()
         if tz_input.lower() in ("/cancel", "cancel"):
             update_profile(conn, user_id, onboarding_step="awaiting_tz")
-            send_message(chat_id, ONBOARDING_ASK_TZ, reply_markup=tz_keyboard(prefix="onb:tz"))
+            send_message(chat_id, _t("onboarding.ask_tz", profile), reply_markup=tz_keyboard(prefix="onb:tz"))
             return
         if not is_valid_tz(tz_input):
-            send_message(chat_id, ONBOARDING_TZ_INVALID)
+            send_message(chat_id, _t("onboarding.tz_invalid", profile))
             return
         update_profile(conn, user_id, tz=tz_input, onboarding_step="done")
-        send_message(chat_id, ONBOARDING_TZ_SAVED.format(tz=tz_input))
+        send_message(chat_id, _t("onboarding.tz_saved", profile, tz=tz_input))
         _finalize_onboarding(conn, chat_id, user_id, first_name)
 
     else:
         # Unexpected state — restart
         reset_onboarding(conn, user_id)
-        send_message(chat_id, ONBOARDING_ASK_AGE)
+        send_message(chat_id, _t("onboarding.ask_age", profile))
 
 
 def handle_onboarding_callback(conn, cb: dict) -> None:
@@ -877,8 +870,8 @@ def handle_onboarding_callback(conn, cb: dict) -> None:
     if data == "onb:restart":
         answer_callback_query(cb_id, "🔄 Починаємо заново")
         reset_onboarding(conn, user_id)
-        send_message(chat_id, ONBOARDING_INTRO)
-        send_message(chat_id, ONBOARDING_ASK_AGE)
+        send_message(chat_id, _t("onboarding.intro", profile))
+        send_message(chat_id, _t("onboarding.ask_age", profile))
         return
 
     # F-2b: onboarding step zero — language confirmation
@@ -900,8 +893,8 @@ def handle_onboarding_callback(conn, cb: dict) -> None:
         answer_callback_query(cb_id, i18n_mod.t(ack_key, locale=chosen))
         # Now run the standard onboarding intro + first question. These
         # strings are still hardcoded UA in Phase 1; Phase 2 migrates them.
-        send_message(chat_id, ONBOARDING_INTRO)
-        send_message(chat_id, ONBOARDING_ASK_AGE)
+        send_message(chat_id, _t("onboarding.intro", profile))
+        send_message(chat_id, _t("onboarding.ask_age", profile))
         return
 
     if data.startswith("onb:sex:"):
@@ -914,7 +907,7 @@ def handle_onboarding_callback(conn, cb: dict) -> None:
             return
         update_profile(conn, user_id, sex=sex, onboarding_step="awaiting_weight")
         answer_callback_query(cb_id, "Записав")
-        send_message(chat_id, ONBOARDING_ASK_WEIGHT)
+        send_message(chat_id, _t("onboarding.ask_weight", profile))
         return
 
     if data.startswith("onb:gym:"):
@@ -927,7 +920,7 @@ def handle_onboarding_callback(conn, cb: dict) -> None:
             return
         update_profile(conn, user_id, gym_per_week=freq, onboarding_step="awaiting_goal")
         answer_callback_query(cb_id, "Записав")
-        send_message(chat_id, ONBOARDING_ASK_GOAL, reply_markup=goal_keyboard())
+        send_message(chat_id, _t("onboarding.ask_goal", profile), reply_markup=goal_keyboard())
         return
 
     if data.startswith("onb:goal:"):
@@ -942,7 +935,7 @@ def handle_onboarding_callback(conn, cb: dict) -> None:
         if not updated.get("weight_kg"):
             reset_onboarding(conn, user_id)
             answer_callback_query(cb_id, "Щось пішло не так, починаємо заново")
-            send_message(chat_id, ONBOARDING_ASK_AGE)
+            send_message(chat_id, _t("onboarding.ask_age", profile))
             return
 
         # lose / gain → ask the motivation target weight first, then recommendation.
@@ -988,7 +981,7 @@ def handle_onboarding_callback(conn, cb: dict) -> None:
             onboarding_step="awaiting_tz",
         )
         answer_callback_query(cb_id, "✅ Прийнято")
-        send_message(chat_id, ONBOARDING_ASK_TZ, reply_markup=tz_keyboard(prefix="onb:tz"))
+        send_message(chat_id, _t("onboarding.ask_tz", profile), reply_markup=tz_keyboard(prefix="onb:tz"))
         return
 
     if data.startswith("onb:tz:"):
@@ -999,14 +992,14 @@ def handle_onboarding_callback(conn, cb: dict) -> None:
         if tz_value == "custom":
             update_profile(conn, user_id, onboarding_step="awaiting_tz_custom")
             answer_callback_query(cb_id, "Чекаю на назву зони")
-            send_message(chat_id, ONBOARDING_TZ_CUSTOM_PROMPT)
+            send_message(chat_id, _t("onboarding.tz_custom_prompt", profile))
             return
         if not is_valid_tz(tz_value):
             answer_callback_query(cb_id, "Невідома зона")
             return
         update_profile(conn, user_id, tz=tz_value, onboarding_step="done")
         answer_callback_query(cb_id, "✅ Записав")
-        send_message(chat_id, ONBOARDING_TZ_SAVED.format(tz=tz_value))
+        send_message(chat_id, _t("onboarding.tz_saved", profile, tz=tz_value))
         _finalize_onboarding(conn, chat_id, user_id, first_name)
         return
 
@@ -1016,7 +1009,7 @@ def handle_onboarding_callback(conn, cb: dict) -> None:
             return
         update_profile(conn, user_id, onboarding_step="awaiting_custom_cal")
         answer_callback_query(cb_id, "Чекаю на число")
-        send_message(chat_id, ONBOARDING_CUSTOM_CAL_PROMPT)
+        send_message(chat_id, _t("onboarding.custom_cal_prompt", profile))
         return
 
     answer_callback_query(cb_id, "Невідома дія")
@@ -1058,7 +1051,7 @@ def handle_timezone_input(conn, chat_id: int, user_id: int, text: str) -> None:
         send_message(chat_id, TIMEZONE_CANCELLED)
         return
     if not is_valid_tz(cleaned):
-        send_message(chat_id, ONBOARDING_TZ_INVALID)
+        send_message(chat_id, _t("onboarding.tz_invalid", profile))
         return
     update_profile(conn, user_id, tz=cleaned)
     set_awaiting_input(conn, user_id, None)
@@ -1291,7 +1284,7 @@ def handle_callback(conn, cb: dict) -> None:
         message = cb.get("message", {})
         chat_id = message.get("chat", {}).get("id")
         if chat_id:
-            send_message(chat_id, ONBOARDING_REQUIRED)
+            send_message(chat_id, _t("onboarding.required", profile))
         return
 
     if data.startswith("meal_type:"):

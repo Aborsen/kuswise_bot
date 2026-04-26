@@ -471,6 +471,51 @@ def test_lang_confirm_prompt_renders_in_both_locales():
     assert "english" in en_prompt.lower()
 
 
+# ---------- F-2b Phase 2: onboarding strings ----------
+
+def test_onboarding_intro_localizes():
+    en = i18n_mod.t("onboarding.intro", locale="en")
+    uk = i18n_mod.t("onboarding.intro", locale="uk")
+    assert "KusWise" in en and "KusWise" in uk
+    assert "questions" in en.lower()  # English-specific word
+    assert "питань"   in uk.lower()    # Ukrainian-specific word
+
+
+def test_onboarding_ask_age_localizes():
+    en = i18n_mod.t("onboarding.ask_age", locale="en")
+    uk = i18n_mod.t("onboarding.ask_age", locale="uk")
+    assert en.startswith("1/6")
+    assert uk.startswith("1/6")
+    assert "old" in en.lower()
+    assert "років" in uk.lower()
+
+
+def test_onboarding_done_format_kwargs():
+    """The done message takes a name kwarg — make sure it interpolates."""
+    en = i18n_mod.t("onboarding.done", locale="en", name="Vic")
+    uk = i18n_mod.t("onboarding.done", locale="uk", name="Віктор")
+    assert "<b>Vic</b>"   in en
+    assert "<b>Віктор</b>" in uk
+    assert "/profile" in en and "/profile" in uk
+
+
+def test_onboarding_default_name_is_locale_specific():
+    """Fallback name when first_name is missing should match locale."""
+    assert i18n_mod.t("onboarding.default_name", locale="en") == "friend"
+    assert i18n_mod.t("onboarding.default_name", locale="uk") == "друже"
+
+
+def test_locale_of_helper():
+    assert i18n_mod.locale_of(None) == "en"
+    assert i18n_mod.locale_of({}) == "en"
+    assert i18n_mod.locale_of({"lang": "en"}) == "en"
+    assert i18n_mod.locale_of({"lang": "uk"}) == "uk"
+    # Unsupported lang stored on the row -> safe fallback to en
+    assert i18n_mod.locale_of({"lang": "fr"}) == "en"
+    # Non-dict input never crashes
+    assert i18n_mod.locale_of("not a dict") == "en"
+
+
 # ---------- engagement streaks (lib.database, F-4) ----------
 
 class _StreakFakeCursor:

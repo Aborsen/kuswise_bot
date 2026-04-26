@@ -7,5 +7,28 @@
 
   "lang_confirm_prompt": "👋 Привіт! Я <b>KusWise</b> — твій трекер калорій.\n\nЯ говоритиму з тобою <b>українською</b> (визначив за мовою твого Telegram).\n\nЯкщо хочеш — можеш перемкнути на English.",
   "lang_confirm_saved_uk": "✅ Гаразд, продовжуємо українською 🇺🇦",
-  "lang_confirm_saved_en": "✅ Switching to English 🇬🇧"
+  "lang_confirm_saved_en": "✅ Switching to English 🇬🇧",
+
+  "onboarding.intro": "👋 Привіт! Я KusWise Bot — твій персональний джин-харчознавець.\n\nЩоб порахувати твою ідеальну норму калорій, мені потрібно про тебе трохи дізнатися. Це займе хвилину — шість коротких питань. Поїхали? 🚀",
+  "onboarding.ask_age": "1/6 🎂 <b>Скільки тобі років?</b>\nНапиши числом (10–100). Обіцяю нікому не казати.",
+  "onboarding.ask_sex": "2/6 🚻 <b>Стать?</b>\nЦе потрібно для формули — різний обмін речовин.",
+  "onboarding.ask_weight": "3/6 ⚖️ <b>Скільки ти важиш?</b> (у кілограмах)\nМожна з комою (наприклад: 75.5). Ваги не брешуть, бот теж.",
+  "onboarding.ask_height": "4/6 📏 <b>Який ти на зріст?</b> (у сантиметрах)\nЦіле число, 100–250. Не додавай «з носками».",
+  "onboarding.ask_gym": "5/6 🏋️ <b>Скільки разів на тиждень тренуєшся?</b>\nЧесно. Диван не рахується.",
+  "onboarding.ask_goal": "6/6 🎯 <b>Яка твоя мета?</b>",
+  "onboarding.invalid_number": "Хм, це не схоже на число. Спробуй ще раз. 🙂",
+  "onboarding.age_range": "Вік має бути від 10 до 100. Введи ще раз, будь ласка. 🎂",
+  "onboarding.weight_range": "Вага має бути від 30 до 300 кг. Введи ще раз. ⚖️",
+  "onboarding.height_range": "Зріст має бути від 100 до 250 см. Введи ще раз. 📏",
+  "onboarding.custom_cal_prompt": "Введи свою цифру калорій (ціле число від 1000 до 6000):",
+  "onboarding.custom_cal_range": "Калорії мають бути від 1000 до 6000. Спробуй ще раз. 🙂",
+  "onboarding.need_button": "Будь ласка, скористайся кнопкою нижче. 👇",
+  "onboarding.done": "🎉 Готово, <b>{name}</b>! Тепер я знаю про тебе все, що треба.\n\nНадсилай 📸 фото страв або 📝 текстом — я рахуватиму. Команди — у меню «/», твій профіль — /profile.",
+  "onboarding.required": "Спочатку давай познайомимось 👋 Натисни /start — поставлю кілька питань і порахую твою норму.",
+  "onboarding.default_name": "друже",
+
+  "onboarding.ask_tz": "🌐 <b>Який у тебе часовий пояс?</b>\n\nЦе впливає на час денного підсумку і на те, коли «сьогодні» переходить у «завтра». Якщо твоєї зони немає в списку — обери «Інша зона» і введи назву IANA вручну.",
+  "onboarding.tz_custom_prompt": "Введи свою часову зону у форматі IANA, наприклад:\n<code>Asia/Tokyo</code>, <code>America/Chicago</code>, <code>Australia/Sydney</code>.\n\nПовний список: en.wikipedia.org/wiki/List_of_tz_database_time_zones",
+  "onboarding.tz_invalid": "Не впізнав цю зону 🤔 Перевір написання — потрібен формат <code>Region/City</code>, наприклад <code>Europe/Madrid</code> або <code>Asia/Tokyo</code>.",
+  "onboarding.tz_saved": "🌐 Часовий пояс: <b>{tz}</b>"
 }

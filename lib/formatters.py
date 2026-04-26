@@ -313,60 +313,9 @@ def welcome_message(first_name: str | None = None) -> str:
 
 # --- Onboarding ---
 
-ONBOARDING_INTRO = (
-    "👋 Привіт! Я KusWise Bot — твій персональний джин-харчознавець.\n\n"
-    "Щоб порахувати твою ідеальну норму калорій, мені потрібно про тебе трохи дізнатися. "
-    "Це займе хвилину — шість коротких питань. Поїхали? 🚀"
-)
-
-ONBOARDING_ASK_AGE = (
-    "1/6 🎂 <b>Скільки тобі років?</b>\n"
-    "Напиши числом (10–100). Обіцяю нікому не казати."
-)
-ONBOARDING_ASK_SEX = "2/6 🚻 <b>Стать?</b>\nЦе потрібно для формули — різний обмін речовин."
-ONBOARDING_ASK_WEIGHT = (
-    "3/6 ⚖️ <b>Скільки ти важиш?</b> (у кілограмах)\n"
-    "Можна з комою (наприклад: 75.5). Ваги не брешуть, бот теж."
-)
-ONBOARDING_ASK_HEIGHT = (
-    "4/6 📏 <b>Який ти на зріст?</b> (у сантиметрах)\n"
-    "Ціле число, 100–250. Не додавай «з носками»."
-)
-ONBOARDING_ASK_GYM = (
-    "5/6 🏋️ <b>Скільки разів на тиждень тренуєшся?</b>\n"
-    "Чесно. Диван не рахується."
-)
-ONBOARDING_ASK_GOAL = "6/6 🎯 <b>Яка твоя мета?</b>"
-ONBOARDING_INVALID_NUMBER = "Хм, це не схоже на число. Спробуй ще раз. 🙂"
-ONBOARDING_AGE_RANGE = "Вік має бути від 10 до 100. Введи ще раз, будь ласка. 🎂"
-ONBOARDING_WEIGHT_RANGE = "Вага має бути від 30 до 300 кг. Введи ще раз. ⚖️"
-ONBOARDING_HEIGHT_RANGE = "Зріст має бути від 100 до 250 см. Введи ще раз. 📏"
-ONBOARDING_CUSTOM_CAL_PROMPT = (
-    "Введи свою цифру калорій (ціле число від 1000 до 6000):"
-)
-ONBOARDING_CUSTOM_CAL_RANGE = "Калорії мають бути від 1000 до 6000. Спробуй ще раз. 🙂"
-ONBOARDING_NEED_BUTTON = "Будь ласка, скористайся кнопкою нижче. 👇"
-ONBOARDING_DONE = (
-    "🎉 Готово, <b>{name}</b>! Тепер я знаю про тебе все, що треба.\n\n"
-    "Надсилай 📸 фото страв або 📝 текстом — я рахуватиму. Команди — у меню «/», твій профіль — /profile."
-)
-
-# Onboarding step: timezone (F-3)
-ONBOARDING_ASK_TZ = (
-    "🌐 <b>Який у тебе часовий пояс?</b>\n\n"
-    "Це впливає на час денного підсумку і на те, коли «сьогодні» переходить у «завтра». "
-    "Якщо твоєї зони немає в списку — обери «Інша зона» і введи назву IANA вручну."
-)
-ONBOARDING_TZ_CUSTOM_PROMPT = (
-    "Введи свою часову зону у форматі IANA, наприклад:\n"
-    "<code>Asia/Tokyo</code>, <code>America/Chicago</code>, <code>Australia/Sydney</code>.\n\n"
-    "Повний список: en.wikipedia.org/wiki/List_of_tz_database_time_zones"
-)
-ONBOARDING_TZ_INVALID = (
-    "Не впізнав цю зону 🤔 Перевір написання — потрібен формат <code>Region/City</code>, "
-    "наприклад <code>Europe/Madrid</code> або <code>Asia/Tokyo</code>."
-)
-ONBOARDING_TZ_SAVED = "🌐 Часовий пояс: <b>{tz}</b>"
+# Onboarding strings migrated to lib/i18n/dict_*.json (F-2b Phase 2).
+# Use ``api.webhook._t("onboarding.foo", profile)`` at call sites.
+# Also includes the timezone substep (F-3) under "onboarding.tz_*".
 
 # /timezone command
 TIMEZONE_PROMPT = (
@@ -509,9 +458,7 @@ def format_profile(profile: dict) -> str:
     return "\n".join(lines)
 
 
-ONBOARDING_REQUIRED = (
-    "Спочатку давай познайомимось 👋 Натисни /start — поставлю кілька питань і порахую твою норму."
-)
+# ONBOARDING_REQUIRED migrated to "onboarding.required" key in lib/i18n.
 
 
 def help_message() -> str:

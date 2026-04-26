@@ -7,5 +7,28 @@
 
   "lang_confirm_prompt": "👋 Hi! I'm <b>KusWise</b> — your calorie tracker.\n\nI'll talk to you in <b>English</b> (detected from your Telegram).\n\nIf you'd prefer Ukrainian, you can switch below.",
   "lang_confirm_saved_uk": "✅ Гаразд, продовжуємо українською 🇺🇦",
-  "lang_confirm_saved_en": "✅ Continuing in English 🇬🇧"
+  "lang_confirm_saved_en": "✅ Continuing in English 🇬🇧",
+
+  "onboarding.intro": "👋 Hi! I'm KusWise Bot — your personal nutrition genie.\n\nTo calculate your ideal calorie target I need to learn a little about you. Six quick questions, takes about a minute. Ready? 🚀",
+  "onboarding.ask_age": "1/6 🎂 <b>How old are you?</b>\nJust the number (10–100). I won't tell anyone.",
+  "onboarding.ask_sex": "2/6 🚻 <b>Sex?</b>\nNeeded for the formula — different metabolism.",
+  "onboarding.ask_weight": "3/6 ⚖️ <b>How much do you weigh?</b> (in kilograms)\nDecimals OK (e.g. 75.5). Scales don't lie. Neither does the bot.",
+  "onboarding.ask_height": "4/6 📏 <b>How tall are you?</b> (in centimeters)\nWhole number, 100–250. Don't add 'with shoes'.",
+  "onboarding.ask_gym": "5/6 🏋️ <b>How often do you train per week?</b>\nBe honest. Couch doesn't count.",
+  "onboarding.ask_goal": "6/6 🎯 <b>What's your goal?</b>",
+  "onboarding.invalid_number": "Hmm, that doesn't look like a number. Try again. 🙂",
+  "onboarding.age_range": "Age should be between 10 and 100. Try again, please. 🎂",
+  "onboarding.weight_range": "Weight should be between 30 and 300 kg. Try again. ⚖️",
+  "onboarding.height_range": "Height should be between 100 and 250 cm. Try again. 📏",
+  "onboarding.custom_cal_prompt": "Enter your own calorie target (whole number, 1000–6000):",
+  "onboarding.custom_cal_range": "Calories should be between 1000 and 6000. Try again. 🙂",
+  "onboarding.need_button": "Please use the button below. 👇",
+  "onboarding.done": "🎉 All set, <b>{name}</b>! I know everything I need now.\n\nSend me 📸 a meal photo or 📝 a text description — I'll count it. Commands are in the «/» menu, your profile is at /profile.",
+  "onboarding.required": "Let's get to know each other first 👋 Tap /start — I'll ask a few questions and calculate your target.",
+  "onboarding.default_name": "friend",
+
+  "onboarding.ask_tz": "🌐 <b>What's your timezone?</b>\n\nThis sets when your day rolls over and when the daily summary fires. If your zone isn't in the list, pick «Other» and type the IANA name.",
+  "onboarding.tz_custom_prompt": "Enter your timezone in IANA format, e.g.:\n<code>Asia/Tokyo</code>, <code>America/Chicago</code>, <code>Australia/Sydney</code>.\n\nFull list: en.wikipedia.org/wiki/List_of_tz_database_time_zones",
+  "onboarding.tz_invalid": "Didn't recognize that zone 🤔 Check the spelling — it should be <code>Region/City</code>, like <code>Europe/Madrid</code> or <code>Asia/Tokyo</code>.",
+  "onboarding.tz_saved": "🌐 Timezone: <b>{tz}</b>"
 }

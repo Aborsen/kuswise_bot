@@ -56,6 +56,22 @@ def supported_langs() -> tuple[str, ...]:
     return _SUPPORTED
 
 
+def locale_of(profile: Any) -> str:
+    """Return the user's locale code from a profile dict; default ``'en'``.
+
+    Convenience wrapper for the very common pattern
+    ``(profile or {}).get("lang") or "en"`` repeated at every send_message
+    site. Centralizing it makes the call sites readable and the default
+    swappable in one place.
+    """
+    if not isinstance(profile, dict):
+        return "en"
+    lang = profile.get("lang")
+    if lang in _SUPPORTED:
+        return lang
+    return "en"
+
+
 def normalize_lang(code: str | None) -> str:
     """Map a Telegram ``language_code`` to a supported ``lang``.
 

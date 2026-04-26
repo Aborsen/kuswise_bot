@@ -644,9 +644,9 @@ def build_html(nonce: str = "") -> str:
 <body>
 
 <!-- User detail modal -->
-<div class="modal-overlay" id="userModal" onclick="closeModal(event)">
+<div class="modal-overlay" id="userModal">
   <div class="modal">
-    <button class="close-btn" onclick="document.getElementById('userModal').classList.remove('open')">✕</button>
+    <button class="close-btn" id="modalCloseBtn" type="button">✕</button>
     <h3 id="modalTitle">Профіль користувача</h3>
     <div class="modal-grid" id="modalGrid"></div>
   </div>
@@ -699,7 +699,7 @@ def build_html(nonce: str = "") -> str:
 
 <h2>👥 Користувачі
   <div class="h2-actions">
-    <button class="btn-action" onclick="exportCSV('tblUsers', 'users.csv')">⬇ CSV</button>
+    <button class="btn-action" type="button" data-export-table="tblUsers" data-export-name="users.csv">⬇ CSV</button>
   </div>
 </h2>
 
@@ -755,8 +755,8 @@ def build_html(nonce: str = "") -> str:
 
 <h2>🍽️ Вся історія страв
   <div class="h2-actions">
-    <button class="btn-action danger" id="bulkDeleteBtn" onclick="bulkDeleteMeals()" style="display:none">🗑 Видалити обрані</button>
-    <button class="btn-action" onclick="exportCSV('tblMeals', 'meals.csv')">⬇ CSV</button>
+    <button class="btn-action danger" id="bulkDeleteBtn" type="button" style="display:none">🗑 Видалити обрані</button>
+    <button class="btn-action" type="button" data-export-table="tblMeals" data-export-name="meals.csv">⬇ CSV</button>
   </div>
 </h2>
 
@@ -999,6 +999,19 @@ function closeModal(e) {{
     document.getElementById('userModal').classList.remove('open');
   }}
 }}
+
+/* CSP-safe wiring for the modal close + CSV exports + bulk delete
+   (replaces the inline onclick="…" handlers, which the nonce'd CSP blocks). */
+document.getElementById('userModal').addEventListener('click', closeModal);
+document.getElementById('modalCloseBtn').addEventListener('click', function() {{
+  document.getElementById('userModal').classList.remove('open');
+}});
+document.querySelectorAll('[data-export-table]').forEach(function(btn) {{
+  btn.addEventListener('click', function() {{
+    exportCSV(btn.dataset.exportTable, btn.dataset.exportName);
+  }});
+}});
+document.getElementById('bulkDeleteBtn').addEventListener('click', bulkDeleteMeals);
 
 document.addEventListener('keydown', e => {{
   if (e.key === 'Escape') document.getElementById('userModal').classList.remove('open');

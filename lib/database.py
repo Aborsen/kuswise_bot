@@ -194,6 +194,13 @@ def init_db(conn=None, force: bool = False) -> None:
         cur.execute(
             "ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS lang TEXT NOT NULL DEFAULT 'en'"
         )
+        # F-2b: timestamp the user explicitly confirmed (or actively chose)
+        # their language. NULL means we auto-detected without confirmation —
+        # those users get the language-confirm onboarding step zero on next
+        # /start so they can override the (possibly wrong) auto-detect.
+        cur.execute(
+            "ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS lang_confirmed_at TEXT"
+        )
         # F-5: weekly weight-change goal in kg (negative for "lose", positive
         # for "gain"). NULL = use sane defaults derived from goal direction.
         cur.execute(
@@ -336,7 +343,7 @@ PROFILE_COLUMNS = [
     "goal", "daily_calorie_target", "recommended_calorie_target",
     "onboarding_step", "created_at", "updated_at",
     "awaiting_input_type", "weekly_checkin_sent_at", "target_weight_kg",
-    "tz", "lang", "weekly_delta_kg",
+    "tz", "lang", "weekly_delta_kg", "lang_confirmed_at",
 ]
 
 
@@ -375,7 +382,7 @@ _ALLOWED_PROFILE_FIELDS = {
     "age", "sex", "weight_kg", "height_cm", "gym_per_week", "goal",
     "daily_calorie_target", "recommended_calorie_target", "onboarding_step",
     "awaiting_input_type", "weekly_checkin_sent_at", "target_weight_kg",
-    "tz", "lang", "weekly_delta_kg",
+    "tz", "lang", "weekly_delta_kg", "lang_confirmed_at",
 }
 
 

@@ -372,6 +372,105 @@ def test_normalize_lang_other_defaults_to_en():
         assert i18n_mod.normalize_lang(code) == "en", code
 
 
+# ---------- F-2b Phase 1: plurals + date + lang_confirm ----------
+
+from lib.i18n import plurals as _plurals
+from lib.datehelpers import format_date_long, format_date_with_year
+from lib.telegram_helpers import lang_confirm_keyboard
+from datetime import datetime as _datetime
+
+
+def test_plurals_uk_basic_three_forms():
+    cases = {
+        1:  "день",  2: "дні",  3: "дні",  4: "дні",
+        5:  "днів", 11: "днів", 12: "днів", 13: "днів", 14: "днів",
+        21: "день", 22: "дні", 25: "днів",
+        101: "день", 111: "днів",
+    }
+    for n, expected in cases.items():
+        assert _plurals.pluralize(n, "uk", "день", "дні", "днів") == expected, n
+
+
+def test_plurals_en_two_forms():
+    assert _plurals.pluralize(0, "en", "day", many="days") == "days"
+    assert _plurals.pluralize(1, "en", "day", many="days") == "day"
+    assert _plurals.pluralize(2, "en", "day", many="days") == "days"
+    assert _plurals.pluralize(11, "en", "day", many="days") == "days"  # no Slavic exception
+    assert _plurals.pluralize(21, "en", "day", many="days") == "days"
+
+
+def test_plurals_uk_requires_few_and_many():
+    import pytest
+    with pytest.raises(ValueError):
+        _plurals.pluralize(2, "uk", "день")  # missing few + many
+
+
+def test_plurals_with_count_helper():
+    assert _plurals.pluralize_with_count(1, "uk", "день", "дні", "днів") == "1 день"
+    assert _plurals.pluralize_with_count(5, "uk", "день", "дні", "днів") == "5 днів"
+    assert _plurals.pluralize_with_count(1, "en", "day", many="days") == "1 day"
+    assert _plurals.pluralize_with_count(7, "en", "day", many="days") == "7 days"
+
+
+def test_format_date_long_uk():
+    dt = _datetime(2026, 4, 26)
+    assert format_date_long(dt, "uk") == "26 квітня"
+    # Cover edge months — Jan, Dec, plus the genitive case forms.
+    assert format_date_long(_datetime(2026, 1, 1),  "uk") == "1 січня"
+    assert format_date_long(_datetime(2026, 12, 31), "uk") == "31 грудня"
+
+
+def test_format_date_long_en():
+    assert format_date_long(_datetime(2026, 4, 26), "en") == "April 26"
+    assert format_date_long(_datetime(2026, 1, 1),  "en") == "January 1"
+
+
+def test_format_date_long_unknown_lang_falls_back_to_en():
+    assert format_date_long(_datetime(2026, 4, 26), "fr") == "April 26"
+    assert format_date_long(_datetime(2026, 4, 26), None) == "April 26"  # type: ignore[arg-type]
+
+
+def test_format_date_with_year_appends_year():
+    dt = _datetime(2026, 9, 15)
+    assert format_date_with_year(dt, "uk") == "15 вересня 2026"
+    assert format_date_with_year(dt, "en") == "September 15 2026"
+
+
+def test_normalize_lang_ru_be_routes_to_uk():
+    """Slavic codes (ru/be) still default to uk per 2026-04-26 decision —
+    cross-Slavic readability is high and the override step zero is one tap."""
+    assert i18n_mod.normalize_lang("ru") == "uk"
+    assert i18n_mod.normalize_lang("be") == "uk"
+    assert i18n_mod.normalize_lang("ru-RU") == "uk"
+
+
+def test_lang_confirm_keyboard_primary_button_matches_detected():
+    """Primary (top) button should be the auto-detected language so a
+    one-tap continue 'just works'."""
+    kb_uk = lang_confirm_keyboard("uk")
+    assert kb_uk["inline_keyboard"][0][0]["callback_data"] == "onb:lang:uk"
+    assert "укра" in kb_uk["inline_keyboard"][0][0]["text"].lower()
+    # Override row offers the alternate language.
+    assert kb_uk["inline_keyboard"][1][0]["callback_data"] == "onb:lang:en"
+
+    kb_en = lang_confirm_keyboard("en")
+    assert kb_en["inline_keyboard"][0][0]["callback_data"] == "onb:lang:en"
+    assert "english" in kb_en["inline_keyboard"][0][0]["text"].lower()
+    assert kb_en["inline_keyboard"][1][0]["callback_data"] == "onb:lang:uk"
+
+
+def test_lang_confirm_prompt_renders_in_both_locales():
+    """The lang-confirm prompt has its own UA + EN strings so users see
+    the question in their detected language."""
+    uk_prompt = i18n_mod.t("lang_confirm_prompt", locale="uk")
+    en_prompt = i18n_mod.t("lang_confirm_prompt", locale="en")
+    assert "KusWise" in uk_prompt
+    assert "KusWise" in en_prompt
+    # UA prompt mentions "українською", EN prompt mentions "English".
+    assert "укра" in uk_prompt.lower()
+    assert "english" in en_prompt.lower()
+
+
 # ---------- engagement streaks (lib.database, F-4) ----------
 
 class _StreakFakeCursor:

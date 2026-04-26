@@ -3,5 +3,9 @@
   "language_saved": "✅ Готово. Мова: <b>{lang}</b>",
   "language_not_onboarded": "Спершу пройди /start ☺️",
   "lang_label_en": "🇬🇧 English",
-  "lang_label_uk": "🇺🇦 Українська"
+  "lang_label_uk": "🇺🇦 Українська",
+
+  "lang_confirm_prompt": "👋 Привіт! Я <b>KusWise</b> — твій трекер калорій.\n\nЯ говоритиму з тобою <b>українською</b> (визначив за мовою твого Telegram).\n\nЯкщо хочеш — можеш перемкнути на English.",
+  "lang_confirm_saved_uk": "✅ Гаразд, продовжуємо українською 🇺🇦",
+  "lang_confirm_saved_en": "✅ Switching to English 🇬🇧"
 }

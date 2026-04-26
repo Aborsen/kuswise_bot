@@ -59,7 +59,13 @@ def supported_langs() -> tuple[str, ...]:
 def normalize_lang(code: str | None) -> str:
     """Map a Telegram ``language_code`` to a supported ``lang``.
 
-    UK / RU / BE → ``uk``; everything else → ``en``. Empty / None → ``en``.
+    Slavic codes (``uk`` / ``uk-UA`` / ``ua`` / ``ru`` / ``be``) → ``uk`` —
+    cross-Slavic mutual readability is high, and Ukrainian is the bot's
+    native locale. Everything else → ``en``. Empty / None → ``en``.
+
+    NOTE: the auto-detect is just a default. Every new user still sees
+    the F-2b language-confirm step (onboarding step zero) and can override
+    with one tap. ``/language`` flips it later on demand.
     """
     if not code:
         return "en"

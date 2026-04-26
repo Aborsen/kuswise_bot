@@ -60,6 +60,35 @@ def today_str_user(profile_or_str: ProfileOrTz) -> str:
     return now_user(profile_or_str).strftime("%Y-%m-%d")
 
 
+# F-2b: locale-aware human-readable dates.
+# We don't pull in Babel for two locales — the month tables are tiny.
+_MONTHS_UK: tuple[str, ...] = (
+    "січня", "лютого", "березня", "квітня", "травня", "червня",
+    "липня", "серпня", "вересня", "жовтня", "листопада", "грудня",
+)
+_MONTHS_EN: tuple[str, ...] = (
+    "January", "February", "March", "April", "May", "June",
+    "July", "August", "September", "October", "November", "December",
+)
+
+
+def format_date_long(dt: datetime, lang: str = "en") -> str:
+    """Render a date as ``"26 квітня"`` (UK) or ``"April 26"`` (EN).
+
+    No year — typical use is a screen header where the year is implicit.
+    Add the year separately when needed.
+    """
+    if (lang or "").lower().startswith("uk"):
+        return f"{dt.day} {_MONTHS_UK[dt.month - 1]}"
+    return f"{_MONTHS_EN[dt.month - 1]} {dt.day}"
+
+
+def format_date_with_year(dt: datetime, lang: str = "en") -> str:
+    """Same as ``format_date_long`` but with the year appended (``2026-09-15``)."""
+    base = format_date_long(dt, lang)
+    return f"{base} {dt.year}"
+
+
 # Onboarding presets shown in the timezone keyboard. Keep this list in sync
 # with ``lib.telegram_helpers.tz_keyboard``.
 TZ_PRESETS: tuple[tuple[str, str], ...] = (

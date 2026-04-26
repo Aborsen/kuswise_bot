@@ -503,13 +503,36 @@ def confirm_calories_keyboard() -> dict:
 
 
 def language_keyboard() -> dict:
-    """EN / UK language picker (F-2)."""
+    """EN / UK language picker (F-2). Used by ``/language`` command."""
     return {
         "inline_keyboard": [
             [
                 {"text": "🇬🇧 English",     "callback_data": "lang:set:en"},
                 {"text": "🇺🇦 Українська", "callback_data": "lang:set:uk"},
             ],
+        ]
+    }
+
+
+def lang_confirm_keyboard(detected: str) -> dict:
+    """F-2b onboarding step zero: confirm auto-detected language or override.
+
+    The "primary" button matches what we auto-detected, so one tap
+    continues the flow. The other button switches. Callback prefix
+    ``onb:lang:`` routes through the existing ``handle_onboarding_callback``
+    dispatcher (callback fires before the profile is complete).
+    """
+    if detected == "uk":
+        return {
+            "inline_keyboard": [
+                [{"text": "✅ Продовжити українською", "callback_data": "onb:lang:uk"}],
+                [{"text": "🇬🇧 Switch to English",      "callback_data": "onb:lang:en"}],
+            ]
+        }
+    return {
+        "inline_keyboard": [
+            [{"text": "✅ Continue in English",     "callback_data": "onb:lang:en"}],
+            [{"text": "🇺🇦 Перейти на українську", "callback_data": "onb:lang:uk"}],
         ]
     }
 

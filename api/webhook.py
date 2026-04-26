@@ -101,6 +101,7 @@ from lib.telegram_helpers import (
     tz_keyboard,
     health_menu_keyboard,
     language_keyboard,
+    lang_confirm_keyboard,
 )
 from lib.openai_vision import (
     analyze_photo,
@@ -689,14 +690,18 @@ def handle_start(
     # Fresh user or unfinished profile: kick off onboarding.
     profile = ensure_profile_row(conn, user_id)
     reset_onboarding(conn, user_id)
-    # Seed lang from Telegram client locale on first /start. Users can override
-    # later via /language. We only do this once: if the row already has a
-    # non-default lang, the user has chosen — keep their pick.
-    if language_code:
-        detected = i18n_mod.normalize_lang(language_code)
-        update_profile(conn, user_id, lang=detected)
-    send_message(chat_id, ONBOARDING_INTRO)
-    send_message(chat_id, ONBOARDING_ASK_AGE)
+
+    # F-2b onboarding step zero: confirm the auto-detected language.
+    # We seed `lang` from Telegram's language_code so the entire onboarding
+    # message stack runs in the right locale, then ask the user to confirm
+    # or override before the existing 6-question flow.
+    detected = i18n_mod.normalize_lang(language_code) if language_code else "en"
+    update_profile(conn, user_id, lang=detected, onboarding_step="awaiting_lang_confirm")
+    send_message(
+        chat_id,
+        i18n_mod.t("lang_confirm_prompt", locale=detected),
+        reply_markup=lang_confirm_keyboard(detected),
+    )
 
 
 def _parse_int(text: str) -> int | None:
@@ -872,6 +877,29 @@ def handle_onboarding_callback(conn, cb: dict) -> None:
     if data == "onb:restart":
         answer_callback_query(cb_id, "🔄 Починаємо заново")
         reset_onboarding(conn, user_id)
+        send_message(chat_id, ONBOARDING_INTRO)
+        send_message(chat_id, ONBOARDING_ASK_AGE)
+        return
+
+    # F-2b: onboarding step zero — language confirmation
+    if data.startswith("onb:lang:"):
+        chosen = data.split(":", 2)[2]
+        if chosen not in i18n_mod.supported_langs():
+            answer_callback_query(cb_id, "?")
+            return
+        # Persist choice + mark confirmed + advance to the existing first question.
+        from datetime import datetime as _dt, timezone as _tz
+        update_profile(
+            conn, user_id,
+            lang=chosen,
+            lang_confirmed_at=_dt.now(_tz.utc).isoformat(),
+            onboarding_step="awaiting_age",
+        )
+        # Brief inline ack matching the chosen language.
+        ack_key = "lang_confirm_saved_" + chosen
+        answer_callback_query(cb_id, i18n_mod.t(ack_key, locale=chosen))
+        # Now run the standard onboarding intro + first question. These
+        # strings are still hardcoded UA in Phase 1; Phase 2 migrates them.
         send_message(chat_id, ONBOARDING_INTRO)
         send_message(chat_id, ONBOARDING_ASK_AGE)
         return

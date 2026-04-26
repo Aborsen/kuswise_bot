@@ -465,7 +465,7 @@ def process_update(update: dict) -> None:
         if user_id and not profile_is_complete(profile):
             # Allow /help without a profile
             if text.lower().startswith("/help"):
-                send_message(chat_id, help_message())
+                send_message(chat_id, help_message(i18n_mod.locale_of(profile)))
                 return
             if message.get("photo"):
                 send_message(chat_id, _t("onboarding.required", profile))
@@ -2370,7 +2370,7 @@ def handle_command(conn, message: dict, text: str, first_name: str | None, profi
     cal_target = (profile or {}).get("daily_calorie_target") or 2000
 
     if cmd == "/help":
-        send_message(chat_id, help_message(), reply_markup=main_menu_keyboard())
+        send_message(chat_id, help_message(i18n_mod.locale_of(profile)), reply_markup=main_menu_keyboard())
         return
 
     if cmd == "/profile":

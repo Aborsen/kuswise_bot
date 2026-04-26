@@ -461,33 +461,10 @@ def format_profile(profile: dict) -> str:
 # ONBOARDING_REQUIRED migrated to "onboarding.required" key in lib/i18n.
 
 
-def help_message() -> str:
-    return (
-        "🤖 <b>Команди</b>\n"
-        "/start — привітання та меню\n"
-        "/profile — твій профіль (можна змінити)\n"
-        "/ask — 💬 запитати ШІ про їжу, рецепти, покупки\n"
-        "/today — прогрес за сьогодні\n"
-        "/yesterday — вчорашній день\n"
-        "/streak — 🔥 серія логів і заморозки\n"
-        "/goals — 🎯 цілі та прогноз досягнення\n"
-        "/aliases — 📚 твої звичні страви (бот вчиться)\n"
-        "/scan — 🔢 сканер штрих-кодів (Open Food Facts)\n"
-        "/menu — 📋 OCR меню в кафе/ресторані\n"
-        "/plan — 🗓 3-денний план на основі цілі\n"
-        "/recap — 📸 PNG-картка тижневих результатів\n"
-        "/meals — список страв (видалити / змінити)\n"
-        "/fav — ⭐ улюблені страви\n"
-        "/recent — 🕘 останні страви (швидкий повтор)\n"
-        "/water — 💧 облік води\n"
-        "/suggest_meal — ідея страви, яка закриє день\n"
-        "/help — показати цей список\n\n"
-        "📸 Надішли фото страви — я спитаю, який це прийом їжі, і покажу аналіз на перевірку.\n"
-        "📝 Або напиши текстом (наприклад: «курка 200г, рис 150г, броколі 100г»).\n"
-        "🎙 Голосове повідомлення — скажи, що ти їв/їла, я розшифрую і запишу.\n"
-        "Після аналізу: ✅ Прийняти / 🔄 Перерахувати / ✏️ Ввести вручну.\n\n"
-        "📖 Офіційна документація: <a href=\"https://raudar.gitbook.io/djinni\">raudar.gitbook.io/djinni</a>"
-    )
+def help_message(locale: str = "en") -> str:
+    """Localized /help text. Single key with the entire message body."""
+    from lib.i18n import t
+    return t("help.full", locale=locale)
 
 
 def _streak_word_uk(n: int) -> str:

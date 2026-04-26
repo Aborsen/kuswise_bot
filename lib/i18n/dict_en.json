@@ -30,5 +30,7 @@
   "onboarding.ask_tz": "🌐 <b>What's your timezone?</b>\n\nThis sets when your day rolls over and when the daily summary fires. If your zone isn't in the list, pick «Other» and type the IANA name.",
   "onboarding.tz_custom_prompt": "Enter your timezone in IANA format, e.g.:\n<code>Asia/Tokyo</code>, <code>America/Chicago</code>, <code>Australia/Sydney</code>.\n\nFull list: en.wikipedia.org/wiki/List_of_tz_database_time_zones",
   "onboarding.tz_invalid": "Didn't recognize that zone 🤔 Check the spelling — it should be <code>Region/City</code>, like <code>Europe/Madrid</code> or <code>Asia/Tokyo</code>.",
-  "onboarding.tz_saved": "🌐 Timezone: <b>{tz}</b>"
+  "onboarding.tz_saved": "🌐 Timezone: <b>{tz}</b>",
+
+  "help.full": "🤖 <b>Commands</b>\n/start — welcome + menu\n/profile — your profile (editable)\n/ask — 💬 ask AI about food, recipes, shopping\n/today — today's progress\n/yesterday — yesterday's recap\n/streak — 🔥 logging streak + freeze tokens\n/goals — 🎯 goals + projected target date\n/aliases — 📚 dishes the bot learned for you\n/scan — 🔢 barcode scanner (Open Food Facts)\n/menu — 📋 restaurant menu OCR\n/plan — 🗓 3-day meal plan tailored to your goal\n/recap — 📸 weekly PNG share card\n/meals — meal list (delete / edit)\n/fav — ⭐ favorite meals\n/recent — 🕘 recent meals (quick re-log)\n/water — 💧 water tracking\n/suggest_meal — meal idea that fits the day\n/help — show this list\n\n📸 Send a meal photo — I'll ask which meal it is and show the analysis for review.\n📝 Or send text (e.g. «chicken 200g, rice 150g, broccoli 100g»).\n🎙 Voice message — say what you ate, I'll transcribe and log it.\nAfter analysis: ✅ Accept / 🔄 Recalculate / ✏️ Manual entry."
 }

@@ -244,10 +244,10 @@ def test_health_registries_cover_top_lists():
     expected_allergens = {"peanut", "tree_nut", "dairy", "egg", "soy", "gluten",
                           "fish", "shellfish", "sesame", "mustard", "sulphites",
                           "celery", "lupin", "mollusks"}
-    assert expected_allergens <= set(hh.ALLERGENS.keys())
+    assert expected_allergens <= set(hh.ALLERGENS)
     expected_conditions = {"crohns", "ibs", "celiac", "diabetes_t1", "diabetes_t2",
                            "hypertension", "pcos", "kidney", "thyroid", "gestational"}
-    assert expected_conditions <= set(hh.CONDITIONS.keys())
+    assert expected_conditions <= set(hh.CONDITIONS)
 
 
 def test_normalize_known_aliases():
@@ -286,12 +286,17 @@ def test_parse_csv_empty():
 
 
 def test_render_labels_uk():
-    out = hh.render_labels(["peanut", "dairy"], hh.ALLERGENS)
+    out = hh.render_labels(["peanut", "dairy"], "allergens", locale="uk")
     assert "арахіс" in out and "молочне" in out
 
 
+def test_render_labels_en():
+    out = hh.render_labels(["peanut", "dairy"], "allergens", locale="en")
+    assert "peanut" in out and "dairy" in out
+
+
 def test_render_labels_empty():
-    assert hh.render_labels([], hh.ALLERGENS) == "—"
+    assert hh.render_labels([], "allergens", locale="uk") == "—"
 
 
 def test_is_clear_keyword():

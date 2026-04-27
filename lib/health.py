@@ -5,43 +5,31 @@ Stores allergens + chronic conditions per user. Used to:
 2) Inject context into vision/text/chat prompts so the AI flags triggers.
 
 Canonical IDs are stable strings stored in the DB and used in callbacks.
-User-facing labels are Ukrainian (until F-2 i18n adds English).
+User-facing labels live in lib/i18n/dict_<locale>.json under
+``health.allergens.<id>`` / ``health.conditions.<id>`` (F-2b Chunk 8 G2).
 LLM-facing labels are English (so prompts work regardless of model locale).
 """
 from typing import Iterable, Optional
 
 
-# Canonical allergens (stable IDs ↔ Ukrainian labels).
-ALLERGENS: dict[str, str] = {
-    "peanut":     "арахіс",
-    "tree_nut":   "горіхи",
-    "dairy":      "молочне",
-    "egg":        "яйце",
-    "soy":        "соя",
-    "gluten":     "глютен (пшениця)",
-    "fish":       "риба",
-    "shellfish":  "морепродукти / ракоподібні",
-    "sesame":     "кунжут",
-    "mustard":    "гірчиця",
-    "sulphites":  "сульфіти",
-    "celery":     "селера",
-    "lupin":      "люпин",
-    "mollusks":   "мідії / устриці",
-}
+# Canonical allergen IDs. Membership-only; user-facing labels resolve through
+# lib.i18n by id (health.allergens.<id>). Treated as a tuple of stable strings.
+ALLERGEN_IDS: tuple[str, ...] = (
+    "peanut", "tree_nut", "dairy", "egg", "soy", "gluten", "fish",
+    "shellfish", "sesame", "mustard", "sulphites", "celery", "lupin", "mollusks",
+)
 
-# Canonical conditions (top dietary-impact).
-CONDITIONS: dict[str, str] = {
-    "crohns":         "хвороба Крона",
-    "ibs":            "СРК (IBS)",
-    "celiac":         "целіакія",
-    "diabetes_t1":    "діабет 1-го типу",
-    "diabetes_t2":    "діабет 2-го типу",
-    "hypertension":   "гіпертонія",
-    "pcos":           "СПКЯ (PCOS)",
-    "kidney":         "хвороба нирок",
-    "thyroid":        "щитоподібна залоза",
-    "gestational":    "вагітність",
-}
+# Canonical condition IDs. Same shape as ALLERGEN_IDS.
+CONDITION_IDS: tuple[str, ...] = (
+    "crohns", "ibs", "celiac", "diabetes_t1", "diabetes_t2",
+    "hypertension", "pcos", "kidney", "thyroid", "gestational",
+)
+
+# Backwards-compat shims: callers used to receive a {id: UA-label} dict; now we
+# expose a frozenset for membership checks. Anywhere the old dict was
+# iterated for labels is migrated to ``label_for(kind, id, locale)``.
+ALLERGENS: frozenset[str] = frozenset(ALLERGEN_IDS)
+CONDITIONS: frozenset[str] = frozenset(CONDITION_IDS)
 
 # Per-condition guidance the LLM uses to flag risky ingredients.
 _CONDITION_GUIDANCE: dict[str, str] = {
@@ -58,37 +46,55 @@ _CONDITION_GUIDANCE: dict[str, str] = {
 }
 
 # Aliases: Ukrainian + common English variants → canonical id.
+# UA keys are deliberate — this dict is a parser for user-typed input (the
+# user can write "хвороба крона" or "Crohn's disease" or "crohn"), so the UA
+# strings on the LHS are preserved by design. Each line tagged for the audit.
 _ALIASES: dict[str, str] = {
     # Allergens
-    "арахіс": "peanut", "peanuts": "peanut", "земляний горіх": "peanut",
-    "горіхи": "tree_nut", "tree nuts": "tree_nut", "горіх": "tree_nut",
-    "молочне": "dairy", "молоко": "dairy", "lactose": "dairy", "лактоза": "dairy",
-    "яйце": "egg", "яйця": "egg", "eggs": "egg",
-    "соя": "soy", "соєвий": "soy",
-    "глютен": "gluten", "пшениця": "gluten", "wheat": "gluten",
-    "риба": "fish",
-    "морепродукти": "shellfish", "креветки": "shellfish", "ракоподібні": "shellfish",
-    "кунжут": "sesame", "сезам": "sesame",
-    "гірчиця": "mustard",
-    "сульфіти": "sulphites", "sulfites": "sulphites",
-    "селера": "celery",
-    "люпин": "lupin",
-    "мідії": "mollusks", "устриці": "mollusks",
+    "арахіс": "peanut", "peanuts": "peanut", "земляний горіх": "peanut",  # noqa: i18n
+    "горіхи": "tree_nut", "tree nuts": "tree_nut", "горіх": "tree_nut",  # noqa: i18n
+    "молочне": "dairy", "молоко": "dairy", "lactose": "dairy", "лактоза": "dairy",  # noqa: i18n
+    "яйце": "egg", "яйця": "egg", "eggs": "egg",  # noqa: i18n
+    "соя": "soy", "соєвий": "soy",  # noqa: i18n
+    "глютен": "gluten", "пшениця": "gluten", "wheat": "gluten",  # noqa: i18n
+    "риба": "fish",  # noqa: i18n
+    "морепродукти": "shellfish", "креветки": "shellfish", "ракоподібні": "shellfish",  # noqa: i18n
+    "кунжут": "sesame", "сезам": "sesame",  # noqa: i18n
+    "гірчиця": "mustard",  # noqa: i18n
+    "сульфіти": "sulphites", "sulfites": "sulphites",  # noqa: i18n
+    "селера": "celery",  # noqa: i18n
+    "люпин": "lupin",  # noqa: i18n
+    "мідії": "mollusks", "устриці": "mollusks",  # noqa: i18n
     # Conditions
-    "крон": "crohns", "crohn": "crohns", "crohns disease": "crohns", "хвороба крона": "crohns",
-    "срк": "ibs", "синдром подразненого кишечника": "ibs",
-    "целіакія": "celiac", "celiac disease": "celiac",
-    "діабет 1": "diabetes_t1", "діабет першого типу": "diabetes_t1",
+    "крон": "crohns", "crohn": "crohns", "crohns disease": "crohns", "хвороба крона": "crohns",  # noqa: i18n
+    "срк": "ibs", "синдром подразненого кишечника": "ibs",  # noqa: i18n
+    "целіакія": "celiac", "celiac disease": "celiac",  # noqa: i18n
+    "діабет 1": "diabetes_t1", "діабет першого типу": "diabetes_t1",  # noqa: i18n
     "type 1 diabetes": "diabetes_t1", "t1d": "diabetes_t1",
-    "діабет 2": "diabetes_t2", "діабет другого типу": "diabetes_t2",
-    "type 2 diabetes": "diabetes_t2", "t2d": "diabetes_t2", "діабет": "diabetes_t2",
-    "гіпертонія": "hypertension", "тиск": "hypertension", "high bp": "hypertension",
-    "спкя": "pcos",
-    "нирки": "kidney", "хвороба нирок": "kidney", "kidney disease": "kidney",
-    "щитоподібна": "thyroid", "щитовидна": "thyroid",
-    "гіпотиреоз": "thyroid", "гіпертиреоз": "thyroid",
-    "вагітність": "gestational", "pregnancy": "gestational", "вагітна": "gestational",
+    "діабет 2": "diabetes_t2", "діабет другого типу": "diabetes_t2",  # noqa: i18n
+    "type 2 diabetes": "diabetes_t2", "t2d": "diabetes_t2", "діабет": "diabetes_t2",  # noqa: i18n
+    "гіпертонія": "hypertension", "тиск": "hypertension", "high bp": "hypertension",  # noqa: i18n
+    "спкя": "pcos",  # noqa: i18n
+    "нирки": "kidney", "хвороба нирок": "kidney", "kidney disease": "kidney",  # noqa: i18n
+    "щитоподібна": "thyroid", "щитовидна": "thyroid",  # noqa: i18n
+    "гіпотиреоз": "thyroid", "гіпертиреоз": "thyroid",  # noqa: i18n
+    "вагітність": "gestational", "pregnancy": "gestational", "вагітна": "gestational",  # noqa: i18n
 }
+
+
+def label_for(kind: str, canon_id: str, locale: str = "en") -> str:
+    """Locale-aware allergen / condition label.
+
+    ``kind`` is "allergens" or "conditions". Falls back to the canonical id
+    (with underscores → spaces) when the locale dict has no entry — no risk
+    of returning the literal key string to the user.
+    """
+    from lib.i18n import t
+    key = f"health.{kind}.{canon_id}"
+    label = t(key, locale=locale)
+    if label == key:  # not in dict; fall back to canon id, prettified
+        return canon_id.replace("_", " ")
+    return label
 
 
 def normalize(value: str) -> str:
@@ -108,7 +114,7 @@ def normalize(value: str) -> str:
     return s
 
 
-def parse_csv(raw: str, registry: dict[str, str]) -> tuple[list[str], list[str]]:
+def parse_csv(raw: str, registry: frozenset[str] | dict[str, str]) -> tuple[list[str], list[str]]:
     """Parse comma-separated input into ``(canonical_ids, unknown_words)``.
 
     ``registry`` is one of ``ALLERGENS`` or ``CONDITIONS`` — gates which ids
@@ -129,18 +135,24 @@ def parse_csv(raw: str, registry: dict[str, str]) -> tuple[list[str], list[str]]
     return canon, unknown
 
 
-def render_labels(ids: Iterable[str], registry: dict[str, str]) -> str:
-    """Render a list of canonical ids as a comma-separated UA label string."""
-    labels = [registry[i] for i in ids if i in registry]
+def render_labels(ids: Iterable[str], kind: str, locale: str = "en") -> str:
+    """Render a list of canonical ids as a comma-separated locale-aware string.
+
+    ``kind`` is "allergens" or "conditions" — used to namespace the dict lookup.
+    """
+    valid_set = ALLERGENS if kind == "allergens" else CONDITIONS
+    labels = [label_for(kind, i, locale=locale) for i in ids if i in valid_set]
     return ", ".join(labels) if labels else "—"
 
 
 def is_clear_keyword(text: str) -> bool:
-    """True if user typed a 'clear / none' marker."""
+    """True if user typed a 'clear / none' marker (UA + EN)."""
     if not text:
         return True
     s = text.strip().lower()
-    return s in ("none", "немає", "нема", "no", "ні", "0", "-", "—", "/clear", "clear", "/none")
+    return s in (  # noqa: i18n
+        "none", "немає", "нема", "no", "ні", "0", "-", "—", "/clear", "clear", "/none",
+    )
 
 
 def health_addendum_text(allergens: list[str], conditions: list[str]) -> str:

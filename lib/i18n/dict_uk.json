@@ -696,5 +696,31 @@
   "profile.water_prompt":        "💧 Напиши ціль по воді в мл (1500–4000):",
   "profile.recompute_msg":       "🎯 Нова норма калорій: <b>{cal} ккал/день</b>\n🥩 Білки {p}г · 🍚 Вуглеводи {c}г · 🧈 Жири {f}г",
 
-  "undo.message_text":           "↩️ Скасовано: {desc}"
+  "undo.message_text":           "↩️ Скасовано: {desc}",
+
+  "health.allergens.peanut":     "арахіс",
+  "health.allergens.tree_nut":   "горіхи",
+  "health.allergens.dairy":      "молочне",
+  "health.allergens.egg":        "яйце",
+  "health.allergens.soy":        "соя",
+  "health.allergens.gluten":     "глютен (пшениця)",
+  "health.allergens.fish":       "риба",
+  "health.allergens.shellfish":  "морепродукти / ракоподібні",
+  "health.allergens.sesame":     "кунжут",
+  "health.allergens.mustard":    "гірчиця",
+  "health.allergens.sulphites":  "сульфіти",
+  "health.allergens.celery":     "селера",
+  "health.allergens.lupin":      "люпин",
+  "health.allergens.mollusks":   "мідії / устриці",
+
+  "health.conditions.crohns":         "хвороба Крона",
+  "health.conditions.ibs":            "СРК (IBS)",
+  "health.conditions.celiac":         "целіакія",
+  "health.conditions.diabetes_t1":    "діабет 1-го типу",
+  "health.conditions.diabetes_t2":    "діабет 2-го типу",
+  "health.conditions.hypertension":   "гіпертонія",
+  "health.conditions.pcos":           "СПКЯ (PCOS)",
+  "health.conditions.kidney":         "хвороба нирок",
+  "health.conditions.thyroid":        "щитоподібна залоза",
+  "health.conditions.gestational":    "вагітність"
 }

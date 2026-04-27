@@ -972,14 +972,15 @@ def handle_timezone_input(conn, chat_id: int, user_id: int, text: str) -> None:
 def _send_health_menu(conn, chat_id: int, user_id: int) -> None:
     profile = get_profile(conn, user_id)
     h = get_health_profile(conn, user_id) or {"allergens": [], "conditions": []}
+    locale_for_health = i18n_mod.locale_of(profile)
     send_message(
         chat_id,
         _t(
             "health.header", profile,
-            allergens=render_health_labels(h["allergens"], HEALTH_ALLERGENS),
-            conditions=render_health_labels(h["conditions"], HEALTH_CONDITIONS),
+            allergens=render_health_labels(h["allergens"], "allergens", locale=locale_for_health),
+            conditions=render_health_labels(h["conditions"], "conditions", locale=locale_for_health),
         ),
-        reply_markup=health_menu_keyboard(locale=i18n_mod.locale_of(profile)),
+        reply_markup=health_menu_keyboard(locale=locale_for_health),
     )
 
 
@@ -1088,7 +1089,7 @@ def handle_health_input(conn, chat_id: int, user_id: int, text: str, kind: str) 
         set_health_conditions(conn, user_id, canon)
     set_awaiting_input(conn, user_id, None)
 
-    saved = render_health_labels(canon, registry)
+    saved = render_health_labels(canon, "allergens" if is_allergens else "conditions", locale=i18n_mod.locale_of(profile))
     if unknown:
         send_message(
             chat_id,

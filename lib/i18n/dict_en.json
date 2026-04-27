@@ -696,5 +696,31 @@
   "profile.water_prompt":        "💧 Type your water goal in ml (1500–4000):",
   "profile.recompute_msg":       "🎯 New calorie target: <b>{cal} kcal/day</b>\n🥩 Protein {p}g · 🍚 Carbs {c}g · 🧈 Fat {f}g",
 
-  "undo.message_text":           "↩️ Undone: {desc}"
+  "undo.message_text":           "↩️ Undone: {desc}",
+
+  "health.allergens.peanut":     "peanut",
+  "health.allergens.tree_nut":   "tree nuts",
+  "health.allergens.dairy":      "dairy / lactose",
+  "health.allergens.egg":        "egg",
+  "health.allergens.soy":        "soy",
+  "health.allergens.gluten":     "gluten (wheat)",
+  "health.allergens.fish":       "fish",
+  "health.allergens.shellfish":  "shellfish / crustaceans",
+  "health.allergens.sesame":     "sesame",
+  "health.allergens.mustard":    "mustard",
+  "health.allergens.sulphites":  "sulphites",
+  "health.allergens.celery":     "celery",
+  "health.allergens.lupin":      "lupin",
+  "health.allergens.mollusks":   "mollusks / oysters",
+
+  "health.conditions.crohns":         "Crohn's disease",
+  "health.conditions.ibs":            "IBS (irritable bowel syndrome)",
+  "health.conditions.celiac":         "celiac disease",
+  "health.conditions.diabetes_t1":    "type 1 diabetes",
+  "health.conditions.diabetes_t2":    "type 2 diabetes",
+  "health.conditions.hypertension":   "hypertension",
+  "health.conditions.pcos":           "PCOS",
+  "health.conditions.kidney":         "kidney disease",
+  "health.conditions.thyroid":        "thyroid",
+  "health.conditions.gestational":    "pregnancy"
 }

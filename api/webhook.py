@@ -1352,7 +1352,7 @@ def _send_analysis_preview(
         )
         send_message(
             chat_id,
-            format_alternates_intro(meal_type, candidates),
+            format_alternates_intro(meal_type, candidates, locale=i18n_mod.locale_of(profile)),
             reply_markup=alternates_keyboard(candidates, locale=i18n_mod.locale_of(profile)),
         )
         return

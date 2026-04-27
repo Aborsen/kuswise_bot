@@ -33,7 +33,7 @@ _QR_PX = 280
 
 
 # Bundled font (Apache-2.0, ships in the repo at assets/fonts/). Noto Sans
-# has full Cyrillic coverage so labels like "СЕРІЯ" / "ЗМІНА ВАГИ" actually
+# has full Cyrillic coverage so UA section labels actually
 # render glyphs instead of tofu boxes on Vercel's bare runtime.
 _FONT_DIR = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
@@ -126,7 +126,7 @@ def compute_weekly_stats(
           "days_logged":   5,
           "avg_kcal":      1820,
           "streak":        12,
-          "top_food":      "Курка з рисом",
+          "top_food":      "Chicken with rice",
           "top_food_count": 4,
           "weight_delta":  -0.6,    # kg, None if < 2 weight points
         }
@@ -403,7 +403,7 @@ def render_recap_png(stats: dict, first_name: Optional[str] = None, locale: str 
         # not broken.
         pass
 
-    # "Скан → @kuswise_bot" line right under the QR tile in white.
+    # QR caption ("Scan → @kuswise_bot") right under the QR tile in white.
     qr_caption = _t("recap.qr_caption", locale=locale)
     cap_y = tile_y + tile_size + 8
     cap_bbox = draw.textbbox((0, 0), qr_caption, font=sub_font)

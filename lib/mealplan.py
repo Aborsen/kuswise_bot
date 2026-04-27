@@ -25,11 +25,11 @@ from lib.config import OPENAI_API_KEY
 # ``meal_type`` enum used by save_meal().
 MEAL_SLOTS = ("breakfast", "lunch", "dinner", "snack")
 
-_SLOT_LABELS_UA = {
-    "breakfast": "Сніданок",
-    "lunch":     "Обід",
-    "dinner":    "Вечеря",
-    "snack":     "Перекус",
+_SLOT_LABELS_UA = {  # noqa: i18n
+    "breakfast": "Сніданок",  # noqa: i18n
+    "lunch":     "Обід",  # noqa: i18n
+    "dinner":    "Вечеря",  # noqa: i18n
+    "snack":     "Перекус",  # noqa: i18n
 }
 
 _SLOT_LABELS_EN = {

@@ -62,9 +62,9 @@ def today_str_user(profile_or_str: ProfileOrTz) -> str:
 
 # F-2b: locale-aware human-readable dates.
 # We don't pull in Babel for two locales — the month tables are tiny.
-_MONTHS_UK: tuple[str, ...] = (
-    "січня", "лютого", "березня", "квітня", "травня", "червня",
-    "липня", "серпня", "вересня", "жовтня", "листопада", "грудня",
+_MONTHS_UK: tuple[str, ...] = (  # noqa: i18n
+    "січня", "лютого", "березня", "квітня", "травня", "червня",  # noqa: i18n
+    "липня", "серпня", "вересня", "жовтня", "листопада", "грудня",  # noqa: i18n
 )
 _MONTHS_EN: tuple[str, ...] = (
     "January", "February", "March", "April", "May", "June",
@@ -73,7 +73,7 @@ _MONTHS_EN: tuple[str, ...] = (
 
 
 def format_date_long(dt: datetime, lang: str = "en") -> str:
-    """Render a date as ``"26 квітня"`` (UK) or ``"April 26"`` (EN).
+    """Render a date as UK form (e.g. 26 + month-genitive) or EN (April 26).
 
     No year — typical use is a screen header where the year is implicit.
     Add the year separately when needed.
@@ -91,11 +91,15 @@ def format_date_with_year(dt: datetime, lang: str = "en") -> str:
 
 # Onboarding presets shown in the timezone keyboard. Keep this list in sync
 # with ``lib.telegram_helpers.tz_keyboard``.
+# UA-flavored display labels are kept here as the *fallback* used by callers
+# that don't pass a locale. The locale-aware tz_keyboard reads from the
+# tz_keyboard.* dict keys (see lib/i18n/dict_*.json); these strings only
+# show up if a caller hardcodes the fallback. Keep both for compatibility.
 TZ_PRESETS: tuple[tuple[str, str], ...] = (
-    ("Europe/Kyiv",          "🇺🇦 Київ"),
-    ("Europe/London",        "🇬🇧 Лондон"),
-    ("Europe/Berlin",        "🇩🇪 Берлін / Варшава"),
-    ("America/New_York",     "🇺🇸 Нью-Йорк"),
-    ("America/Los_Angeles",  "🇺🇸 Лос-Анджелес"),
-    ("Asia/Dubai",           "🇦🇪 Дубай"),
+    ("Europe/Kyiv",          "🇺🇦 Київ"),  # noqa: i18n
+    ("Europe/London",        "🇬🇧 Лондон"),  # noqa: i18n
+    ("Europe/Berlin",        "🇩🇪 Берлін / Варшава"),  # noqa: i18n
+    ("America/New_York",     "🇺🇸 Нью-Йорк"),  # noqa: i18n
+    ("America/Los_Angeles",  "🇺🇸 Лос-Анджелес"),  # noqa: i18n
+    ("Asia/Dubai",           "🇦🇪 Дубай"),  # noqa: i18n
 )

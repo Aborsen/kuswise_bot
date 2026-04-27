@@ -722,5 +722,9 @@
   "health.conditions.pcos":           "СПКЯ (PCOS)",
   "health.conditions.kidney":         "хвороба нирок",
   "health.conditions.thyroid":        "щитоподібна залоза",
-  "health.conditions.gestational":    "вагітність"
+  "health.conditions.gestational":    "вагітність",
+
+  "alternates.header":  "🤔 <b>Не на 100% впевнений у стравi ({label})</b>",
+  "alternates.choose":  "Обери правильний варіант або введи вручну:",
+  "alternates.row":     "{digit} <b>{name}</b> · {kcal} {kcal_unit} · {p_short}{p} {f_short}{f} {c_short}{c} · ~{conf}%"
 }

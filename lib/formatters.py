@@ -1,4 +1,4 @@
-"""Message formatting helpers for Telegram replies (Ukrainian, з гумором)."""
+"""Message formatting helpers for Telegram replies (UA + EN, with humor)."""
 import html
 import random
 from datetime import datetime
@@ -35,13 +35,15 @@ def _pct(used: float, target: float) -> int:
 
 
 # --- Ukrainian month names for pretty dates ---
+# UA-only by design: only used by _ua_date_long/_ua_date_short helpers, which
+# are themselves only invoked from the UA locale render path.
 _UA_MONTHS_FULL = [
-    "", "січня", "лютого", "березня", "квітня", "травня", "червня",
-    "липня", "серпня", "вересня", "жовтня", "листопада", "грудня",
+    "", "січня", "лютого", "березня", "квітня", "травня", "червня",  # noqa: i18n
+    "липня", "серпня", "вересня", "жовтня", "листопада", "грудня",  # noqa: i18n
 ]
 _UA_MONTHS_SHORT = [
-    "", "січ", "лют", "бер", "кві", "тра", "чер",
-    "лип", "сер", "вер", "жов", "лис", "гру",
+    "", "січ", "лют", "бер", "кві", "тра", "чер",  # noqa: i18n
+    "лип", "сер", "вер", "жов", "лис", "гру",  # noqa: i18n
 ]
 
 
@@ -60,18 +62,20 @@ def _ua_date_short(date_str: str) -> str:
 def _name_or_default(first_name: str | None) -> str:
     """Return a safe-for-HTML display name. Telegram first_name is user-controlled
     (set in the user's Telegram profile) and may contain HTML metacharacters."""
-    name = first_name.strip() if (first_name and first_name.strip()) else "друже"
+    name = first_name.strip() if (first_name and first_name.strip()) else "друже"  # noqa: i18n
     return _esc(name)
 
 
 _CONFIDENCE_ICON = {"high": "🔴", "medium": "🟠", "low": "🟡"}
 _SEVERITY_ICON = {"high": "🔴", "medium": "🟠", "low": "🟡"}
 
+# UA meal-type labels — used only on the UA locale render path; EN uses the
+# meal_type.* dict keys via t().
 _MEAL_TYPE_UA = {
-    "breakfast": "Сніданок",
-    "lunch": "Обід",
-    "dinner": "Вечеря",
-    "snack": "Перекус",
+    "breakfast": "Сніданок",  # noqa: i18n
+    "lunch": "Обід",  # noqa: i18n
+    "dinner": "Вечеря",  # noqa: i18n
+    "snack": "Перекус",  # noqa: i18n
 }
 
 
@@ -145,8 +149,7 @@ def _format_warnings(analysis: dict, locale: str = "en") -> list[str]:
 
 
 def _format_nutrition_line(nutrition: dict, locale: str = "en") -> str:
-    """Single-line kcal + macros readout. UA: '500 ккал | 30г Б | 50г В | 18г Ж'.
-    EN: '500 kcal | 30g P | 50g C | 18g F'."""
+    """Single-line kcal + macros readout. EN: '500 kcal | 30g P | 50g C | 18g F'."""
     from lib.i18n import t
     return t(
         "meal.nutrition_line", locale,
@@ -364,7 +367,7 @@ def _sex_ua(sex: str, locale: str = "uk") -> str:
     for callers that don't pass a locale yet."""
     if locale == "en":
         return {"male": "male", "female": "female"}.get(sex, sex or "—")
-    return {"male": "чоловіча", "female": "жіноча"}.get(sex, sex or "—")
+    return {"male": "чоловіча", "female": "жіноча"}.get(sex, sex or "—")  # noqa: i18n
 
 
 def _goal_ua(goal: str, locale: str = "uk") -> str:
@@ -375,9 +378,9 @@ def _goal_ua(goal: str, locale: str = "uk") -> str:
             "gain": "build muscle",
         }.get(goal, goal or "—")
     return {
-        "lose": "схуднути",
-        "maintain": "підтримувати вагу",
-        "gain": "набрати м'язи",
+        "lose": "схуднути",  # noqa: i18n
+        "maintain": "підтримувати вагу",  # noqa: i18n
+        "gain": "набрати м'язи",  # noqa: i18n
     }.get(goal, goal or "—")
 
 
@@ -392,11 +395,11 @@ def _gym_ua(freq: str, locale: str = "uk") -> str:
         }
     else:
         mapping = {
-            "0": "0 разів",
-            "1-2": "1–2 рази",
-            "3-4": "3–4 рази",
-            "5-6": "5–6 разів",
-            "7": "7 разів",
+            "0": "0 разів",  # noqa: i18n
+            "1-2": "1–2 рази",  # noqa: i18n
+            "3-4": "3–4 рази",  # noqa: i18n
+            "5-6": "5–6 разів",  # noqa: i18n
+            "7": "7 разів",  # noqa: i18n
         }
     return mapping.get(freq, freq or "—")
 
@@ -443,8 +446,8 @@ def format_profile(profile: dict, locale: str = "en") -> str:
     kcal_unit = t("macro.calories_short", locale)
     sep = "━━━━━━━━━━━━━━━━━━━━━"
 
-    # kg unit is locale-specific ("кг" / "kg") and distinct from g (gram).
-    kg_unit = "кг" if locale == "uk" else "kg"
+    # kg unit is locale-specific (UA / EN), distinct from g (gram).
+    kg_unit = "кг" if locale == "uk" else "kg"  # noqa: i18n
 
     lines = [
         t("profile.header", locale),
@@ -498,17 +501,17 @@ def help_message(locale: str = "en") -> str:
 
 
 def _streak_word_uk(n: int) -> str:
-    """Ukrainian plural for 'день' — 1 → 'день', 2-4 → 'дні', 0/5+ → 'днів'.
-    Russian-style 11-14 exception applies."""
+    """Ukrainian plural for the streak word — 1/2-4/5+ Slavic forms.
+    Slavic 11-14 exception applies. EN side uses pluralize_en in lib/i18n/plurals."""
     n = abs(int(n))
     if 11 <= (n % 100) <= 14:
-        return "днів"
+        return "днів"  # noqa: i18n
     last = n % 10
     if last == 1:
-        return "день"
+        return "день"  # noqa: i18n
     if 2 <= last <= 4:
-        return "дні"
-    return "днів"
+        return "дні"  # noqa: i18n
+    return "днів"  # noqa: i18n
 
 
 def _format_streak_line(streak: dict | None, locale: str = "en") -> str | None:
@@ -685,20 +688,11 @@ def format_projection_line(
     return t(key, locale, date=date_str, weeks=f"{weeks:g}")
 
 
-# F-9: menu OCR strings
-MENU_PROMPT_INTRO = (
-    "📋 <b>Сканер меню</b>\n"
-    "Сфотографуй меню кафе чи ресторану — я витягну страви з оцінкою калорій. "
-    "Поряд з кожною стравою буде кнопка «Залогувати», яка додасть її в твій день.\n\n"
-    "<i>Надішли фото зараз. Або /cancel — скасувати.</i>"
-)
-MENU_NO_DISHES = (
-    "🤷 Не вдалось розпізнати жодної страви на цьому фото. "
-    "Спробуй чіткіший знімок або введи страву текстом."
-)
-MENU_OCR_FAILED = "❌ Не вдалось обробити фото. Спробуй ще раз."
-MENU_RESULTS_HEADER = "📋 <b>Знайшов {n} страв(и):</b>"
-MENU_PENDING_EXPIRED = "Меню більше не активне. Відскануй ще раз через /menu."
+# F-9 menu OCR / F-8 barcode / F-10 meal plan / F-11 fridge constants were
+# all dead code at this point — the strings live in lib/i18n/dict_*.json
+# (menu.* / barcode.* / plan.* / fridge.* / suggest.*) and callers in
+# api/webhook.py use _t("menu.foo", profile) directly. Removed in F-2b
+# Chunk 8 (G3).
 
 
 def format_menu_dishes_intro(n: int, locale: str = "en") -> str:
@@ -728,67 +722,6 @@ def format_menu_dish_row(dish: dict, locale: str = "en") -> str:
     )
 
 
-# F-8: barcode scanner strings
-BARCODE_SCAN_INTRO = (
-    "📷 <b>Сканер штрих-кодів</b>\n"
-    "Натисни «Відкрити сканер», щоб відкрити камеру в Telegram. "
-    "Наведи на штрих-код — я знайду продукт у Open Food Facts (3 млн+ позицій).\n\n"
-    "<i>Камера не запускається? Натисни «Ввести цифрами» — і просто набери "
-    "цифри під штрих-кодом (8-13 цифр).</i>"
-)
-BARCODE_FOUND_HEADER = (
-    "✓ Знайшов: <b>{name}</b>\n"
-    "Бренд: {brand}\n"
-    "На 100г: <b>{kcal} ккал</b> · Б{p} Ж{f} В{c}\n\n"
-    "Скільки грамів?"
-)
-BARCODE_NOT_FOUND = (
-    "🤷 Не знайшов штрих-код <code>{ean}</code> у базі.\n\n"
-    "Спробуй ввести продукт текстом (наприклад: «йогурт натуральний 150г»), "
-    "або просто сфотографуй його — я проаналізую візуально."
-)
-BARCODE_LOOKUP_FAILED = (
-    "❌ Не зміг звернутися до бази продуктів. Спробуй ще раз або введи продукт текстом."
-)
-BARCODE_GRAMS_PROMPT = "✏️ <b>Скільки грамів?</b>\nНапиши число (наприклад: <code>180</code>):"
-BARCODE_GRAMS_INVALID = "Кількість має бути числом від 1 до 5000 г. Спробуй ще раз 🙂"
-BARCODE_PENDING_EXPIRED = (
-    "Сканована позиція уже не активна. Спробуй просканувати ще раз через 🔢 Сканер."
-)
-BARCODE_MANUAL_PROMPT = (
-    "✏️ <b>Введи штрих-код цифрами</b>\n"
-    "Цифри під штрих-кодом, без пробілів — наприклад: <code>5449000000996</code>. "
-    "8-13 цифр. /cancel — скасувати."
-)
-BARCODE_MANUAL_INVALID = "Штрих-код має бути 8-13 цифр без літер. Спробуй ще раз 🙂"
-
-# F-10: meal plan strings
-PLAN_INTRO = (
-    "🗓 <b>3-денний план</b>\n"
-    "Я зроблю план з твоїми калоріями + здоров'ям. "
-    "Якщо хочеш — напиши, що в тебе є вдома (наприклад: <code>курка, рис, броколі, яйця</code>) — "
-    "врахую це. Або просто натисни «Без списку».\n\n"
-    "<i>/cancel — скасувати.</i>"
-)
-PLAN_GENERATING = "🍳 Готую план… це займе 10-20 секунд."
-PLAN_FAILED = "❌ Не зміг згенерувати план. Спробуй ще раз через хвилину."
-PLAN_PANTRY_TOO_LONG = "Список занадто довгий — обмеж 200 символами."
-PLAN_HEADER_NOTES = "📝 <i>{notes}</i>\n\n"
-PLAN_DAY_HEADER = "━━━━━━━━━━━━━━━━━━━━━\n📅 <b>{label}</b>"
-
-
-# F-11: fridge / swap strings
-FRIDGE_PROMPT = (
-    "🛒 <b>Що є в холодильнику?</b>\n"
-    "Напиши через кому — наприклад: <code>курка, рис, броколі, яйця, помідори</code>. "
-    "Я придумаю рецепт лише з цих продуктів.\n\n"
-    "<i>/cancel — скасувати.</i>"
-)
-FRIDGE_TOO_LONG = "Список занадто довгий — обмеж 300 символами."
-SUGGEST_VARIATION_HINT = (
-    "Запропонуй ІНШИЙ рецепт ніж попередній — інший білок (якщо в попередньому "
-    "була курка — спробуй рибу/яйця/тофу), інший спосіб приготування, інший набір спецій."
-)
 
 
 def format_meal_plan_day(day: dict, day_idx: int, locale: str = "en") -> str:
@@ -848,8 +781,8 @@ def format_aliases(
     if not aliases:
         return f"{header}\n{sep}\n" + t("aliases.empty", locale)
 
-    # Localized "g"/"г" + "kcal"/"ккал" inline. Tiny so we don't dict it.
-    g_unit = "г" if locale == "uk" else "g"
+    # Localized gram + kcal units inline. Tiny so we don't push them through dict.
+    g_unit = "г" if locale == "uk" else "g"  # noqa: i18n
 
     lines = [header, sep, t("aliases.intro", locale), ""]
     for a in aliases[:12]:
@@ -858,9 +791,9 @@ def format_aliases(
         portion = f"~{int(round(grams))}{g_unit} · " if grams > 0 else ""
         samples = int(a.get("sample_count") or 0)
         sample_tag = f" <i>({samples}×)</i>" if samples > 1 else ""
-        # Reuse the row template — but EN uses "kcal" and UA uses "ккал".
-        # We pre-format the kcal segment so the template stays language-neutral.
-        kcal_unit = "ккал" if locale == "uk" else "kcal"
+        # Reuse the row template — kcal unit pre-formatted so the template
+        # stays language-neutral.
+        kcal_unit = "ккал" if locale == "uk" else "kcal"  # noqa: i18n
         row = (
             f"• <b>{a.get('normalized_name', a.get('alias', ''))}</b> — "
             f"{portion}{kcal} {kcal_unit}{sample_tag}"
@@ -871,20 +804,24 @@ def format_aliases(
     return "\n".join(lines)
 
 
-def format_alternates_intro(meal_type: str, candidates: list[dict]) -> str:
+def format_alternates_intro(meal_type: str, candidates: list[dict], locale: str = "en") -> str:
     """F-6: header shown above the alternates keyboard when the photo is ambiguous.
 
     Lists the candidates as a quick legend so the user can compare numbers
     before tapping a button.
     """
-    meal_label_map = {
-        "breakfast": "Сніданок", "lunch": "Обід", "dinner": "Вечеря",
-        "snack": "Перекус", "other": "Прийом їжі",
-    }
-    label = meal_label_map.get(meal_type, "Прийом їжі")
+    from lib.i18n import t
+    label_key = f"meal_type.{meal_type}" if meal_type else "meal_type.fallback"
+    label = t(label_key, locale)
+    if label == label_key:  # missing key → fallback to a known meal_type label
+        label = t("meal_type.fallback", locale)
+    kcal_unit = t("macro.calories_short", locale)
+    p_short   = t("macro.protein_short",  locale)
+    f_short   = t("macro.fat_short",      locale)
+    c_short   = t("macro.carbs_short",    locale)
     lines = [
-        f"🤔 <b>Не на 100% впевнений у стравi ({label})</b>",
-        "Обери правильний варіант або введи вручну:",
+        t("alternates.header", locale, label=label),
+        t("alternates.choose", locale),
         "",
     ]
     digits = ("1⃣", "2⃣", "3⃣")
@@ -894,10 +831,14 @@ def format_alternates_intro(meal_type: str, candidates: list[dict]) -> str:
         cb   = int(round(float(c.get("carbs_g")   or 0)))
         f    = int(round(float(c.get("fat_g")     or 0)))
         conf = int(round(float(c.get("confidence") or 0) * 100))
-        lines.append(
-            f"{digits[i]} <b>{c.get('name','')}</b> · {kcal} ккал · "
-            f"Б{p} Ж{f} В{cb} · ~{conf}%"
-        )
+        lines.append(t(
+            "alternates.row", locale,
+            digit=digits[i], name=c.get("name", ""), kcal=kcal,
+            kcal_unit=kcal_unit,
+            p=p, f=f, c=cb,
+            p_short=p_short, f_short=f_short, c_short=c_short,
+            conf=conf,
+        ))
     return "\n".join(lines)
 
 
@@ -1109,105 +1050,10 @@ def format_day_detail(date: str, meals: list[dict], locale: str = "en") -> str:
     return "\n".join(lines)
 
 
-# --- Short texts used by webhook.py ---
-
-PHOTO_PROMPT_MEAL_TYPE = "📸 Отримав! Що це за прийом їжі?"
-TEXT_PROMPT_MEAL_TYPE = "📝 Записав твій опис! Що це за прийом їжі?"
-ANALYZING_WAIT = "🔍 Аналізую страву, хвильку…"
-RECALC_WAIT = "🔄 Перераховую уважніше…"
-PHOTO_DOWNLOAD_FAILED = "Вибач, не вдалося завантажити фото. Спробуй ще раз. 📷"
-PHOTO_ANALYSIS_FAILED = (
-    "Не зміг розпізнати страву. Спробуй зробити фото чіткішим — "
-    "я ж не кіт, у темряві не бачу. 🐈‍⬛"
-)
-TEXT_ANALYSIS_FAILED = (
-    "Не зміг нормально розпарсити опис. Спробуй написати простіше — "
-    "наприклад: «курка 200г, рис 150г, броколі 100г». 🙂"
-)
-PENDING_EXPIRED = (
-    "⏰ Минуло більше 10 хвилин, і я вже забув, що було на фото (у мене "
-    "серверна пам'ять — коротка). Надішли ще раз, будь ласка."
-)
-MANUAL_INPUT_PROMPT = "✏️ Напиши, що ти їв/їла (наприклад: курка 200г, рис 150г, броколі 100г).\nАбо надішли /cancel — передумаєш, я не образюся. 😉"
-MEAL_DELETED = "🗑 Видалено: <b>{dish}</b> ({cal} ккал). Денний підрахунок оновлено."
-MEAL_EDIT_PROMPT = "✏️ Напиши новий опис страви (замість «{dish}»).\nАбо надішли /cancel щоб скасувати."
-MEAL_NOT_FOUND = "Не знайшов цю страву. Можливо, вже видалена."
-NO_MEALS_TO_MANAGE = "Сьогодні ще нічого не записано. Надішли фото або текст. 📸"
-MEAL_CANCELLED = "Скасовано. Надішли фото або текст, коли будеш готовий. 👌"
-UNKNOWN_COMMAND = "Не знаю такої команди. Глянь /help — там усе розписано. 🤓"
-SUGGEST_THINKING = "🧠 Думаю над ідеєю, яка закриє твій день…"
-SUGGEST_FAILED = "Ідея тимчасово застрягла в моделі. Спробуй за хвилину. 🤖💤"
-HISTORY_USAGE = "Використай так: /history_detail РРРР-ММ-ДД (наприклад, /history_detail 2026-04-12)"
-
-# --- Chat mode (/ask) ---
-ASK_PROMPT = "💬 Що ти хочеш запитати? Напиши у відповіді — і я врахую твою історію харчування на сьогодні."
-ASK_THINKING = "🧠 Думаю над відповіддю…"
-ASK_ERROR = "Щось пішло не так з відповіддю. Спробуй ще раз за хвилину. 🤖"
-
-# --- Weekly weight check-in ---
-WEIGHT_CHECKIN_PROMPT = (
-    "⚖️ Доброго ранку! Новий тиждень — нова вага. "
-    "Напиши, скільки ти важиш зараз (кг). Або /skip — пропустити цього тижня."
-)
-WEIGHT_CHECKIN_SKIPPED = "👌 Пропустив. До наступного понеділка!"
-WEIGHT_INPUT_PROMPT = "⚖️ Напиши нову вагу в кілограмах (наприклад: 82.5):"
-WEIGHT_INVALID = "Вага має бути від 30 до 300 кг. Спробуй ще раз 🙂"
-WEIGHT_NOT_A_NUMBER = "Хм, це не схоже на число. Спробуй так: 82.5 🙂"
-GOAL_UPDATE_PROMPT = "🎯 Яка твоя ціль на зараз?"
-GOAL_UPDATED = "🎯 Ціль оновив: <b>{goal}</b>."
-
-TARGET_WEIGHT_ASK_LOSE = "🎯 <b>До якої ваги хочеш схуднути?</b>\nНапиши в кілограмах (наприклад: 75):"
-TARGET_WEIGHT_ASK_GAIN = "🎯 <b>Яку вагу хочеш набрати?</b>\nНапиши в кілограмах (наприклад: 80):"
-TARGET_WEIGHT_INVALID = "Цільова вага має бути від 30 до 300 кг. Спробуй ще раз 🙂"
-TARGET_WEIGHT_LOSE_MISMATCH = "Ціль схуднення, але цільова вага ≥ поточної ({current} кг). Напиши меншу цифру або зміни мету через /profile."
-TARGET_WEIGHT_GAIN_MISMATCH = "Ціль набору, але цільова вага ≤ поточної ({current} кг). Напиши більшу цифру або зміни мету через /profile."
-TARGET_WEIGHT_SAVED = "🎯 Цільова вага: <b>{target} кг</b>."
-TARGET_WEIGHT_CLEARED = "🎯 Для мети «Підтримувати вагу» цільова вага не потрібна — очистив."
-
-# F-5: weekly delta + goals dashboard strings
-WEEKLY_DELTA_ASK_LOSE = (
-    "📈 <b>Скільки кг на тиждень хочеш скидати?</b>\n"
-    "Напиши число — наприклад: <code>0.5</code> (повільне зниження) "
-    "або <code>1</code> (агресивне).\n\n"
-    "<i>Безпечний діапазон для більшості людей — 0.3-1.0 кг/тиждень.</i>"
-)
-WEEKLY_DELTA_ASK_GAIN = (
-    "📈 <b>Скільки кг на тиждень хочеш набирати?</b>\n"
-    "Напиши число — наприклад: <code>0.3</code> (чистий ріст м'язів) "
-    "або <code>0.5</code> (з невеликим жиром).\n\n"
-    "<i>Безпечний діапазон — 0.2-0.5 кг/тиждень.</i>"
-)
-WEEKLY_DELTA_INVALID = (
-    "Тижнева дельта має бути числом від 0.1 до 2 кг. Спробуй ще раз 🙂"
-)
-WEEKLY_DELTA_WRONG_SIGN = (
-    "Знак не збігається з твоєю метою. Напиши додатне число — я сам "
-    "зроблю мінус для схуднення / плюс для набору."
-)
-WEEKLY_DELTA_SAVED = "📈 Тижнева ціль: <b>{delta:+.2f} кг/тиждень</b>."
-WEEKLY_DELTA_NOT_FOR_MAINTAIN = (
-    "Для мети «Підтримувати вагу» тижнева дельта не потрібна — пропускаю."
-)
-
-GOALS_HEADER = "🎯 <b>Цілі</b> · {name}"
-GOALS_NO_PROFILE = (
-    "Ще не пройшов онбординг. Натисни /start, я задам кілька питань — "
-    "після цього /goals покаже план."
-)
-GOALS_NO_TARGET = (
-    "Цільова вага не задана. Постав її через /profile → 🏁 Цільова вага."
-)
-GOALS_PROJECTION_AT_TARGET = "🎉 Ти вже на цільовій вазі! Тримай темп."
-GOALS_PROJECTION_ZERO_DELTA = (
-    "Тижнева дельта = 0 — постав ціль через /goals → 📈 Тижнева ціль."
-)
-GOALS_PROJECTION_WRONG_DIRECTION = (
-    "Тижнева дельта спрямована не туди — наприклад, мета «схуднути», "
-    "але ти задав плюс. Поправ через /goals → 📈 Тижнева ціль."
-)
-GOALS_STATUS_AHEAD    = "🟢 Випереджаєш план"
-GOALS_STATUS_ON_TRACK = "🟡 У графіку"
-GOALS_STATUS_BEHIND   = "🔴 Відстаєш від плану"
+# All short / weight / goals constants formerly here were dead code at this
+# point — strings live in lib/i18n/dict_*.json under the matching namespaces
+# (prompts.* / errors.* / weight.* / target_weight.* / goals.*) and callers
+# in api/webhook.py use _t("...", profile). Removed in F-2b Chunk 8 (G3).
 
 # --- Reply-keyboard button labels (must match the strings used in main_menu_keyboard) ---
 # When a user taps one of these buttons, Telegram sends its label as a message.
@@ -1233,8 +1079,8 @@ def btn_label(name: str, locale: str = "en") -> str:
 # pre-F-2b reply keyboard cached don't get a "I don't understand" reaction
 # when they tap. UA + EN current renders are the union of dispatched labels.
 _LEGACY_BTN_LABELS: tuple[str, ...] = (
-    "🔢 Сканер",
-    "📋 Меню",
+    "🔢 Сканер",  # noqa: i18n
+    "📋 Меню",  # noqa: i18n
 )
 
 
@@ -1270,8 +1116,8 @@ def button_text_to_command(text: str) -> str | None:
             for locale in ("uk", "en"):
                 cache[btn_label(name, locale=locale)] = cmd
         # Legacy labels mapped explicitly.
-        cache["🔢 Сканер"] = "/scan"
-        cache["📋 Меню"] = "/menu"
+        cache["🔢 Сканер"] = "/scan"  # noqa: i18n
+        cache["📋 Меню"] = "/menu"  # noqa: i18n
         button_text_to_command._cache = cache
     return cache.get(text)
 

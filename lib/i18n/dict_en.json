@@ -722,5 +722,9 @@
   "health.conditions.pcos":           "PCOS",
   "health.conditions.kidney":         "kidney disease",
   "health.conditions.thyroid":        "thyroid",
-  "health.conditions.gestational":    "pregnancy"
+  "health.conditions.gestational":    "pregnancy",
+
+  "alternates.header":  "🤔 <b>Not 100% sure about the dish ({label})</b>",
+  "alternates.choose":  "Pick the right one or enter manually:",
+  "alternates.row":     "{digit} <b>{name}</b> · {kcal} {kcal_unit} · {p_short}{p} {f_short}{f} {c_short}{c} · ~{conf}%"
 }

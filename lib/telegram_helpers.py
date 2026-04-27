@@ -361,7 +361,7 @@ def main_menu_keyboard(locale: str = "en") -> dict:
     All buttons are plain-text — tapping sends the label as a message and
     webhook.py routes it.
 
-    Note: 🔢 Штрих Код / Barcode and 📋 Скануй Меню / Scan menu are
+    Note: 🔢 Barcode (UA: Штрих Код) and 📋 Scan menu (UA: Скануй Меню) are  # noqa: i18n
     intentionally NOT on this keyboard. Their commands (``/scan`` and
     ``/menu``) still work, and the button labels remain in
     ``menu_button_labels()`` + the webhook dispatcher so users with a stale
@@ -516,7 +516,7 @@ def language_keyboard() -> dict:
         "inline_keyboard": [
             [
                 {"text": "🇬🇧 English",     "callback_data": "lang:set:en"},
-                {"text": "🇺🇦 Українська", "callback_data": "lang:set:uk"},
+                {"text": "🇺🇦 Українська", "callback_data": "lang:set:uk"},  # noqa: i18n
             ],
         ]
     }
@@ -533,14 +533,14 @@ def lang_confirm_keyboard(detected: str) -> dict:
     if detected == "uk":
         return {
             "inline_keyboard": [
-                [{"text": "✅ Продовжити українською", "callback_data": "onb:lang:uk"}],
+                [{"text": "✅ Продовжити українською", "callback_data": "onb:lang:uk"}],  # noqa: i18n
                 [{"text": "🇬🇧 Switch to English",      "callback_data": "onb:lang:en"}],
             ]
         }
     return {
         "inline_keyboard": [
             [{"text": "✅ Continue in English",     "callback_data": "onb:lang:en"}],
-            [{"text": "🇺🇦 Перейти на українську", "callback_data": "onb:lang:uk"}],
+            [{"text": "🇺🇦 Перейти на українську", "callback_data": "onb:lang:uk"}],  # noqa: i18n
         ]
     }
 

@@ -47,7 +47,7 @@ _CONDITION_GUIDANCE: dict[str, str] = {
 
 # Aliases: Ukrainian + common English variants → canonical id.
 # UA keys are deliberate — this dict is a parser for user-typed input (the
-# user can write "хвороба крона" or "Crohn's disease" or "crohn"), so the UA
+# user can write either UA or EN — "Crohn's disease", "crohn", or the UA  # noqa: i18n
 # strings on the LHS are preserved by design. Each line tagged for the audit.
 _ALIASES: dict[str, str] = {
     # Allergens
@@ -150,8 +150,8 @@ def is_clear_keyword(text: str) -> bool:
     if not text:
         return True
     s = text.strip().lower()
-    return s in (  # noqa: i18n
-        "none", "немає", "нема", "no", "ні", "0", "-", "—", "/clear", "clear", "/none",
+    return s in (
+        "none", "немає", "нема", "no", "ні", "0", "-", "—", "/clear", "clear", "/none",  # noqa: i18n
     )
 
 

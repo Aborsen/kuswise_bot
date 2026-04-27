@@ -232,5 +232,36 @@
   "weight.not_a_number":     "Хм, це не схоже на число. Спробуй так: 82.5 🙂",
 
   "goal.update_prompt":  "🎯 Яка твоя ціль на зараз?",
-  "goal.updated":        "🎯 Ціль оновив: <b>{goal}</b>."
+  "goal.updated":        "🎯 Ціль оновив: <b>{goal}</b>.",
+
+  "meals_list.empty":         "📋 <b>Сьогодні ще нічого не записано.</b>\nНадішли фото або напиши, що їв/їла. 📸",
+  "meals_list.day_total":     "📊 <b>Разом за день:</b> {cal} / {target} {kcal_unit} ({pct}%)",
+  "meals_list.macros_line":   "🥩 {p}/{p_target}{g} · 🍚 {c}/{c_target}{g} · 🧈 {f}/{f_target}{g}",
+  "meals_list.header":        "📋 <b>Страви за сьогодні:</b>",
+  "meals_list.row_meal":      "{i}. <b>{meal}</b> — {desc}",
+  "meals_list.row_macros":    "   🔥 {cal} {kcal_unit} | 🥩 {p}{g} {p_short} | 🍚 {c}{g} {c_short} | 🧈 {f}{g} {f_short}",
+  "meals_list.footer":        "👇 Обери дію під кожною стравою:",
+
+  "profile.empty":            "Профіль ще не заповнено. Натисни /start. 👋",
+  "profile.header":           "👤 <b>Твій профіль</b>",
+  "profile.age":              "🎂 Вік: <b>{v}</b>",
+  "profile.sex":              "🚻 Стать: <b>{v}</b>",
+  "profile.weight":           "⚖️ Вага: <b>{v} кг</b>",
+  "profile.height":           "📏 Зріст: <b>{v} см</b>",
+  "profile.gym":              "🏋️ Тренування: <b>{v} / тиждень</b>",
+  "profile.goal":             "🎯 Мета: <b>{v}</b>",
+  "profile.target_reached":   "🏁 Цільова вага: <b>{tw} кг</b> (досягнуто 🎉)",
+  "profile.target_with_arrow":"🏁 Цільова вага: <b>{tw} кг</b> ({arrow} до мети)",
+  "profile.target_simple":    "🏁 Цільова вага: <b>{tw} кг</b>",
+  "profile.daily_norm":       "🔥 Денна норма: <b>{cal} {kcal_unit}</b>",
+  "profile.daily_norm_with_rec": "🔥 Денна норма: <b>{cal} {kcal_unit}</b> (рекомендовано: {rec})",
+  "profile.macro_targets":    "🥩 Білки: <b>{p}{g}</b> | 🍚 Вуглеводи: <b>{c}{g}</b> | 🧈 Жири: <b>{f}{g}</b>",
+  "profile.edit_hint":        "Щоб оновити — натисни ✏️ нижче.",
+  "profile.docs":             "📖 Офіційна документація: <a href=\"https://raudar.gitbook.io/djinni\">raudar.gitbook.io/djinni</a>",
+
+  "menu.dish_row":            "<b>{name}</b> — {kcal} {kcal_unit} · {p_short}{p} {f_short}{f} {c_short}{c}{portion_part}",
+  "menu.dish_row_portion":    " · <i>{portion}</i>",
+
+  "meal_plan.slot_row":       "\n{emoji} <b>{label}</b> · {kcal} {kcal_unit} · {p_short}{p} {f_short}{f} {c_short}{c}\n<b>{name}</b>",
+  "meal_plan.slot_recipe":    "<i>{recipe}</i>"
 }

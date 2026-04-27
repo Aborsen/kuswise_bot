@@ -277,51 +277,63 @@ def format_meals_list(
     log: dict | None = None,
     daily_cal_target: int | None = None,
     macros: dict | None = None,
+    locale: str = "en",
 ) -> str:
-    """List today's meals with IDs for edit/delete.
+    """List today's meals with IDs for edit/delete (UA + EN).
 
     If ``log``, ``daily_cal_target`` and ``macros`` are supplied, a compact
-    calorie + macro header is prepended so the user sees their day totals
-    without having to switch to /today.
+    calorie + macro header is prepended.
     """
+    from lib.i18n import t
     if not meals:
-        return (
-            "📋 <b>Сьогодні ще нічого не записано.</b>\n"
-            "Надішли фото або напиши, що їв/їла. 📸"
-        )
+        return t("meals_list.empty", locale)
+
+    g = t("macro.gram_short", locale)
+    kcal_unit = t("macro.calories_short", locale)
+    p_short = t("macro.protein_short", locale)
+    c_short = t("macro.carbs_short", locale)
+    f_short = t("macro.fat_short", locale)
 
     lines: list[str] = []
-
     if log and daily_cal_target and macros:
         cal = log.get("calories", 0) or 0
         p = log.get("protein", 0) or 0
         c = log.get("carbs", 0) or 0
         f = log.get("fat", 0) or 0
-        lines.append(
-            f"📊 <b>Разом за день:</b> {round(cal)} / {daily_cal_target} ккал "
-            f"({_pct(cal, daily_cal_target)}%)"
-        )
-        lines.append(
-            f"🥩 {round(p)}/{macros['protein']}г · "
-            f"🍚 {round(c)}/{macros['carbs']}г · "
-            f"🧈 {round(f)}/{macros['fat']}г"
-        )
+        lines.append(t(
+            "meals_list.day_total", locale,
+            cal=round(cal), target=daily_cal_target,
+            kcal_unit=kcal_unit, pct=_pct(cal, daily_cal_target),
+        ))
+        lines.append(t(
+            "meals_list.macros_line", locale,
+            p=round(p), p_target=macros['protein'],
+            c=round(c), c_target=macros['carbs'],
+            f=round(f), f_target=macros['fat'],
+            g=g,
+        ))
         lines.append("")
 
-    lines.append("📋 <b>Страви за сьогодні:</b>")
+    lines.append(t("meals_list.header", locale))
     lines.append("")
     for i, m in enumerate(meals, 1):
-        mt = _MEAL_TYPE_UA.get((m.get("meal_type") or "").lower(), "")
+        mt_raw = (m.get("meal_type") or "").lower()
+        mt = t(f"meal_type.{mt_raw}", locale) if mt_raw in ("breakfast", "lunch", "dinner", "snack") else ""
         desc = _esc((m.get("description") or "")[:50])
         cal = round(m.get("calories", 0))
         p = round(m.get("protein_g", 0))
         c = round(m.get("carbs_g", 0))
         f = round(m.get("fat_g", 0))
-        lines.append(f"{i}. <b>{mt}</b> — {desc}")
-        lines.append(f"   🔥 {cal} ккал | 🥩 {p}г Б | 🍚 {c}г В | 🧈 {f}г Ж")
+        lines.append(t("meals_list.row_meal", locale, i=i, meal=mt, desc=desc))
+        lines.append(t(
+            "meals_list.row_macros", locale,
+            cal=cal, kcal_unit=kcal_unit,
+            p=p, c=c, f=f, g=g,
+            p_short=p_short, c_short=c_short, f_short=f_short,
+        ))
         lines.append("")
 
-    lines.append("👇 Обери дію під кожною стравою:")
+    lines.append(t("meals_list.footer", locale))
     return "\n".join(lines)
 
 
@@ -399,11 +411,21 @@ HEALTH_CANCELLED = "Скасовано."
 HEALTH_INVALID_ALL = "Не розпізнав жодного значення. Спробуй ще раз або /cancel."
 
 
-def _sex_ua(sex: str) -> str:
+def _sex_ua(sex: str, locale: str = "uk") -> str:
+    """Return localized sex label. Default 'uk' preserves legacy behaviour
+    for callers that don't pass a locale yet."""
+    if locale == "en":
+        return {"male": "male", "female": "female"}.get(sex, sex or "—")
     return {"male": "чоловіча", "female": "жіноча"}.get(sex, sex or "—")
 
 
-def _goal_ua(goal: str) -> str:
+def _goal_ua(goal: str, locale: str = "uk") -> str:
+    if locale == "en":
+        return {
+            "lose": "lose weight",
+            "maintain": "maintain weight",
+            "gain": "build muscle",
+        }.get(goal, goal or "—")
     return {
         "lose": "схуднути",
         "maintain": "підтримувати вагу",
@@ -411,14 +433,23 @@ def _goal_ua(goal: str) -> str:
     }.get(goal, goal or "—")
 
 
-def _gym_ua(freq: str) -> str:
-    mapping = {
-        "0": "0 разів",
-        "1-2": "1–2 рази",
-        "3-4": "3–4 рази",
-        "5-6": "5–6 разів",
-        "7": "7 разів",
-    }
+def _gym_ua(freq: str, locale: str = "uk") -> str:
+    if locale == "en":
+        mapping = {
+            "0": "0 times",
+            "1-2": "1–2 times",
+            "3-4": "3–4 times",
+            "5-6": "5–6 times",
+            "7": "7 times",
+        }
+    else:
+        mapping = {
+            "0": "0 разів",
+            "1-2": "1–2 рази",
+            "3-4": "3–4 рази",
+            "5-6": "5–6 разів",
+            "7": "7 разів",
+        }
     return mapping.get(freq, freq or "—")
 
 
@@ -441,9 +472,10 @@ def format_recommendation(profile: dict, recommended: int) -> str:
     )
 
 
-def format_profile(profile: dict) -> str:
+def format_profile(profile: dict, locale: str = "en") -> str:
+    from lib.i18n import t
     if not profile:
-        return "Профіль ще не заповнено. Натисни /start. 👋"
+        return t("profile.empty", locale)
     target = profile.get("daily_calorie_target") or 0
     rec = profile.get("recommended_calorie_target") or 0
     weight = profile.get("weight_kg")
@@ -452,40 +484,53 @@ def format_profile(profile: dict) -> str:
         macros = macro_gram_targets_from_profile(weight, goal)
     else:
         macros = macro_gram_targets(target) if target else {"protein": 0, "carbs": 0, "fat": 0}
+
+    g = t("macro.gram_short", locale)
+    kcal_unit = t("macro.calories_short", locale)
+    sep = "━━━━━━━━━━━━━━━━━━━━━"
+
+    # kg unit is locale-specific ("кг" / "kg") and distinct from g (gram).
+    kg_unit = "кг" if locale == "uk" else "kg"
+
     lines = [
-        "👤 <b>Твій профіль</b>",
-        "━━━━━━━━━━━━━━━━━━━━━",
-        f"🎂 Вік: <b>{profile.get('age', '—')}</b>",
-        f"🚻 Стать: <b>{_sex_ua(profile.get('sex', ''))}</b>",
-        f"⚖️ Вага: <b>{profile.get('weight_kg', '—')} кг</b>",
-        f"📏 Зріст: <b>{profile.get('height_cm', '—')} см</b>",
-        f"🏋️ Тренування: <b>{_gym_ua(profile.get('gym_per_week', ''))} / тиждень</b>",
-        f"🎯 Мета: <b>{_goal_ua(profile.get('goal', ''))}</b>",
+        t("profile.header", locale),
+        sep,
+        t("profile.age",    locale, v=profile.get("age", "—")),
+        t("profile.sex",    locale, v=_sex_ua(profile.get("sex", ""), locale)),
+        t("profile.weight", locale, v=profile.get("weight_kg", "—")),
+        t("profile.height", locale, v=profile.get("height_cm", "—")),
+        t("profile.gym",    locale, v=_gym_ua(profile.get("gym_per_week", ""), locale)),
+        t("profile.goal",   locale, v=_goal_ua(profile.get("goal", ""), locale)),
     ]
     tw = profile.get("target_weight_kg")
     if tw and goal in ("lose", "gain") and weight:
-        delta = float(weight) - float(tw)  # positive = need to lose; negative = need to gain
+        delta = float(weight) - float(tw)
         if goal == "lose":
             togo = max(0.0, delta)
-            arrow = "—" if togo <= 0.05 else f"−{togo:.1f} кг"
-        else:  # gain
-            togo = max(0.0, -delta)
-            arrow = "—" if togo <= 0.05 else f"+{togo:.1f} кг"
-        if togo <= 0.05:
-            lines.append(f"🏁 Цільова вага: <b>{tw} кг</b> (досягнуто 🎉)")
+            arrow = "—" if togo <= 0.05 else f"-{togo:.1f} {kg_unit}"
         else:
-            lines.append(f"🏁 Цільова вага: <b>{tw} кг</b> ({arrow} до мети)")
+            togo = max(0.0, -delta)
+            arrow = "—" if togo <= 0.05 else f"+{togo:.1f} {kg_unit}"
+        if togo <= 0.05:
+            lines.append(t("profile.target_reached", locale, tw=tw))
+        else:
+            lines.append(t("profile.target_with_arrow", locale, tw=tw, arrow=arrow))
     elif tw:
-        lines.append(f"🏁 Цільова вага: <b>{tw} кг</b>")
-    lines += [
-        "━━━━━━━━━━━━━━━━━━━━━",
-        f"🔥 Денна норма: <b>{target} ккал</b>" + (f" (рекомендовано: {rec})" if rec and rec != target else ""),
-        f"🥩 Білки: <b>{macros['protein']}г</b> | 🍚 Вуглеводи: <b>{macros['carbs']}г</b> | 🧈 Жири: <b>{macros['fat']}г</b>",
-        "",
-        "Щоб оновити — натисни ✏️ нижче.",
-        "",
-        "📖 Офіційна документація: <a href=\"https://raudar.gitbook.io/djinni\">raudar.gitbook.io/djinni</a>",
-    ]
+        lines.append(t("profile.target_simple", locale, tw=tw))
+
+    lines.append(sep)
+    if rec and rec != target:
+        lines.append(t("profile.daily_norm_with_rec", locale, cal=target, kcal_unit=kcal_unit, rec=rec))
+    else:
+        lines.append(t("profile.daily_norm", locale, cal=target, kcal_unit=kcal_unit))
+    lines.append(t(
+        "profile.macro_targets", locale,
+        p=macros['protein'], c=macros['carbs'], f=macros['fat'], g=g,
+    ))
+    lines.append("")
+    lines.append(t("profile.edit_hint", locale))
+    lines.append("")
+    lines.append(t("profile.docs", locale))
     return "\n".join(lines)
 
 
@@ -702,20 +747,31 @@ MENU_RESULTS_HEADER = "📋 <b>Знайшов {n} страв(и):</b>"
 MENU_PENDING_EXPIRED = "Меню більше не активне. Відскануй ще раз через /menu."
 
 
-def format_menu_dishes_intro(n: int) -> str:
-    return MENU_RESULTS_HEADER.format(n=n)
+def format_menu_dishes_intro(n: int, locale: str = "en") -> str:
+    from lib.i18n import t
+    return t("menu.results_header", locale, n=n)
 
 
-def format_menu_dish_row(dish: dict) -> str:
+def format_menu_dish_row(dish: dict, locale: str = "en") -> str:
     """Single-dish line for the menu results message."""
+    from lib.i18n import t
     name = dish.get("name", "")
     kcal = int(round(float(dish.get("calories")  or 0)))
     p    = int(round(float(dish.get("protein_g") or 0)))
     f    = int(round(float(dish.get("fat_g")     or 0)))
     c    = int(round(float(dish.get("carbs_g")   or 0)))
     portion = (dish.get("portion_note") or "").strip()
-    portion_part = f" · <i>{portion}</i>" if portion else ""
-    return f"<b>{name}</b> — {kcal} ккал · Б{p} Ж{f} В{c}{portion_part}"
+    portion_part = t("menu.dish_row_portion", locale, portion=portion) if portion else ""
+    return t(
+        "menu.dish_row", locale,
+        name=name, kcal=kcal,
+        kcal_unit=t("macro.calories_short", locale),
+        p=p, f=f, c=c,
+        p_short=t("macro.protein_short", locale),
+        f_short=t("macro.fat_short",     locale),
+        c_short=t("macro.carbs_short",   locale),
+        portion_part=portion_part,
+    )
 
 
 # F-8: barcode scanner strings
@@ -781,28 +837,36 @@ SUGGEST_VARIATION_HINT = (
 )
 
 
-def format_meal_plan_day(day: dict, day_idx: int) -> str:
-    """Render one day's slots as a single Telegram message body."""
-    lines = [PLAN_DAY_HEADER.format(label=day["date_label"])]
+def format_meal_plan_day(day: dict, day_idx: int, locale: str = "en") -> str:
+    """Render one day's slots as a single Telegram message body (UA + EN)."""
+    from lib.i18n import t
+    lines = [t("plan.day_header", locale, label=day["date_label"])]
     slot_emojis = {"breakfast": "🥣", "lunch": "🍱", "dinner": "🍽️", "snack": "🍎"}
-    slot_labels = {"breakfast": "Сніданок", "lunch": "Обід", "dinner": "Вечеря", "snack": "Перекус"}
+    kcal_unit = t("macro.calories_short", locale)
+    p_short   = t("macro.protein_short",  locale)
+    f_short   = t("macro.fat_short",      locale)
+    c_short   = t("macro.carbs_short",    locale)
     for slot_key in ("breakfast", "lunch", "dinner", "snack"):
         slot = day["slots"].get(slot_key)
         if not slot:
             continue
         emoji = slot_emojis[slot_key]
-        label = slot_labels[slot_key]
+        label = t(f"meal_type.{slot_key}", locale)
         kcal = int(round(float(slot.get("calories")  or 0)))
         p    = int(round(float(slot.get("protein_g") or 0)))
         f    = int(round(float(slot.get("fat_g")     or 0)))
         c    = int(round(float(slot.get("carbs_g")   or 0)))
         recipe = slot.get("recipe", "")
-        lines.append(
-            f"\n{emoji} <b>{label}</b> · {kcal} ккал · Б{p} Ж{f} В{c}\n"
-            f"<b>{slot['name']}</b>"
-        )
+        lines.append(t(
+            "meal_plan.slot_row", locale,
+            emoji=emoji, label=label, kcal=kcal,
+            kcal_unit=kcal_unit,
+            p=p, f=f, c=c,
+            p_short=p_short, f_short=f_short, c_short=c_short,
+            name=slot["name"],
+        ))
         if recipe:
-            lines.append(f"<i>{recipe}</i>")
+            lines.append(t("meal_plan.slot_recipe", locale, recipe=recipe))
     return "\n".join(lines)
 
 

@@ -232,5 +232,36 @@
   "weight.not_a_number":     "Hmm, that doesn't look like a number. Try: 82.5 🙂",
 
   "goal.update_prompt":  "🎯 What's your goal now?",
-  "goal.updated":        "🎯 Goal updated: <b>{goal}</b>."
+  "goal.updated":        "🎯 Goal updated: <b>{goal}</b>.",
+
+  "meals_list.empty":         "📋 <b>Nothing logged today yet.</b>\nSend a photo or describe what you ate. 📸",
+  "meals_list.day_total":     "📊 <b>Day total:</b> {cal} / {target} {kcal_unit} ({pct}%)",
+  "meals_list.macros_line":   "🥩 {p}/{p_target}{g} · 🍚 {c}/{c_target}{g} · 🧈 {f}/{f_target}{g}",
+  "meals_list.header":        "📋 <b>Meals today:</b>",
+  "meals_list.row_meal":      "{i}. <b>{meal}</b> — {desc}",
+  "meals_list.row_macros":    "   🔥 {cal} {kcal_unit} | 🥩 {p}{g} {p_short} | 🍚 {c}{g} {c_short} | 🧈 {f}{g} {f_short}",
+  "meals_list.footer":        "👇 Pick an action under each meal:",
+
+  "profile.empty":            "Profile not filled in yet. Tap /start. 👋",
+  "profile.header":           "👤 <b>Your profile</b>",
+  "profile.age":              "🎂 Age: <b>{v}</b>",
+  "profile.sex":              "🚻 Sex: <b>{v}</b>",
+  "profile.weight":           "⚖️ Weight: <b>{v} kg</b>",
+  "profile.height":           "📏 Height: <b>{v} cm</b>",
+  "profile.gym":              "🏋️ Training: <b>{v} / week</b>",
+  "profile.goal":             "🎯 Goal: <b>{v}</b>",
+  "profile.target_reached":   "🏁 Target weight: <b>{tw} kg</b> (reached 🎉)",
+  "profile.target_with_arrow":"🏁 Target weight: <b>{tw} kg</b> ({arrow} to go)",
+  "profile.target_simple":    "🏁 Target weight: <b>{tw} kg</b>",
+  "profile.daily_norm":       "🔥 Daily target: <b>{cal} {kcal_unit}</b>",
+  "profile.daily_norm_with_rec": "🔥 Daily target: <b>{cal} {kcal_unit}</b> (recommended: {rec})",
+  "profile.macro_targets":    "🥩 Protein: <b>{p}{g}</b> | 🍚 Carbs: <b>{c}{g}</b> | 🧈 Fat: <b>{f}{g}</b>",
+  "profile.edit_hint":        "To update — tap ✏️ below.",
+  "profile.docs":             "📖 Official documentation: <a href=\"https://raudar.gitbook.io/djinni\">raudar.gitbook.io/djinni</a>",
+
+  "menu.dish_row":            "<b>{name}</b> — {kcal} {kcal_unit} · {p_short}{p} {f_short}{f} {c_short}{c}{portion_part}",
+  "menu.dish_row_portion":    " · <i>{portion}</i>",
+
+  "meal_plan.slot_row":       "\n{emoji} <b>{label}</b> · {kcal} {kcal_unit} · {p_short}{p} {f_short}{f} {c_short}{c}\n<b>{name}</b>",
+  "meal_plan.slot_recipe":    "<i>{recipe}</i>"
 }

@@ -131,9 +131,7 @@ from lib.formatters import (
     # Use _t("barcode.foo", profile) / _t("menu.foo", profile) at call sites.
     format_menu_dishes_intro,
     format_menu_dish_row,
-    # PLAN_* migrated to lib/i18n keys (F-2b Phase 3) — except PLAN_HEADER_NOTES
-    # which is consumed in format_meal_plan_day; see plan.header_notes.
-    PLAN_HEADER_NOTES,
+    # PLAN_* migrated to lib/i18n keys (F-2b Phase 3 + Chunk 4 — plan.*)
     format_meal_plan_day,
     # FRIDGE_*, SUGGEST_VARIATION_HINT migrated to lib/i18n (F-2b Phase 3 — fridge.*)
     format_meals_list,
@@ -1772,9 +1770,10 @@ def handle_menu_photo(conn, message: dict, profile: dict) -> None:
         return
 
     # Build the results message: header + one line per dish.
-    lines = [format_menu_dishes_intro(len(dishes))]
+    locale = i18n_mod.locale_of(profile)
+    lines = [format_menu_dishes_intro(len(dishes), locale)]
     for d in dishes[:15]:  # cap message length; keyboard buttons go up to 25
-        lines.append(format_menu_dish_row(d))
+        lines.append(format_menu_dish_row(d, locale))
     send_message(
         chat_id,
         "\n".join(lines),
@@ -1920,18 +1919,18 @@ def _build_and_send_plan(
         send_message(chat_id, _t("plan.failed", profile), reply_markup=main_menu_keyboard())
         return
 
-    _send_plan_day(chat_id, plan_id, plan, day_idx=0)
+    _send_plan_day(chat_id, plan_id, plan, day_idx=0, locale=i18n_mod.locale_of(profile))
 
 
-def _send_plan_day(chat_id: int, plan_id: int, plan: dict, day_idx: int) -> None:
+def _send_plan_day(chat_id: int, plan_id: int, plan: dict, day_idx: int, locale: str = "en") -> None:
     """Render one day of a saved plan + the per-day inline keyboard."""
     days = plan.get("days") or []
     if day_idx < 0 or day_idx >= len(days):
         return
     day = days[day_idx]
-    body = format_meal_plan_day(day, day_idx)
+    body = format_meal_plan_day(day, day_idx, locale)
     if day_idx == 0 and plan.get("notes"):
-        body = PLAN_HEADER_NOTES.format(notes=plan["notes"]) + body
+        body = i18n_mod.t("plan.header_notes", locale, notes=plan["notes"]) + body
     send_message(chat_id, body, reply_markup=plan_day_keyboard(plan_id, day_idx, day))
 
 
@@ -2002,7 +2001,7 @@ def handle_plan_callback(conn, cb: dict, profile: dict) -> None:
 
     if data.startswith("plan:view:"):
         answer_callback_query(cb_id)
-        _send_plan_day(chat_id, plan_id, plan, day_idx)
+        _send_plan_day(chat_id, plan_id, plan, day_idx, locale=i18n_mod.locale_of(profile))
         return
 
     if data.startswith("plan:log:"):
@@ -2320,7 +2319,7 @@ def handle_command(conn, message: dict, text: str, first_name: str | None, profi
         return
 
     if cmd == "/profile":
-        send_message(chat_id, format_profile(profile), reply_markup=profile_edit_keyboard())
+        send_message(chat_id, format_profile(profile, locale=i18n_mod.locale_of(profile)), reply_markup=profile_edit_keyboard())
         return
 
     if cmd == "/today":
@@ -2450,7 +2449,7 @@ def handle_command(conn, message: dict, text: str, first_name: str | None, profi
         )
         send_message(
             chat_id,
-            format_meals_list(meals, log=log, daily_cal_target=cal_target, macros=macros),
+            format_meals_list(meals, log=log, daily_cal_target=cal_target, macros=macros, locale=i18n_mod.locale_of(profile)),
             reply_markup=meals_list_keyboard(meals),
         )
         return

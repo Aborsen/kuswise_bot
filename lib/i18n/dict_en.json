@@ -263,5 +263,41 @@
   "menu.dish_row_portion":    " · <i>{portion}</i>",
 
   "meal_plan.slot_row":       "\n{emoji} <b>{label}</b> · {kcal} {kcal_unit} · {p_short}{p} {f_short}{f} {c_short}{c}\n<b>{name}</b>",
-  "meal_plan.slot_recipe":    "<i>{recipe}</i>"
+  "meal_plan.slot_recipe":    "<i>{recipe}</i>",
+
+  "sex_keyboard.male":        "👨 Male",
+  "sex_keyboard.female":      "👩 Female",
+
+  "goal_keyboard.lose":       "🔥 Lose weight",
+  "goal_keyboard.maintain":   "⚖️ Maintain weight",
+  "goal_keyboard.gain":       "💪 Build muscle",
+
+  "tz_keyboard.kyiv":         "🇺🇦 Kyiv",
+  "tz_keyboard.london":       "🇬🇧 London",
+  "tz_keyboard.berlin_warsaw":"🇩🇪 Berlin / Warsaw",
+  "tz_keyboard.new_york":     "🇺🇸 New York",
+  "tz_keyboard.los_angeles":  "🇺🇸 Los Angeles",
+  "tz_keyboard.dubai":        "🇦🇪 Dubai",
+  "tz_keyboard.other":        "✏️ Other zone (I'll type it)",
+
+  "inline_button.open_scanner":      "📷 Open scanner",
+  "inline_button.scan_manual_entry": "✏️ Type the digits",
+  "inline_button.cancel":            "❌ Cancel",
+  "inline_button.open_dashboard":    "📱 Open Dashboard",
+
+  "dashboard.open_prompt":    "📱 Tap the button below to open Dashboard:",
+
+  "onboarding.done_calorie_line": "🎯 Calories: <b>{cal} kcal/day</b>",
+  "onboarding.done_water_line":   "💧 Water: <b>{water} ml/day</b> (change via /water)",
+
+  "recommendation.header":     "🧮 <b>Calculated!</b>",
+  "recommendation.age":        "Age: <b>{value}</b>",
+  "recommendation.sex":        "Sex: <b>{value}</b>",
+  "recommendation.weight":     "Weight: <b>{value} kg</b>",
+  "recommendation.height":     "Height: <b>{value} cm</b>",
+  "recommendation.gym":        "Workouts: <b>{value} per week</b>",
+  "recommendation.goal":       "Goal: <b>{value}</b>",
+  "recommendation.daily_norm": "🔥 Recommended daily target: <b>{cal} kcal</b>",
+  "recommendation.macros":     "🥩 Protein: <b>{p}g</b> · 🍚 Carbs: <b>{c}g</b> · 🧈 Fat: <b>{f}g</b>",
+  "recommendation.footer":     "Calculated using grams of protein/fat/carbs per kg of body weight matched to your goal. Accept it — or enter your own. 👇"
 }

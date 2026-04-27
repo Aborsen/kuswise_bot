@@ -453,22 +453,28 @@ def _gym_ua(freq: str, locale: str = "uk") -> str:
     return mapping.get(freq, freq or "—")
 
 
-def format_recommendation(profile: dict, recommended: int) -> str:
+def format_recommendation(profile: dict, recommended: int, locale: str = "en") -> str:
+    from lib.i18n import t
     weight = profile.get("weight_kg") or 0
     goal = profile.get("goal") or "maintain"
     macros = macro_gram_targets_from_profile(weight, goal)
+    age_v   = profile.get("age", "—")
+    sex_v   = _sex_ua(profile.get("sex", ""), locale=locale)
+    wt_v    = profile.get("weight_kg", "—")
+    ht_v    = profile.get("height_cm", "—")
+    gym_v   = _gym_ua(profile.get("gym_per_week", ""), locale=locale)
+    goal_v  = _goal_ua(profile.get("goal", ""), locale=locale)
     return (
-        "🧮 <b>Порахував!</b>\n\n"
-        f"Вік: <b>{profile.get('age', '—')}</b>\n"
-        f"Стать: <b>{_sex_ua(profile.get('sex', ''))}</b>\n"
-        f"Вага: <b>{profile.get('weight_kg', '—')} кг</b>\n"
-        f"Зріст: <b>{profile.get('height_cm', '—')} см</b>\n"
-        f"Тренування: <b>{_gym_ua(profile.get('gym_per_week', ''))} на тиждень</b>\n"
-        f"Мета: <b>{_goal_ua(profile.get('goal', ''))}</b>\n\n"
-        f"🔥 Рекомендована денна норма: <b>{recommended} ккал</b>\n"
-        f"🥩 Білки: <b>{macros['protein']}г</b> · 🍚 Вуглеводи: <b>{macros['carbs']}г</b> · 🧈 Жири: <b>{macros['fat']}г</b>\n\n"
-        "Число порахував за нормою грамів білків/жирів/вуглеводів на кілограм ваги під твою мету. "
-        "Можеш прийняти — або ввести своє. 👇"
+        t("recommendation.header", locale=locale) + "\n\n"
+        + t("recommendation.age",    locale=locale, value=age_v) + "\n"
+        + t("recommendation.sex",    locale=locale, value=sex_v) + "\n"
+        + t("recommendation.weight", locale=locale, value=wt_v) + "\n"
+        + t("recommendation.height", locale=locale, value=ht_v) + "\n"
+        + t("recommendation.gym",    locale=locale, value=gym_v) + "\n"
+        + t("recommendation.goal",   locale=locale, value=goal_v) + "\n\n"
+        + t("recommendation.daily_norm", locale=locale, cal=recommended) + "\n"
+        + t("recommendation.macros", locale=locale, p=macros["protein"], c=macros["carbs"], f=macros["fat"]) + "\n\n"
+        + t("recommendation.footer", locale=locale)
     )
 
 

@@ -263,5 +263,41 @@
   "menu.dish_row_portion":    " · <i>{portion}</i>",
 
   "meal_plan.slot_row":       "\n{emoji} <b>{label}</b> · {kcal} {kcal_unit} · {p_short}{p} {f_short}{f} {c_short}{c}\n<b>{name}</b>",
-  "meal_plan.slot_recipe":    "<i>{recipe}</i>"
+  "meal_plan.slot_recipe":    "<i>{recipe}</i>",
+
+  "sex_keyboard.male":        "👨 Чоловіча",
+  "sex_keyboard.female":      "👩 Жіноча",
+
+  "goal_keyboard.lose":       "🔥 Схуднути",
+  "goal_keyboard.maintain":   "⚖️ Підтримувати вагу",
+  "goal_keyboard.gain":       "💪 Набрати м'язи",
+
+  "tz_keyboard.kyiv":         "🇺🇦 Київ",
+  "tz_keyboard.london":       "🇬🇧 Лондон",
+  "tz_keyboard.berlin_warsaw":"🇩🇪 Берлін / Варшава",
+  "tz_keyboard.new_york":     "🇺🇸 Нью-Йорк",
+  "tz_keyboard.los_angeles":  "🇺🇸 Лос-Анджелес",
+  "tz_keyboard.dubai":        "🇦🇪 Дубай",
+  "tz_keyboard.other":        "✏️ Інша зона (вкажу вручну)",
+
+  "inline_button.open_scanner":      "📷 Відкрити сканер",
+  "inline_button.scan_manual_entry": "✏️ Ввести цифрами",
+  "inline_button.cancel":            "❌ Скасувати",
+  "inline_button.open_dashboard":    "📱 Відкрити Dashboard",
+
+  "dashboard.open_prompt":    "📱 Натисни кнопку нижче, щоб відкрити Dashboard:",
+
+  "onboarding.done_calorie_line": "🎯 Калорії: <b>{cal} ккал/день</b>",
+  "onboarding.done_water_line":   "💧 Вода: <b>{water} мл/день</b> (можна змінити в /water)",
+
+  "recommendation.header":     "🧮 <b>Порахував!</b>",
+  "recommendation.age":        "Вік: <b>{value}</b>",
+  "recommendation.sex":        "Стать: <b>{value}</b>",
+  "recommendation.weight":     "Вага: <b>{value} кг</b>",
+  "recommendation.height":     "Зріст: <b>{value} см</b>",
+  "recommendation.gym":        "Тренування: <b>{value} на тиждень</b>",
+  "recommendation.goal":       "Мета: <b>{value}</b>",
+  "recommendation.daily_norm": "🔥 Рекомендована денна норма: <b>{cal} ккал</b>",
+  "recommendation.macros":     "🥩 Білки: <b>{p}г</b> · 🍚 Вуглеводи: <b>{c}г</b> · 🧈 Жири: <b>{f}г</b>",
+  "recommendation.footer":     "Число порахував за нормою грамів білків/жирів/вуглеводів на кілограм ваги під твою мету. Можеш прийняти — або ввести своє. 👇"
 }

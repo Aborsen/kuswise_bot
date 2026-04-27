@@ -424,8 +424,8 @@ def process_update(update: dict) -> None:
         if text == BTN_DASHBOARD:
             send_message(
                 chat_id,
-                "📱 Натисни кнопку нижче, щоб відкрити Dashboard:",
-                reply_markup=dashboard_inline_keyboard(),
+                _t("dashboard.open_prompt", profile),
+                reply_markup=dashboard_inline_keyboard(locale=i18n_mod.locale_of(profile)),
             )
             return
         if text == BTN_WATER:
@@ -662,10 +662,8 @@ def _finalize_onboarding(conn, chat_id: int, user_id: int, first_name: str | Non
         water = None
     done_text = _t("onboarding.done", profile, name=first_name or _t("onboarding.default_name", profile))
     if water:
-        done_text += (
-            f"\n\n🎯 Калорії: <b>{cal} ккал/день</b>\n"
-            f"💧 Вода: <b>{water} мл/день</b> (можна змінити в /water)"
-        )
+        done_text += "\n\n" + _t("onboarding.done_calorie_line", profile, cal=cal)
+        done_text += "\n" + _t("onboarding.done_water_line", profile, water=water)
     send_message(chat_id, done_text, reply_markup=main_menu_keyboard())
 
 
@@ -684,10 +682,10 @@ def handle_onboarding_text(conn, chat_id: int, user_id: int, first_name: str | N
             send_message(chat_id, _t("onboarding.age_range", profile))
             return
         update_profile(conn, user_id, age=age, onboarding_step="awaiting_sex")
-        send_message(chat_id, _t("onboarding.ask_sex", profile), reply_markup=sex_keyboard())
+        send_message(chat_id, _t("onboarding.ask_sex", profile), reply_markup=sex_keyboard(locale=i18n_mod.locale_of(profile)))
 
     elif step == "awaiting_sex":
-        send_message(chat_id, _t("onboarding.need_button", profile), reply_markup=sex_keyboard())
+        send_message(chat_id, _t("onboarding.need_button", profile), reply_markup=sex_keyboard(locale=i18n_mod.locale_of(profile)))
 
     elif step == "awaiting_weight":
         w = _parse_float(text)
@@ -715,7 +713,7 @@ def handle_onboarding_text(conn, chat_id: int, user_id: int, first_name: str | N
         send_message(chat_id, _t("onboarding.need_button", profile), reply_markup=gym_keyboard())
 
     elif step == "awaiting_goal":
-        send_message(chat_id, _t("onboarding.need_button", profile), reply_markup=goal_keyboard())
+        send_message(chat_id, _t("onboarding.need_button", profile), reply_markup=goal_keyboard(locale=i18n_mod.locale_of(profile)))
 
     elif step == "awaiting_target_weight":
         tw = _parse_float(text)
@@ -745,7 +743,7 @@ def handle_onboarding_text(conn, chat_id: int, user_id: int, first_name: str | N
         send_message(chat_id, _t("target_weight.saved", profile, target=tw))
         send_message(
             chat_id,
-            format_recommendation(profile_after, rec),
+            format_recommendation(profile_after, rec, locale=i18n_mod.locale_of(profile_after)),
             reply_markup=confirm_calories_keyboard(),
         )
 
@@ -765,17 +763,17 @@ def handle_onboarding_text(conn, chat_id: int, user_id: int, first_name: str | N
             daily_calorie_target=cal,
             onboarding_step="awaiting_tz",
         )
-        send_message(chat_id, _t("onboarding.ask_tz", profile), reply_markup=tz_keyboard(prefix="onb:tz"))
+        send_message(chat_id, _t("onboarding.ask_tz", profile), reply_markup=tz_keyboard(prefix="onb:tz", locale=i18n_mod.locale_of(profile)))
 
     elif step == "awaiting_tz":
         # User typed instead of tapping a preset — reshow the keyboard.
-        send_message(chat_id, _t("onboarding.need_button", profile), reply_markup=tz_keyboard(prefix="onb:tz"))
+        send_message(chat_id, _t("onboarding.need_button", profile), reply_markup=tz_keyboard(prefix="onb:tz", locale=i18n_mod.locale_of(profile)))
 
     elif step == "awaiting_tz_custom":
         tz_input = text.strip()
         if tz_input.lower() in ("/cancel", "cancel"):
             update_profile(conn, user_id, onboarding_step="awaiting_tz")
-            send_message(chat_id, _t("onboarding.ask_tz", profile), reply_markup=tz_keyboard(prefix="onb:tz"))
+            send_message(chat_id, _t("onboarding.ask_tz", profile), reply_markup=tz_keyboard(prefix="onb:tz", locale=i18n_mod.locale_of(profile)))
             return
         if not is_valid_tz(tz_input):
             send_message(chat_id, _t("onboarding.tz_invalid", profile))
@@ -855,7 +853,7 @@ def handle_onboarding_callback(conn, cb: dict) -> None:
             return
         update_profile(conn, user_id, gym_per_week=freq, onboarding_step="awaiting_goal")
         answer_callback_query(cb_id, "Записав")
-        send_message(chat_id, _t("onboarding.ask_goal", profile), reply_markup=goal_keyboard())
+        send_message(chat_id, _t("onboarding.ask_goal", profile), reply_markup=goal_keyboard(locale=i18n_mod.locale_of(profile)))
         return
 
     if data.startswith("onb:goal:"):
@@ -899,7 +897,7 @@ def handle_onboarding_callback(conn, cb: dict) -> None:
         profile_after = get_profile(conn, user_id) or {}
         send_message(
             chat_id,
-            format_recommendation(profile_after, rec),
+            format_recommendation(profile_after, rec, locale=i18n_mod.locale_of(profile_after)),
             reply_markup=confirm_calories_keyboard(),
         )
         return
@@ -916,7 +914,7 @@ def handle_onboarding_callback(conn, cb: dict) -> None:
             onboarding_step="awaiting_tz",
         )
         answer_callback_query(cb_id, "✅ Прийнято")
-        send_message(chat_id, _t("onboarding.ask_tz", profile), reply_markup=tz_keyboard(prefix="onb:tz"))
+        send_message(chat_id, _t("onboarding.ask_tz", profile), reply_markup=tz_keyboard(prefix="onb:tz", locale=i18n_mod.locale_of(profile)))
         return
 
     if data.startswith("onb:tz:"):
@@ -2361,7 +2359,7 @@ def handle_command(conn, message: dict, text: str, first_name: str | None, profi
         send_message(
             chat_id,
             _t("barcode.scan_intro", profile),
-            reply_markup=scanner_inline_keyboard(),
+            reply_markup=scanner_inline_keyboard(locale=i18n_mod.locale_of(profile)),
         )
         return
 
@@ -2521,7 +2519,7 @@ def handle_command(conn, message: dict, text: str, first_name: str | None, profi
         send_message(
             chat_id,
             _t("timezone.prompt", profile, current=cur),
-            reply_markup=tz_keyboard(prefix="tz:set"),
+            reply_markup=tz_keyboard(prefix="tz:set", locale=i18n_mod.locale_of(profile)),
         )
         return
 

@@ -6,6 +6,7 @@ from urllib.parse import urlsplit
 import httpx
 
 from lib.config import TELEGRAM_BOT_TOKEN, VERCEL_URL
+from lib.i18n import t as _i18n_t
 
 BASE_URL = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}"
 FILE_URL = f"https://api.telegram.org/file/bot{TELEGRAM_BOT_TOKEN}"
@@ -295,7 +296,7 @@ def menu_log_keyboard(dishes: list[dict]) -> dict:
     return {"inline_keyboard": rows}
 
 
-def scanner_inline_keyboard() -> dict:
+def scanner_inline_keyboard(locale: str = "en") -> dict:
     """F-8: launch buttons for the barcode scanner.
 
     Telegram requires the ``inline_keyboard`` (NOT reply ``keyboard``) form
@@ -309,9 +310,9 @@ def scanner_inline_keyboard() -> dict:
     """
     return {
         "inline_keyboard": [
-            [{"text": "📷 Відкрити сканер", "web_app": {"url": _scan_url()}}],
-            [{"text": "✏️ Ввести цифрами", "callback_data": "barcode:manual"}],
-            [{"text": "❌ Скасувати",       "callback_data": "barcode:cancel"}],
+            [{"text": _i18n_t("inline_button.open_scanner", locale=locale), "web_app": {"url": _scan_url()}}],
+            [{"text": _i18n_t("inline_button.scan_manual_entry", locale=locale), "callback_data": "barcode:manual"}],
+            [{"text": _i18n_t("inline_button.cancel", locale=locale),            "callback_data": "barcode:cancel"}],
         ]
     }
 
@@ -458,11 +459,11 @@ def water_goal_keyboard(back_action: str = "water:back") -> dict:
 
 # --- Onboarding keyboards ---
 
-def sex_keyboard() -> dict:
+def sex_keyboard(locale: str = "en") -> dict:
     return {
         "inline_keyboard": [[
-            {"text": "👨 Чоловіча", "callback_data": "onb:sex:male"},
-            {"text": "👩 Жіноча", "callback_data": "onb:sex:female"},
+            {"text": _i18n_t("sex_keyboard.male", locale=locale), "callback_data": "onb:sex:male"},
+            {"text": _i18n_t("sex_keyboard.female", locale=locale), "callback_data": "onb:sex:female"},
         ]]
     }
 
@@ -483,12 +484,12 @@ def gym_keyboard() -> dict:
     }
 
 
-def goal_keyboard() -> dict:
+def goal_keyboard(locale: str = "en") -> dict:
     return {
         "inline_keyboard": [
-            [{"text": "🔥 Схуднути", "callback_data": "onb:goal:lose"}],
-            [{"text": "⚖️ Підтримувати вагу", "callback_data": "onb:goal:maintain"}],
-            [{"text": "💪 Набрати м'язи", "callback_data": "onb:goal:gain"}],
+            [{"text": _i18n_t("goal_keyboard.lose", locale=locale), "callback_data": "onb:goal:lose"}],
+            [{"text": _i18n_t("goal_keyboard.maintain", locale=locale), "callback_data": "onb:goal:maintain"}],
+            [{"text": _i18n_t("goal_keyboard.gain", locale=locale), "callback_data": "onb:goal:gain"}],
         ]
     }
 
@@ -548,26 +549,26 @@ def health_menu_keyboard() -> dict:
     }
 
 
-def tz_keyboard(prefix: str = "tz:set") -> dict:
+def tz_keyboard(prefix: str = "tz:set", locale: str = "en") -> dict:
     """Six timezone presets + 'Other' (free-text). The same keyboard is used
     by onboarding (prefix=onb:tz) and by /timezone (prefix=tz:set).
     Keep this list in sync with ``lib.datehelpers.TZ_PRESETS``."""
     return {
         "inline_keyboard": [
             [
-                {"text": "🇺🇦 Київ",                "callback_data": f"{prefix}:Europe/Kyiv"},
-                {"text": "🇬🇧 Лондон",              "callback_data": f"{prefix}:Europe/London"},
+                {"text": _i18n_t("tz_keyboard.kyiv", locale=locale),          "callback_data": f"{prefix}:Europe/Kyiv"},
+                {"text": _i18n_t("tz_keyboard.london", locale=locale),        "callback_data": f"{prefix}:Europe/London"},
             ],
             [
-                {"text": "🇩🇪 Берлін / Варшава",     "callback_data": f"{prefix}:Europe/Berlin"},
-                {"text": "🇺🇸 Нью-Йорк",            "callback_data": f"{prefix}:America/New_York"},
+                {"text": _i18n_t("tz_keyboard.berlin_warsaw", locale=locale), "callback_data": f"{prefix}:Europe/Berlin"},
+                {"text": _i18n_t("tz_keyboard.new_york", locale=locale),      "callback_data": f"{prefix}:America/New_York"},
             ],
             [
-                {"text": "🇺🇸 Лос-Анджелес",        "callback_data": f"{prefix}:America/Los_Angeles"},
-                {"text": "🇦🇪 Дубай",                "callback_data": f"{prefix}:Asia/Dubai"},
+                {"text": _i18n_t("tz_keyboard.los_angeles", locale=locale),   "callback_data": f"{prefix}:America/Los_Angeles"},
+                {"text": _i18n_t("tz_keyboard.dubai", locale=locale),         "callback_data": f"{prefix}:Asia/Dubai"},
             ],
             [
-                {"text": "✏️ Інша зона (вкажу вручну)", "callback_data": f"{prefix}:custom"},
+                {"text": _i18n_t("tz_keyboard.other", locale=locale),         "callback_data": f"{prefix}:custom"},
             ],
         ]
     }
@@ -621,13 +622,13 @@ def profile_goal_keyboard() -> dict:
     }
 
 
-def dashboard_inline_keyboard() -> dict:
+def dashboard_inline_keyboard(locale: str = "en") -> dict:
     """Inline keyboard with a single web_app button — this launch mode DOES
     provide signed initData, unlike the KeyboardButton.web_app mode.
     """
     return {
         "inline_keyboard": [[
-            {"text": "📱 Відкрити Dashboard", "web_app": {"url": _dashboard_url()}}
+            {"text": _i18n_t("inline_button.open_dashboard", locale=locale), "web_app": {"url": _dashboard_url()}}
         ]]
     }
 

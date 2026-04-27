@@ -200,5 +200,37 @@
   "yesterday.carbs_line": "🍚 Carbs:    {cur}{g} / {target}{g}",
   "yesterday.fat_line":   "🧈 Fat:      {cur}{g} / {target}{g}",
   "yesterday.meals_header": "<b>Meals ({n}):</b>",
-  "yesterday.meal_row":   "• {meal_type}: {desc} ({cal} {kcal_unit})"
+  "yesterday.meal_row":   "• {meal_type}: {desc} ({cal} {kcal_unit})",
+
+  "prompts.photo_meal_type": "📸 Got it! Which meal is this?",
+  "prompts.text_meal_type":  "📝 Logged your description! Which meal is this?",
+  "prompts.analyzing":       "🔍 Analyzing the meal, just a moment…",
+  "prompts.recalc":          "🔄 Recalculating more carefully…",
+  "prompts.manual_input":    "✏️ Write what you ate (e.g. «chicken 200g, rice 150g, broccoli 100g»).\nOr send /cancel — I won't be offended. 😉",
+  "prompts.history_usage":   "Usage: /history_detail YYYY-MM-DD (e.g. /history_detail 2026-04-12)",
+
+  "errors.photo_download_failed": "Sorry, couldn't download the photo. Try again. 📷",
+  "errors.photo_analysis_failed": "Couldn't recognize the meal. Try a clearer photo — I'm not a cat, I can't see in the dark. 🐈‍⬛",
+  "errors.text_analysis_failed":  "Couldn't parse that. Try something simpler — e.g. «chicken 200g, rice 150g, broccoli 100g». 🙂",
+  "errors.pending_expired":       "⏰ More than 10 minutes passed, and I already forgot what was on the photo (my server memory is short). Send it again, please.",
+  "errors.unknown_command":       "Don't know that command. Check /help — it's all there. 🤓",
+  "errors.meal_not_found":        "Didn't find this meal. Maybe it was already deleted.",
+
+  "meals_mgmt.deleted":      "🗑 Deleted: <b>{dish}</b> ({cal} {kcal_unit}). Daily total updated.",
+  "meals_mgmt.edit_prompt":  "✏️ Write a new description (replacing «{dish}»).\nOr send /cancel to abort.",
+  "meals_mgmt.no_meals":     "Nothing logged today yet. Send a photo or text. 📸",
+  "meals_mgmt.cancelled":    "Cancelled. Send a photo or text when you're ready. 👌",
+
+  "ask.prompt":   "💬 What's your question? Reply here — I'll factor in your food history for today.",
+  "ask.thinking": "🧠 Thinking over the answer…",
+  "ask.error":    "Something went wrong with the response. Try again in a minute. 🤖",
+
+  "weight.checkin_prompt":   "⚖️ Good morning! New week — new weigh-in. Write your current weight (kg). Or /skip to skip this week.",
+  "weight.checkin_skipped":  "👌 Skipped. Until next Monday!",
+  "weight.input_prompt":     "⚖️ Write your new weight in kilograms (e.g. 82.5):",
+  "weight.invalid":          "Weight should be between 30 and 300 kg. Try again 🙂",
+  "weight.not_a_number":     "Hmm, that doesn't look like a number. Try: 82.5 🙂",
+
+  "goal.update_prompt":  "🎯 What's your goal now?",
+  "goal.updated":        "🎯 Goal updated: <b>{goal}</b>."
 }

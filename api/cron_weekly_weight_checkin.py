@@ -34,10 +34,10 @@ from lib.database import (
     get_weight_history,
     get_meals_in_range,
 )
-from lib.formatters import WEIGHT_CHECKIN_PROMPT
 from lib.telegram_helpers import send_message, send_photo
 from lib.log import setup_sentry, http_handler, error
 from lib import recap as recap_mod
+from lib.i18n import t as _i18n_t, locale_of as _i18n_locale_of
 
 setup_sentry("cron_weekly_weight_checkin")
 
@@ -82,7 +82,12 @@ def run_weekly_checkin() -> dict:
         for user_id in user_ids:
             try:
                 set_awaiting_input(conn, user_id, "weight")
-                resp = send_message(user_id, WEIGHT_CHECKIN_PROMPT)
+                # Per-user locale — fetch profile to pick the right language.
+                _profile_for_lang = get_profile(conn, user_id) or {}
+                resp = send_message(
+                    user_id,
+                    _i18n_t("weight.checkin_prompt", locale=_i18n_locale_of(_profile_for_lang)),
+                )
                 if resp.get("ok"):
                     mark_weekly_checkin_sent(conn, user_id)
                     sent += 1

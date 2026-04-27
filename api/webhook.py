@@ -139,28 +139,8 @@ from lib.formatters import (
     format_meals_list,
     format_profile,
     format_recommendation,
-    PHOTO_PROMPT_MEAL_TYPE,
-    TEXT_PROMPT_MEAL_TYPE,
-    ANALYZING_WAIT,
-    RECALC_WAIT,
-    PHOTO_DOWNLOAD_FAILED,
-    PHOTO_ANALYSIS_FAILED,
-    TEXT_ANALYSIS_FAILED,
-    PENDING_EXPIRED,
-    MANUAL_INPUT_PROMPT,
-    MEAL_DELETED,
-    MEAL_EDIT_PROMPT,
-    MEAL_NOT_FOUND,
-    MEAL_CANCELLED,
-    NO_MEALS_TO_MANAGE,
-    UNKNOWN_COMMAND,
-    # SUGGEST_THINKING / SUGGEST_FAILED migrated to lib/i18n (F-2b Phase 3 — suggest.*)
-    HISTORY_USAGE,
-    ASK_PROMPT,
-    ASK_THINKING,
-    ASK_ERROR,
-    # Onboarding strings migrated to lib/i18n dict (F-2b Phase 2) — call
-    # sites use i18n_mod.t("onboarding.foo", locale=locale_of(profile)).
+    # Bulk error/prompt/weight constants migrated to lib/i18n (F-2b Chunk 3).
+    # Use _t("section.key", profile) at call sites.
     BTN_ASK,
     BTN_TODAY,
     BTN_YESTERDAY,
@@ -186,12 +166,6 @@ from lib.formatters import (
     WATER_UNDO_EMPTY,
     WATER_GOAL_PROMPT,
     WATER_GOAL_SAVED,
-    WEIGHT_CHECKIN_SKIPPED,
-    WEIGHT_INPUT_PROMPT,
-    WEIGHT_INVALID,
-    WEIGHT_NOT_A_NUMBER,
-    GOAL_UPDATE_PROMPT,
-    GOAL_UPDATED,
     # TARGET_WEIGHT_* migrated to lib/i18n keys (F-2b Phase 3 — target_weight.*)
     # WEEKLY_DELTA_* + GOALS_* migrated to lib/i18n (F-2b Phase 3 — goals.*)
     format_goals,
@@ -582,15 +556,21 @@ def process_update(update: dict) -> None:
                 if pending and pending["awaiting_manual"]:
                     pop_pending_analysis(conn, user_id)
                     pop_pending_entry(conn, user_id)
-                    send_message(chat_id, MEAL_CANCELLED, reply_markup=main_menu_keyboard())
+                    send_message(chat_id, _t("meals_mgmt.cancelled", profile), reply_markup=main_menu_keyboard())
                     return
             handle_command(conn, message, text, first_name, profile)
             return
 
         reply_to = message.get("reply_to_message") or {}
+        # F-2b: ASK_PROMPT now has UA + EN versions; compare against both so a
+        # reply matches regardless of which locale the user was on when sent.
+        _ask_prompts = (
+            i18n_mod.t("ask.prompt", "uk"),
+            i18n_mod.t("ask.prompt", "en"),
+        )
         if (
             reply_to.get("from", {}).get("is_bot")
-            and reply_to.get("text") == ASK_PROMPT
+            and reply_to.get("text") in _ask_prompts
             and user_id
         ):
             handle_ask(conn, user_id, chat_id, text, profile)
@@ -742,7 +722,7 @@ def handle_onboarding_text(conn, chat_id: int, user_id: int, first_name: str | N
     elif step == "awaiting_target_weight":
         tw = _parse_float(text)
         if tw is None:
-            send_message(chat_id, WEIGHT_NOT_A_NUMBER)
+            send_message(chat_id, _t("weight.not_a_number", profile))
             return
         if not (30 <= tw <= 300):
             send_message(chat_id, _t("target_weight.invalid", profile))
@@ -1153,14 +1133,14 @@ def handle_photo(conn, message: dict) -> None:
         send_message(chat_id, PHOTO_TOO_LARGE)
         return
     save_pending_photo(conn, user_id, file_id)
-    send_message(chat_id, PHOTO_PROMPT_MEAL_TYPE, reply_markup=meal_type_keyboard())
+    send_message(chat_id, _t("prompts.photo_meal_type", profile), reply_markup=meal_type_keyboard())
 
 
 def handle_text_entry(conn, message: dict, text: str) -> None:
     chat_id = message["chat"]["id"]
     user_id = message["from"]["id"]
     save_pending_text(conn, user_id, text)
-    send_message(chat_id, TEXT_PROMPT_MEAL_TYPE, reply_markup=meal_type_keyboard())
+    send_message(chat_id, _t("prompts.text_meal_type", profile), reply_markup=meal_type_keyboard())
 
 
 # ---------- Voice entry (Whisper) ----------
@@ -1214,9 +1194,13 @@ def handle_voice(conn, message: dict) -> None:
     # If this voice message is a reply to the /ask prompt, treat transcript as a
     # chat question and route to handle_ask instead of the meal-logging flow.
     reply_to = message.get("reply_to_message") or {}
+    _ask_prompts = (
+        i18n_mod.t("ask.prompt", "uk"),
+        i18n_mod.t("ask.prompt", "en"),
+    )
     if (
         reply_to.get("from", {}).get("is_bot")
-        and reply_to.get("text") == ASK_PROMPT
+        and reply_to.get("text") in _ask_prompts
     ):
         profile = get_profile(conn, user_id)
         handle_ask(conn, user_id, chat_id, transcript, profile)
@@ -1224,7 +1208,7 @@ def handle_voice(conn, message: dict) -> None:
 
     # Otherwise reuse the existing text-entry flow: saves as pending and asks meal type.
     save_pending_text(conn, user_id, transcript)
-    send_message(chat_id, TEXT_PROMPT_MEAL_TYPE, reply_markup=meal_type_keyboard())
+    send_message(chat_id, _t("prompts.text_meal_type", profile), reply_markup=meal_type_keyboard())
 
 
 # ---------- Callback router ----------
@@ -1297,7 +1281,7 @@ def handle_meal_type_callback(conn, cb: dict, profile: dict) -> None:
     if meal_type == "cancel":
         pop_pending_entry(conn, user_id)  # discard photo/text
         answer_callback_query(cb_id, "Скасовано")
-        send_message(chat_id, MEAL_CANCELLED, reply_markup=main_menu_keyboard())
+        send_message(chat_id, _t("meals_mgmt.cancelled", profile), reply_markup=main_menu_keyboard())
         return
 
     meal_ua_map = {"breakfast": "сніданок", "lunch": "обід", "dinner": "вечерю", "snack": "перекус"}
@@ -1305,14 +1289,14 @@ def handle_meal_type_callback(conn, cb: dict, profile: dict) -> None:
 
     entry = pop_pending_entry(conn, user_id)
     if entry is None:
-        send_message(chat_id, PENDING_EXPIRED)
+        send_message(chat_id, _t("errors.pending_expired", profile))
         return
     file_id, text_description = entry
 
     if not _enforce_quota(conn, chat_id, user_id, "meal_analysis"):
         return
 
-    send_message(chat_id, ANALYZING_WAIT)
+    send_message(chat_id, _t("prompts.analyzing", profile))
 
     health_ctx = addendum_for_profile(get_health_profile(conn, user_id))
     personal_ctx = ""
@@ -1327,7 +1311,7 @@ def handle_meal_type_callback(conn, cb: dict, profile: dict) -> None:
                 image_bytes = get_file_bytes(file_id)
             except Exception as e:
                 print("getFile error:", e, flush=True)
-                send_message(chat_id, PHOTO_DOWNLOAD_FAILED)
+                send_message(chat_id, _t("errors.photo_download_failed", profile))
                 return
             analysis, raw = analyze_photo(
                 image_bytes,
@@ -1341,11 +1325,11 @@ def handle_meal_type_callback(conn, cb: dict, profile: dict) -> None:
                 personalization_addendum=personal_ctx,
             )
         else:
-            send_message(chat_id, PENDING_EXPIRED)
+            send_message(chat_id, _t("errors.pending_expired", profile))
             return
     except Exception as e:
         print("analysis error:", e, flush=True)
-        send_message(chat_id, TEXT_ANALYSIS_FAILED if text_description else PHOTO_ANALYSIS_FAILED)
+        send_message(chat_id, _t("errors.text_analysis_failed", profile) if text_description else _t("errors.photo_analysis_failed", profile))
         return
 
     _send_analysis_preview(
@@ -1407,7 +1391,7 @@ def handle_moderation_callback(conn, cb: dict, profile: dict) -> None:
         answer_callback_query(cb_id, "✅ Записую!")
         pending = pop_pending_analysis(conn, user_id)
         if not pending:
-            send_message(chat_id, PENDING_EXPIRED)
+            send_message(chat_id, _t("errors.pending_expired", profile))
             return
         analysis = pending["analysis"]
         meal_id = save_meal(conn, user_id, pending["meal_type"], analysis, pending["photo_file_id"] or "", pending["raw_response"])
@@ -1434,11 +1418,11 @@ def handle_moderation_callback(conn, cb: dict, profile: dict) -> None:
         answer_callback_query(cb_id, "🔄 Перераховую…")
         pending = get_pending_analysis(conn, user_id)
         if not pending:
-            send_message(chat_id, PENDING_EXPIRED)
+            send_message(chat_id, _t("errors.pending_expired", profile))
             return
         if not _enforce_quota(conn, chat_id, user_id, "meal_analysis"):
             return
-        send_message(chat_id, RECALC_WAIT)
+        send_message(chat_id, _t("prompts.recalc", profile))
 
         health_ctx = addendum_for_profile(get_health_profile(conn, user_id))
         personal_ctx = ""
@@ -1463,11 +1447,11 @@ def handle_moderation_callback(conn, cb: dict, profile: dict) -> None:
                     personalization_addendum=personal_ctx,
                 )
             else:
-                send_message(chat_id, PENDING_EXPIRED)
+                send_message(chat_id, _t("errors.pending_expired", profile))
                 return
         except Exception as e:
             print("recalc error:", e, flush=True)
-            send_message(chat_id, PHOTO_ANALYSIS_FAILED)
+            send_message(chat_id, _t("errors.photo_analysis_failed", profile))
             return
 
         # F-7: recalc that produced a *meaningfully different* analysis IS a
@@ -1495,16 +1479,16 @@ def handle_moderation_callback(conn, cb: dict, profile: dict) -> None:
         answer_callback_query(cb_id, "✏️ Чекаю на текст")
         pending = get_pending_analysis(conn, user_id)
         if not pending:
-            send_message(chat_id, PENDING_EXPIRED)
+            send_message(chat_id, _t("errors.pending_expired", profile))
             return
         set_awaiting_manual(conn, user_id)
-        send_message(chat_id, MANUAL_INPUT_PROMPT, reply_markup=cancel_only_keyboard())
+        send_message(chat_id, _t("prompts.manual_input", profile), reply_markup=cancel_only_keyboard())
 
     elif action == "cancel":
         answer_callback_query(cb_id, "Скасовано")
         pop_pending_analysis(conn, user_id)
         pop_pending_entry(conn, user_id)
-        send_message(chat_id, MEAL_CANCELLED, reply_markup=main_menu_keyboard())
+        send_message(chat_id, _t("meals_mgmt.cancelled", profile), reply_markup=main_menu_keyboard())
 
 
 def handle_manual_text_input(conn, message: dict, text: str, pending: dict, profile: dict) -> None:
@@ -1514,7 +1498,7 @@ def handle_manual_text_input(conn, message: dict, text: str, pending: dict, prof
     if not _enforce_quota(conn, chat_id, user_id, "meal_analysis"):
         return
 
-    send_message(chat_id, ANALYZING_WAIT)
+    send_message(chat_id, _t("prompts.analyzing", profile))
 
     health_ctx = addendum_for_profile(get_health_profile(conn, user_id))
     personal_ctx = ""
@@ -1530,7 +1514,7 @@ def handle_manual_text_input(conn, message: dict, text: str, pending: dict, prof
         )
     except Exception as e:
         print("manual text analysis error:", e, flush=True)
-        send_message(chat_id, TEXT_ANALYSIS_FAILED)
+        send_message(chat_id, _t("errors.text_analysis_failed", profile))
         return
 
     # F-7: a manual text override after a photo IS a correction. Record it
@@ -1578,7 +1562,7 @@ def handle_alternates_pick(conn, cb: dict, profile: dict) -> None:
     pending = get_pending_analysis(conn, user_id)
     if not pending:
         answer_callback_query(cb_id)
-        send_message(chat_id, PENDING_EXPIRED)
+        send_message(chat_id, _t("errors.pending_expired", profile))
         return
 
     candidates = pending.get("candidates") or []
@@ -1691,7 +1675,7 @@ def handle_barcode_callback(conn, cb: dict, profile: dict) -> None:
         answer_callback_query(cb_id, "Скасовано")
         pop_pending_analysis(conn, user_id)
         set_awaiting_input(conn, user_id, None)
-        send_message(chat_id, MEAL_CANCELLED, reply_markup=main_menu_keyboard())
+        send_message(chat_id, _t("meals_mgmt.cancelled", profile), reply_markup=main_menu_keyboard())
         return
 
     # Manual EAN entry — fallback for devices where the Mini App camera
@@ -1814,7 +1798,7 @@ def handle_menu_callback(conn, cb: dict, profile: dict) -> None:
 
     if data == "menu:cancel":
         answer_callback_query(cb_id, "Закрив")
-        send_message(chat_id, MEAL_CANCELLED, reply_markup=main_menu_keyboard())
+        send_message(chat_id, _t("meals_mgmt.cancelled", profile), reply_markup=main_menu_keyboard())
         return
 
     if not data.startswith("menu:log:"):
@@ -1830,7 +1814,7 @@ def handle_menu_callback(conn, cb: dict, profile: dict) -> None:
     dishes = get_menu_ocr_result(conn, user_id) or []
     if not dishes or idx < 0 or idx >= len(dishes):
         answer_callback_query(cb_id)
-        send_message(chat_id, MENU_PENDING_EXPIRED)
+        send_message(chat_id, MENU__t("errors.pending_expired", profile))
         return
 
     chosen = dishes[idx]
@@ -1962,7 +1946,7 @@ def handle_plan_pantry_input(
     cleaned = text.strip()
     if cleaned.lower() in ("/skip", "skip", "/cancel", "cancel"):
         set_awaiting_input(conn, user_id, None)
-        send_message(chat_id, MEAL_CANCELLED, reply_markup=main_menu_keyboard())
+        send_message(chat_id, _t("meals_mgmt.cancelled", profile), reply_markup=main_menu_keyboard())
         return
     if len(cleaned) > 200:
         send_message(chat_id, _t("plan.pantry_too_long", profile))
@@ -1989,7 +1973,7 @@ def handle_plan_callback(conn, cb: dict, profile: dict) -> None:
     if data == "plan:cancel":
         answer_callback_query(cb_id, "Закрив")
         set_awaiting_input(conn, user_id, None)
-        send_message(chat_id, MEAL_CANCELLED, reply_markup=main_menu_keyboard())
+        send_message(chat_id, _t("meals_mgmt.cancelled", profile), reply_markup=main_menu_keyboard())
         return
 
     if data == "plan:nopantry":
@@ -2100,7 +2084,7 @@ def handle_fridge_input(
     cleaned = text.strip()
     if cleaned.lower() in ("/skip", "skip", "/cancel", "cancel"):
         set_awaiting_input(conn, user_id, None)
-        send_message(chat_id, MEAL_CANCELLED, reply_markup=main_menu_keyboard())
+        send_message(chat_id, _t("meals_mgmt.cancelled", profile), reply_markup=main_menu_keyboard())
         return
     if len(cleaned) > 300:
         send_message(chat_id, _t("fridge.too_long", profile))
@@ -2177,7 +2161,7 @@ def handle_barcode_manual_input(
     cleaned = text.strip().replace(" ", "").replace("-", "")
     if cleaned.lower() in ("/skip", "skip", "/cancel", "cancel"):
         set_awaiting_input(conn, user_id, None)
-        send_message(chat_id, MEAL_CANCELLED, reply_markup=main_menu_keyboard())
+        send_message(chat_id, _t("meals_mgmt.cancelled", profile), reply_markup=main_menu_keyboard())
         return
 
     if not off_mod.looks_like_ean(cleaned):
@@ -2255,7 +2239,7 @@ def handle_barcode_grams_input(
     if cleaned.lower() in ("/skip", "skip", "/cancel", "cancel"):
         set_awaiting_input(conn, user_id, None)
         pop_pending_analysis(conn, user_id)
-        send_message(chat_id, MEAL_CANCELLED, reply_markup=main_menu_keyboard())
+        send_message(chat_id, _t("meals_mgmt.cancelled", profile), reply_markup=main_menu_keyboard())
         return
 
     grams = _parse_float(cleaned)
@@ -2286,14 +2270,16 @@ def handle_meal_manage_callback(conn, cb: dict) -> None:
         answer_callback_query(cb_id, "🗑 Видаляю…")
         deleted = delete_meal(conn, meal_id, user_id)
         if not deleted:
-            send_message(chat_id, MEAL_NOT_FOUND)
+            send_message(chat_id, _t("errors.meal_not_found", profile))
             return
         recalc_daily_log(conn, user_id, deleted["date"])
         send_message(
             chat_id,
-            MEAL_DELETED.format(
+            _t(
+                "meals_mgmt.deleted", profile,
                 dish=_html.escape(deleted["description"][:40], quote=False),
                 cal=round(deleted["calories"]),
+                kcal_unit=i18n_mod.t("macro.calories_short", locale=i18n_mod.locale_of(profile)),
             ),
         )
 
@@ -2302,14 +2288,15 @@ def handle_meal_manage_callback(conn, cb: dict) -> None:
         answer_callback_query(cb_id, "✏️ Готуюсь до заміни…")
         deleted = delete_meal(conn, meal_id, user_id)
         if not deleted:
-            send_message(chat_id, MEAL_NOT_FOUND)
+            send_message(chat_id, _t("errors.meal_not_found", profile))
             return
         recalc_daily_log(conn, user_id, deleted["date"])
         save_pending_analysis(conn, user_id, deleted["meal_type"], {}, None, None, "")
         set_awaiting_manual(conn, user_id, meal_type=deleted["meal_type"])
         send_message(
             chat_id,
-            MEAL_EDIT_PROMPT.format(
+            _t(
+                "meals_mgmt.edit_prompt", profile,
                 dish=_html.escape(deleted["description"][:40], quote=False),
             ),
             reply_markup=cancel_only_keyboard(),
@@ -2455,7 +2442,7 @@ def handle_command(conn, message: dict, text: str, first_name: str | None, profi
         log = get_today_log(conn, user_id)
         meals = get_meals_for_day(conn, user_id, log["date"])
         if not meals:
-            send_message(chat_id, NO_MEALS_TO_MANAGE)
+            send_message(chat_id, _t("meals_mgmt.no_meals", profile))
             return
         macros = macro_gram_targets_from_profile(
             (profile or {}).get("weight_kg"),
@@ -2475,7 +2462,7 @@ def handle_command(conn, message: dict, text: str, first_name: str | None, profi
 
     if cmd == "/history_detail":
         if not args:
-            send_message(chat_id, HISTORY_USAGE)
+            send_message(chat_id, _t("prompts.history_usage", profile))
             return
         date = args[0]
         meals = get_meals_for_day(conn, user_id, date)
@@ -2493,7 +2480,7 @@ def handle_command(conn, message: dict, text: str, first_name: str | None, profi
         else:
             send_message(
                 chat_id,
-                ASK_PROMPT,
+                _t("ask.prompt", profile),
                 reply_markup={"force_reply": True, "selective": True},
             )
         return
@@ -2558,7 +2545,7 @@ def handle_command(conn, message: dict, text: str, first_name: str | None, profi
         send_message(chat_id, format_water(total, target), reply_markup=water_keyboard())
         return
 
-    send_message(chat_id, UNKNOWN_COMMAND)
+    send_message(chat_id, _t("errors.unknown_command", profile))
 
 
 # ---------- Favorites / Recent / Undo callbacks ----------
@@ -2783,7 +2770,7 @@ def handle_water_callback(conn, cb: dict) -> None:
 def handle_ask(conn, user_id: int, chat_id: int, question: str, profile: dict) -> None:
     if not _enforce_quota(conn, chat_id, user_id, "ask"):
         return
-    send_message(chat_id, ASK_THINKING)
+    send_message(chat_id, _t("ask.thinking", profile))
     try:
         today_log = get_today_log(conn, user_id)
         today_meals = get_meals_for_day(conn, user_id, today_log["date"])
@@ -2791,7 +2778,7 @@ def handle_ask(conn, user_id: int, chat_id: int, question: str, profile: dict) -
         answer = ask_chat(question, history, today_log, today_meals, profile)
     except Exception as e:
         print("ask_chat error:", traceback.format_exc(), flush=True)
-        send_message(chat_id, ASK_ERROR, reply_markup=main_menu_keyboard())
+        send_message(chat_id, _t("ask.error", profile), reply_markup=main_menu_keyboard())
         return
 
     append_chat_message(conn, user_id, "user", question)
@@ -2879,15 +2866,15 @@ def handle_weight_input(
     cleaned = text.strip()
     if cleaned.lower() in ("/skip", "skip"):
         set_awaiting_input(conn, user_id, None)
-        send_message(chat_id, WEIGHT_CHECKIN_SKIPPED, reply_markup=main_menu_keyboard())
+        send_message(chat_id, _t("weight.checkin_skipped", profile), reply_markup=main_menu_keyboard())
         return
 
     new_weight = _parse_float(cleaned)
     if new_weight is None:
-        send_message(chat_id, WEIGHT_NOT_A_NUMBER)
+        send_message(chat_id, _t("weight.not_a_number", profile))
         return
     if not (30 <= new_weight <= 300):
-        send_message(chat_id, WEIGHT_INVALID)
+        send_message(chat_id, _t("weight.invalid", profile))
         return
 
     old_weight = profile.get("weight_kg")
@@ -2981,7 +2968,7 @@ def handle_target_weight_input(
 
     tw = _parse_float(cleaned)
     if tw is None:
-        send_message(chat_id, WEIGHT_NOT_A_NUMBER)
+        send_message(chat_id, _t("weight.not_a_number", profile))
         return
     if not (30 <= tw <= 300):
         send_message(chat_id, _t("target_weight.invalid", profile))
@@ -3075,13 +3062,13 @@ def handle_profile_edit_callback(conn, cb: dict, profile: dict) -> None:
     if data == "prof:weight":
         answer_callback_query(cb_id, "⚖️ Чекаю на вагу")
         set_awaiting_input(conn, user_id, "weight")
-        send_message(chat_id, WEIGHT_INPUT_PROMPT)
+        send_message(chat_id, _t("weight.input_prompt", profile))
         return
 
     # prof:goal → show the goal picker.
     if data == "prof:goal":
         answer_callback_query(cb_id)
-        send_message(chat_id, GOAL_UPDATE_PROMPT, reply_markup=profile_goal_keyboard())
+        send_message(chat_id, _t("goal.update_prompt", profile), reply_markup=profile_goal_keyboard())
         return
 
     # prof:goal:<lose|maintain|gain> → apply the goal change.
@@ -3105,7 +3092,7 @@ def handle_profile_edit_callback(conn, cb: dict, profile: dict) -> None:
         macros = macro_gram_targets_from_profile(float(weight), new_goal)
         send_message(
             chat_id,
-            f"{GOAL_UPDATED.format(goal=_GOAL_LABEL_UA.get(new_goal, new_goal))}\n"
+            f"{_t('goal.updated', profile, goal=_GOAL_LABEL_UA.get(new_goal, new_goal))}\n"
             f"🎯 Нова норма калорій: <b>{new_cal} ккал/день</b>\n"
             f"🥩 Білки {macros['protein']}г · 🍚 Вуглеводи {macros['carbs']}г · 🧈 Жири {macros['fat']}г",
             reply_markup=main_menu_keyboard(),

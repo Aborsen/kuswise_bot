@@ -980,6 +980,7 @@ def handle_timezone_callback(conn, cb: dict, profile: dict) -> None:
 
 def handle_timezone_input(conn, chat_id: int, user_id: int, text: str) -> None:
     """Free-text IANA timezone input from /timezone → ✏️ Інша зона."""
+    profile = get_profile(conn, user_id)
     cleaned = text.strip()
     if cleaned.lower() in ("/cancel", "cancel"):
         set_awaiting_input(conn, user_id, None)
@@ -996,6 +997,7 @@ def handle_timezone_input(conn, chat_id: int, user_id: int, text: str) -> None:
 # ---------- Health profile (F-1) ----------
 
 def _send_health_menu(conn, chat_id: int, user_id: int) -> None:
+    profile = get_profile(conn, user_id)
     h = get_health_profile(conn, user_id) or {"allergens": [], "conditions": []}
     send_message(
         chat_id,
@@ -1067,6 +1069,7 @@ def handle_health_input(conn, chat_id: int, user_id: int, text: str, kind: str) 
     ``kind`` is "health_allergens" or "health_conditions" — picked up from
     the user's ``awaiting_input_type``.
     """
+    profile = get_profile(conn, user_id)
     cleaned = text.strip()
     if cleaned.lower() in ("/cancel", "cancel"):
         set_awaiting_input(conn, user_id, None)
@@ -1121,6 +1124,7 @@ MAX_PHOTO_BYTES = 5 * 1024 * 1024
 def handle_photo(conn, message: dict) -> None:
     chat_id = message["chat"]["id"]
     user_id = message["from"]["id"]
+    profile = get_profile(conn, user_id)
     photos = message["photo"]
     largest = photos[-1] if photos else {}
     file_id = largest.get("file_id")
@@ -1137,6 +1141,7 @@ def handle_photo(conn, message: dict) -> None:
 def handle_text_entry(conn, message: dict, text: str) -> None:
     chat_id = message["chat"]["id"]
     user_id = message["from"]["id"]
+    profile = get_profile(conn, user_id)
     save_pending_text(conn, user_id, text)
     send_message(chat_id, _t("prompts.text_meal_type", profile), reply_markup=meal_type_keyboard())
 
@@ -1352,6 +1357,7 @@ def _send_analysis_preview(
     confirm". Persists pending state in either branch so the moderation /
     pick callbacks can find it.
     """
+    profile = get_profile(conn, user_id)
     candidates = normalize_candidates(analysis)
     if is_ambiguous(candidates):
         save_pending_analysis(
@@ -2263,6 +2269,7 @@ def handle_meal_manage_callback(conn, cb: dict) -> None:
     user_id = cb["from"]["id"]
     message = cb.get("message", {})
     chat_id = message.get("chat", {}).get("id", user_id)
+    profile = get_profile(conn, user_id)
 
     if data.startswith("meal_del:"):
         meal_id = int(data.split(":", 1)[1])

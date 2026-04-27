@@ -80,5 +80,62 @@
   "aliases.empty":   "Nothing logged yet. The bot learns from accepted meals — next time you log «chicken breast», it'll remember your usual portion.\n\n<i>Helps guess grams more accurately after ~5 repeats of the same dish.</i>",
   "aliases.intro":   "The bot uses these usual portions to estimate photos more accurately.",
   "aliases.row":     "• <b>{name}</b> — {portion}{kcal} kcal{samples}",
-  "aliases.more":    "<i>…and {n} more</i>"
+  "aliases.more":    "<i>…and {n} more</i>",
+
+  "timezone.prompt":           "🌐 <b>Timezone</b>\nCurrent: <b>{current}</b>\n\nPick a new zone from the list, or «Other» to type one manually.",
+  "timezone.not_onboarded":    "First go through /start to set up your profile ☺️",
+  "timezone.saved":            "✅ Done. Timezone: <b>{tz}</b>",
+  "timezone.custom_prompt":    "Enter a zone name in IANA format (<code>Region/City</code>), e.g. <code>Asia/Tokyo</code>. /cancel to abort.",
+  "timezone.cancelled":        "Cancelled. Timezone unchanged.",
+
+  "health.header": "⚕️ <b>Health</b>\n\n🥜 Allergens: <b>{allergens}</b>\n🩺 Conditions: <b>{conditions}</b>\n\nThis influences meal-analysis warnings (allergen_flags / crohn_flags). Use the buttons below to edit.",
+  "health.not_onboarded": "First go through /start ☺️",
+  "health.allergens_prompt": "🥜 <b>Allergens</b>\n\nList comma-separated. I recognize:\n<i>peanut, tree_nut, dairy, egg, soy, gluten, fish, shellfish, sesame, mustard, sulphites, celery, lupin, mollusks</i>\n\nWrite <code>none</code> to clear, /cancel to abort.",
+  "health.conditions_prompt": "🩺 <b>Chronic conditions</b>\n\nList comma-separated. I recognize:\n<i>crohns, ibs, celiac, diabetes_t1, diabetes_t2, hypertension, pcos, kidney, thyroid, gestational</i>\n\nWrite <code>none</code> to clear, /cancel to abort.",
+  "health.saved": "✅ Saved: <b>{saved}</b>",
+  "health.saved_with_hints": "✅ Saved: <b>{saved}</b>\nDidn't recognize: <i>{unknown}</i> — try the canonical list.",
+  "health.cleared": "🧹 Cleared.",
+  "health.cancelled": "Cancelled.",
+  "health.invalid_all": "Didn't recognize any value. Try again or /cancel.",
+
+  "barcode.scan_intro": "📷 <b>Barcode scanner</b>\nTap «Open scanner» to launch the camera inside Telegram. Aim at a barcode — I'll find the product on Open Food Facts (3M+ items).\n\n<i>Camera not opening? Tap «Type digits» and just type the digits below the barcode (8-13 digits).</i>",
+  "barcode.found_header": "✓ Found: <b>{name}</b>\nBrand: {brand}\nPer 100g: <b>{kcal} kcal</b> · P{p} F{f} C{c}\n\nHow many grams?",
+  "barcode.not_found": "🤷 Didn't find barcode <code>{ean}</code> in the database.\n\nTry typing the product (e.g. «plain yogurt 150g»), or just photograph it — I'll analyze visually.",
+  "barcode.lookup_failed": "❌ Couldn't reach the product database. Try again or type the product manually.",
+  "barcode.grams_prompt": "✏️ <b>How many grams?</b>\nWrite a number (e.g. <code>180</code>):",
+  "barcode.grams_invalid": "Amount should be a number between 1 and 5000 g. Try again 🙂",
+  "barcode.pending_expired": "Scanned item is no longer active. Scan again via 🔢 Scanner.",
+  "barcode.manual_prompt": "✏️ <b>Type the barcode digits</b>\nDigits below the barcode, no spaces — e.g. <code>5449000000996</code>. 8-13 digits. /cancel to abort.",
+  "barcode.manual_invalid": "Barcode should be 8-13 digits, no letters. Try again 🙂",
+
+  "menu.prompt_intro": "📋 <b>Menu scanner</b>\nPhotograph a café or restaurant menu — I'll extract dishes with calorie estimates. A «Log» button next to each dish adds it to your day.\n\n<i>Send a photo now. Or /cancel.</i>",
+  "menu.no_dishes": "🤷 Couldn't recognize any dish on this photo. Try a clearer shot, or type the dish.",
+  "menu.ocr_failed": "❌ Couldn't process the photo. Try again.",
+  "menu.results_header": "📋 <b>Found {n} dish(es):</b>",
+  "menu.pending_expired": "Menu is no longer active. Scan again via /menu.",
+  "menu.processing": "🔎 Reading menu… this can take 5-10 seconds.",
+
+  "plan.intro": "🗓 <b>3-day plan</b>\nI'll build a plan around your calories + health profile. If you want, write what you have at home (e.g. <code>chicken, rice, broccoli, eggs</code>) — I'll factor it in. Or just tap «Without list».\n\n<i>/cancel to abort.</i>",
+  "plan.generating": "🍳 Building your plan… takes 10-20 seconds.",
+  "plan.failed": "❌ Couldn't generate the plan. Try again in a minute.",
+  "plan.pantry_too_long": "List is too long — keep it under 200 characters.",
+  "plan.header_notes": "📝 <i>{notes}</i>\n\n",
+  "plan.day_header": "━━━━━━━━━━━━━━━━━━━━━\n📅 <b>{label}</b>",
+
+  "fridge.prompt": "🛒 <b>What's in your fridge?</b>\nList comma-separated — e.g. <code>chicken, rice, broccoli, eggs, tomatoes</code>. I'll suggest a recipe using only those.\n\n<i>/cancel to abort.</i>",
+  "fridge.too_long": "List is too long — keep it under 300 characters.",
+  "fridge.variation_hint": "Suggest a DIFFERENT recipe than the previous one — different protein (if it was chicken — try fish/eggs/tofu), different cooking method, different spices.",
+
+  "suggest.thinking": "🧠 Thinking up an idea that fits your day…",
+  "suggest.failed": "Idea got stuck in the model. Try in a minute. 🤖💤",
+
+  "target_weight.ask_lose": "🎯 <b>What weight do you want to lose down to?</b>\nWrite kilograms (e.g. 75):",
+  "target_weight.ask_gain": "🎯 <b>What weight do you want to gain up to?</b>\nWrite kilograms (e.g. 80):",
+  "target_weight.invalid": "Target weight should be 30 to 300 kg. Try again 🙂",
+  "target_weight.lose_mismatch": "Goal is «lose» but target weight ≥ current ({current} kg). Write a smaller number or change the goal via /profile.",
+  "target_weight.gain_mismatch": "Goal is «gain» but target weight ≤ current ({current} kg). Write a larger number or change the goal via /profile.",
+  "target_weight.saved": "🎯 Target weight: <b>{target} kg</b>.",
+  "target_weight.cleared": "🎯 «Maintain weight» doesn't need a target — cleared.",
+
+  "common.cancelled": "👌 Cancelled."
 }

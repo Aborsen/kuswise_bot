@@ -46,11 +46,8 @@ from lib.initdata import verify_init_data
 from lib.log import setup_sentry, http_handler, error, info
 from lib.off import lookup_product
 from lib.telegram_helpers import send_message
-from lib.formatters import (
-    BARCODE_NOT_FOUND,
-    BARCODE_LOOKUP_FAILED,
-    BARCODE_FOUND_HEADER,
-)
+from lib.i18n import t as _i18n_t, locale_of as _i18n_locale_of
+# BARCODE_* migrated to lib/i18n keys (F-2b Phase 3) — t("barcode.foo", locale=...)
 
 
 setup_sentry("barcode")
@@ -168,13 +165,13 @@ class handler(BaseHTTPRequestHandler):
                 product = lookup_product(ean)
             except Exception as ox:
                 error("off_lookup_failed", exc=ox, ean=ean)
-                send_message(chat_id, BARCODE_LOOKUP_FAILED)
+                send_message(chat_id, _i18n_t("barcode.lookup_failed", locale=_i18n_locale_of(profile)))
                 self._respond(502, _RESPONSE_ERROR)
                 return
 
             if product is None:
                 info("barcode_not_found", ean=ean, user_id=user_id)
-                send_message(chat_id, BARCODE_NOT_FOUND.format(ean=ean))
+                send_message(chat_id, _i18n_t("barcode.not_found", locale=_i18n_locale_of(profile), ean=ean))
                 self._respond(404, _RESPONSE_404)
                 return
 
@@ -207,7 +204,9 @@ class handler(BaseHTTPRequestHandler):
             # Send the portion-picker message.
             send_message(
                 chat_id,
-                BARCODE_FOUND_HEADER.format(
+                _i18n_t(
+                    "barcode.found_header",
+                    locale=_i18n_locale_of(profile),
                     name=product["name"],
                     brand=product["brand"] or "—",
                     kcal=int(round(product["per_100g"]["calories"])),

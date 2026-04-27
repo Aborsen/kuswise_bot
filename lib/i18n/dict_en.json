@@ -137,5 +137,43 @@
   "target_weight.saved": "🎯 Target weight: <b>{target} kg</b>.",
   "target_weight.cleared": "🎯 «Maintain weight» doesn't need a target — cleared.",
 
-  "common.cancelled": "👌 Cancelled."
+  "common.cancelled": "👌 Cancelled.",
+
+  "macro.calories_short": "kcal",
+  "macro.gram_short":     "g",
+  "macro.protein_short":  "P",
+  "macro.carbs_short":    "C",
+  "macro.fat_short":      "F",
+  "macro.fiber_short":    "Fb",
+  "macro.calories_long":  "Calories",
+  "macro.protein_long":   "Protein",
+  "macro.carbs_long":     "Carbs",
+  "macro.fat_long":       "Fat",
+  "macro.fiber_long":     "Fiber",
+
+  "meal_type.breakfast": "Breakfast",
+  "meal_type.lunch":     "Lunch",
+  "meal_type.dinner":    "Dinner",
+  "meal_type.snack":     "Snack",
+  "meal_type.fallback":  "Meal",
+
+  "gi.low":    "Low GI",
+  "gi.medium": "Medium GI",
+  "gi.high":   "High GI",
+
+  "meal.default_name":          "Meal",
+  "meal.preview_header":        "🔍 <b>Preview: {dish}</b>",
+  "meal.preview_meal_line":     "🕐 {meal}",
+  "meal.preview_confirm_prompt": "👇 <b>Confirm or edit:</b>",
+  "meal.logged_header":         "✅ <b>Logged: {dish}</b>",
+  "meal.logged_date_line":      "🕐 {meal} — {date}",
+  "meal.day_total":             "📊 Day total: {cal} / {target} {kcal_unit}",
+  "meal.encouragement":         "<i>Hang in there, {name}! 💪</i>",
+  "meal.ingredients_header":    "📋 <b>Ingredients:</b>",
+  "meal.warnings_allergen_header": "⚠️ <b>ALLERGEN WARNING:</b>",
+  "meal.warnings_allergen_line": "  {icon} {name} (confidence: {conf}) — found in: {ing}",
+  "meal.warnings_health_header": "💡 <b>Health notes:</b>",
+  "meal.warnings_default_ingredient": "this dish",
+  "meal.warnings_default_concern":    "concern",
+  "meal.nutrition_line": "🔥 {cal} {kcal_unit} | 🥩 {p}{g_unit} {p_short} | 🍚 {c}{g_unit} {c_short} | 🧈 {f}{g_unit} {f_short}"
 }

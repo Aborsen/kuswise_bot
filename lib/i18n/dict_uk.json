@@ -137,5 +137,43 @@
   "target_weight.saved": "🎯 Цільова вага: <b>{target} кг</b>.",
   "target_weight.cleared": "🎯 Для мети «Підтримувати вагу» цільова вага не потрібна — очистив.",
 
-  "common.cancelled": "👌 Скасовано."
+  "common.cancelled": "👌 Скасовано.",
+
+  "macro.calories_short": "ккал",
+  "macro.gram_short":     "г",
+  "macro.protein_short":  "Б",
+  "macro.carbs_short":    "В",
+  "macro.fat_short":      "Ж",
+  "macro.fiber_short":    "Кл",
+  "macro.calories_long":  "Калорії",
+  "macro.protein_long":   "Білки",
+  "macro.carbs_long":     "Вуглеводи",
+  "macro.fat_long":       "Жири",
+  "macro.fiber_long":     "Клітковина",
+
+  "meal_type.breakfast": "Сніданок",
+  "meal_type.lunch":     "Обід",
+  "meal_type.dinner":    "Вечеря",
+  "meal_type.snack":     "Перекус",
+  "meal_type.fallback":  "Прийом їжі",
+
+  "gi.low":    "Низький ГІ",
+  "gi.medium": "Середній ГІ",
+  "gi.high":   "Високий ГІ",
+
+  "meal.default_name":          "Страва",
+  "meal.preview_header":        "🔍 <b>Попередній перегляд: {dish}</b>",
+  "meal.preview_meal_line":     "🕐 {meal}",
+  "meal.preview_confirm_prompt": "👇 <b>Підтвердити або виправити:</b>",
+  "meal.logged_header":         "✅ <b>Записав: {dish}</b>",
+  "meal.logged_date_line":      "🕐 {meal} — {date}",
+  "meal.day_total":             "📊 Разом за день: {cal} / {target} {kcal_unit}",
+  "meal.encouragement":         "<i>Тримайся, {name}! 💪</i>",
+  "meal.ingredients_header":    "📋 <b>Інгредієнти:</b>",
+  "meal.warnings_allergen_header": "⚠️ <b>УВАГА, АЛЕРГЕН:</b>",
+  "meal.warnings_allergen_line": "  {icon} {name} (впевненість: {conf}) — у складі: {ing}",
+  "meal.warnings_health_header": "💡 <b>Нотатки щодо здоров'я (для кату):</b>",
+  "meal.warnings_default_ingredient": "цієї страви",
+  "meal.warnings_default_concern":    "питання",
+  "meal.nutrition_line": "🔥 {cal} {kcal_unit} | 🥩 {p}{g_unit} {p_short} | 🍚 {c}{g_unit} {c_short} | 🧈 {f}{g_unit} {f_short}"
 }

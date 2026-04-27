@@ -77,27 +77,30 @@ _MEAL_TYPE_UA = {
 
 # --- Shared helpers ---
 
-def _format_ingredients(analysis: dict) -> list[str]:
+def _format_ingredients(analysis: dict, locale: str = "en") -> list[str]:
     """Build ingredient list lines from analysis.ingredients.
 
-    Each line shows ``• name — ~Ng · ~K ккал`` when both grams and calories
-    are present, gracefully degrading when one or both are missing
-    (older saved meals predate the per-ingredient kcal field).
+    Each line shows ``• name — ~Ng · ~K kcal`` (or UA equivalents) when
+    both grams and calories are present, gracefully degrading when either
+    is missing.
     """
     ingredients = analysis.get("ingredients") or []
     if not ingredients:
         return []
-    lines = ["", "📋 <b>Інгредієнти:</b>"]
+    from lib.i18n import t
+    g_unit = t("macro.gram_short", locale)
+    kcal_unit = t("macro.calories_short", locale)
+    lines = ["", t("meal.ingredients_header", locale)]
     for ing in ingredients:
         name = _esc(ing.get("name", "?"))
         grams = ing.get("estimated_grams")
         kcal = ing.get("estimated_calories")
         parts = []
         if grams:
-            parts.append(f"~{round(float(grams))}г")
+            parts.append(f"~{round(float(grams))}{g_unit}")
         if kcal:
             try:
-                parts.append(f"~{round(float(kcal))} ккал")
+                parts.append(f"~{round(float(kcal))} {kcal_unit}")
             except (TypeError, ValueError):
                 pass
         if parts:
@@ -107,84 +110,104 @@ def _format_ingredients(analysis: dict) -> list[str]:
     return lines
 
 
-def _format_warnings(analysis: dict) -> list[str]:
+def _format_warnings(analysis: dict, locale: str = "en") -> list[str]:
     """Build allergen + Crohn warning lines."""
+    from lib.i18n import t
     lines = []
     allergen_flags = analysis.get("allergen_flags") or []
     crohn_flags = analysis.get("crohn_flags") or []
 
     if allergen_flags:
         lines.append("")
-        lines.append("⚠️ <b>УВАГА, АЛЕРГЕН:</b>")
+        lines.append(t("meal.warnings_allergen_header", locale))
         for a in allergen_flags:
             icon = _CONFIDENCE_ICON.get((a.get("confidence") or "").lower(), "⚠️")
             allergen_name = _esc(str(a.get("allergen", "?")).capitalize())
             confidence = _esc(a.get("confidence", "?"))
-            ingredient = _esc(a.get("ingredient", "цієї страви"))
-            lines.append(
-                f"  {icon} {allergen_name} (впевненість: {confidence}) — у складі: {ingredient}"
-            )
+            ingredient = _esc(a.get("ingredient",
+                                    t("meal.warnings_default_ingredient", locale)))
+            lines.append(t(
+                "meal.warnings_allergen_line", locale,
+                icon=icon, name=allergen_name, conf=confidence, ing=ingredient,
+            ))
 
     if crohn_flags:
         lines.append("")
-        lines.append("💡 <b>Нотатки щодо здоров'я (для кату):</b>")
+        lines.append(t("meal.warnings_health_header", locale))
+        default_concern = t("meal.warnings_default_concern", locale)
         for c in crohn_flags:
             icon = _SEVERITY_ICON.get((c.get("severity") or "").lower(), "🟡")
-            concern = _esc(c.get("concern", "питання"))
+            concern = _esc(c.get("concern", default_concern))
             ingredient = _esc(c.get("ingredient", "?"))
             lines.append(f"  {icon} {concern} ({ingredient})")
 
     return lines
 
 
-def _format_nutrition_line(nutrition: dict) -> str:
-    return (
-        f"🔥 {round(nutrition.get('calories', 0))} ккал | "
-        f"🥩 {round(nutrition.get('protein_g', 0))}г Б | "
-        f"🍚 {round(nutrition.get('carbs_g', 0))}г В | "
-        f"🧈 {round(nutrition.get('fat_g', 0))}г Ж"
+def _format_nutrition_line(nutrition: dict, locale: str = "en") -> str:
+    """Single-line kcal + macros readout. UA: '500 ккал | 30г Б | 50г В | 18г Ж'.
+    EN: '500 kcal | 30g P | 50g C | 18g F'."""
+    from lib.i18n import t
+    return t(
+        "meal.nutrition_line", locale,
+        cal=round(nutrition.get("calories", 0)),
+        kcal_unit=t("macro.calories_short", locale),
+        p=round(nutrition.get("protein_g", 0)),
+        c=round(nutrition.get("carbs_g", 0)),
+        f=round(nutrition.get("fat_g", 0)),
+        g_unit=t("macro.gram_short", locale),
+        p_short=t("macro.protein_short", locale),
+        c_short=t("macro.carbs_short", locale),
+        f_short=t("macro.fat_short", locale),
     )
 
 
 _GI_ICON = {"low": "🟢", "medium": "🟡", "high": "🔴"}
-_GI_UA = {"low": "Низький ГІ", "medium": "Середній ГІ", "high": "Високий ГІ"}
 
 
-def _format_glycemic_line(analysis: dict) -> str | None:
+def _format_glycemic_line(analysis: dict, locale: str = "en") -> str | None:
     gi = analysis.get("glycemic_index") or {}
     level = (gi.get("level") or "").lower()
     note = (gi.get("note") or "").strip()
     if not level:
         return None
+    from lib.i18n import t
     icon = _GI_ICON.get(level, "🩸")
-    # _GI_UA values are static literals; the level fallback is whatever the LLM
+    # gi.* values are static literals; the level fallback is whatever the LLM
     # returned, so escape it. Note is free-form LLM text and must be escaped.
-    label = _GI_UA.get(level, _esc(level.capitalize()))
+    if level in ("low", "medium", "high"):
+        label = t(f"gi.{level}", locale)
+    else:
+        label = _esc(level.capitalize())
     safe_note = _esc(note)
     return f"{icon} {label}" + (f" — {safe_note}" if safe_note else "")
 
 
 # --- Preview (before user accepts) ---
 
-def format_meal_preview(meal_type: str, analysis: dict) -> str:
+def format_meal_preview(meal_type: str, analysis: dict, locale: str = "en") -> str:
     """Preview message shown after AI analysis, before user taps Accept."""
-    dish = _esc(analysis.get("dish_name") or "Страва")
+    from lib.i18n import t
+    dish = _esc(analysis.get("dish_name") or t("meal.default_name", locale))
     # meal_type comes from a callback allowlist; fall back through _esc anyway.
-    meal_ua = _MEAL_TYPE_UA.get(meal_type.lower(), _esc(meal_type.capitalize()))
+    meal_label_key = f"meal_type.{meal_type.lower()}"
+    meal_label = t(meal_label_key, locale) if meal_type.lower() in (
+        "breakfast", "lunch", "dinner", "snack"
+    ) else _esc(meal_type.capitalize())
     nutrition = analysis.get("nutrition", {}) or {}
 
     lines = [
-        f"🔍 <b>Попередній перегляд: {dish}</b>",
-        f"🕐 {meal_ua}",
+        t("meal.preview_header", locale, dish=dish),
+        t("meal.preview_meal_line", locale, meal=meal_label),
     ]
 
-    lines.extend(_format_ingredients(analysis))
+    lines.extend(_format_ingredients(analysis, locale))
     lines.append("")
-    lines.append(_format_nutrition_line(nutrition))
-    gi_line = _format_glycemic_line(analysis)
+    lines.append(_format_nutrition_line(nutrition, locale))
+    gi_line = _format_glycemic_line(analysis, locale)
     if gi_line:
         lines.append(gi_line)
-    lines.extend(_format_warnings(analysis))
+    lines.extend(_format_warnings(analysis, locale))
 
     assessment = analysis.get("overall_assessment")
     if assessment:
@@ -192,7 +215,7 @@ def format_meal_preview(meal_type: str, analysis: dict) -> str:
         lines.append(f"💬 {_esc(assessment)}")
 
     lines.append("")
-    lines.append("👇 <b>Підтвердити або виправити:</b>")
+    lines.append(t("meal.preview_confirm_prompt", locale))
     return "\n".join(lines)
 
 
@@ -204,24 +227,29 @@ def format_meal_logged(
     today_log: dict,
     daily_cal_target: int,
     first_name: str | None = None,
+    locale: str = "en",
 ) -> str:
+    from lib.i18n import t
+    from lib.datehelpers import format_date_long
     nutrition = analysis.get("nutrition", {}) or {}
-    dish = _esc(analysis.get("dish_name") or "Страва")
-    date_display = _ua_date_long(datetime.now(LOCAL_TZ))
-    meal_ua = _MEAL_TYPE_UA.get(meal_type.lower(), _esc(meal_type.capitalize()))
+    dish = _esc(analysis.get("dish_name") or t("meal.default_name", locale))
+    date_display = format_date_long(datetime.now(LOCAL_TZ), locale)
+    meal_label = t(f"meal_type.{meal_type.lower()}", locale) if meal_type.lower() in (
+        "breakfast", "lunch", "dinner", "snack"
+    ) else _esc(meal_type.capitalize())
 
     lines = [
-        f"✅ <b>Записав: {dish}</b>",
-        f"🕐 {meal_ua} — {date_display}",
+        t("meal.logged_header", locale, dish=dish),
+        t("meal.logged_date_line", locale, meal=meal_label, date=date_display),
     ]
 
-    lines.extend(_format_ingredients(analysis))
+    lines.extend(_format_ingredients(analysis, locale))
     lines.append("")
-    lines.append(_format_nutrition_line(nutrition))
-    gi_line = _format_glycemic_line(analysis)
+    lines.append(_format_nutrition_line(nutrition, locale))
+    gi_line = _format_glycemic_line(analysis, locale)
     if gi_line:
         lines.append(gi_line)
-    lines.extend(_format_warnings(analysis))
+    lines.extend(_format_warnings(analysis, locale))
 
     assessment = analysis.get("overall_assessment")
     if assessment:
@@ -229,12 +257,15 @@ def format_meal_logged(
         lines.append(f"💬 {_esc(assessment)}")
 
     lines.append("")
-    lines.append(
-        f"📊 Разом за день: {round(today_log.get('calories', 0))} / {daily_cal_target} ккал"
-    )
+    lines.append(t(
+        "meal.day_total", locale,
+        cal=round(today_log.get("calories", 0)),
+        target=daily_cal_target,
+        kcal_unit=t("macro.calories_short", locale),
+    ))
 
     if first_name:
-        lines.append(f"<i>Тримайся, {_esc(first_name)}! 💪</i>")
+        lines.append(t("meal.encouragement", locale, name=_esc(first_name)))
 
     return "\n".join(lines)
 

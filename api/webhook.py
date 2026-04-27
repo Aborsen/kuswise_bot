@@ -1388,7 +1388,7 @@ def _send_analysis_preview(
     )
     send_message(
         chat_id,
-        format_meal_preview(meal_type, analysis),
+        format_meal_preview(meal_type, analysis, locale=i18n_mod.locale_of(profile)),
         reply_markup=moderation_keyboard(),
     )
 
@@ -1426,7 +1426,7 @@ def handle_moderation_callback(conn, cb: dict, profile: dict) -> None:
         cal_target = profile.get("daily_calorie_target") or 2000
         send_message(
             chat_id,
-            format_meal_logged(pending["meal_type"], analysis, today_log, cal_target, first_name),
+            format_meal_logged(pending["meal_type"], analysis, today_log, cal_target, first_name, locale=i18n_mod.locale_of(profile)),
             reply_markup=meal_logged_actions_keyboard(meal_id, is_fav=False),
         )
 
@@ -1611,7 +1611,7 @@ def handle_alternates_pick(conn, cb: dict, profile: dict) -> None:
     )
     send_message(
         chat_id,
-        format_meal_preview(pending["meal_type"], new_analysis),
+        format_meal_preview(pending["meal_type"], new_analysis, locale=i18n_mod.locale_of(profile)),
         reply_markup=moderation_keyboard(),
     )
 
@@ -1665,7 +1665,7 @@ def _save_barcode_meal(
     cal_target = profile.get("daily_calorie_target") or 2000
     send_message(
         chat_id,
-        format_meal_logged(pending["meal_type"], analysis, today_log, cal_target, first_name),
+        format_meal_logged(pending["meal_type"], analysis, today_log, cal_target, first_name, locale=i18n_mod.locale_of(profile)),
         reply_markup=meal_logged_actions_keyboard(meal_id, is_fav=False),
     )
 

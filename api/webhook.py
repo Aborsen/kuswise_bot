@@ -585,7 +585,7 @@ def handle_start(
     language_code: str | None = None,
 ) -> None:
     try:
-        set_chat_menu_button(chat_id=chat_id)
+        set_chat_menu_button(chat_id=chat_id, locale=i18n_mod.locale_of(profile))
     except Exception as e:
         print("set_chat_menu_button error:", e, flush=True)
 

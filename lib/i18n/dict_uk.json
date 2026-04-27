@@ -437,5 +437,26 @@
   "health_menu.conditions":  "🩺 Хронічні стани",
   "health_menu.clear":       "🧹 Очистити все",
 
-  "recent_meals.entry":      "🔁 {desc} · {cal} {kcal_unit}"
+  "recent_meals.entry":      "🔁 {desc} · {cal} {kcal_unit}",
+
+  "recap.label_streak":         "СЕРІЯ",
+  "recap.label_avg_kcal":       "СЕРЕДНЬО ККАЛ/ДЕНЬ",
+  "recap.label_weight_change":  "ЗМІНА ВАГИ",
+  "recap.label_macro_split":    "СПІВВІДНОШЕННЯ МАКРО",
+  "recap.macro_line":           "Б {p}%  В {c}%  Ж {f}%",
+  "recap.macros_subtitle":      "за весь логований тиждень",
+  "recap.week_for":             "Тиждень — {name}",
+  "recap.week_anonymous":       "Тиждень",
+  "recap.qr_caption":           "Скан → @kuswise_bot",
+  "recap.footer":               "бот який знає кожний кусь",
+  "recap.streak_singular":      "1 день поспіль",
+  "recap.streak_few":           "{n} дні поспіль",
+  "recap.streak_many":          "{n} днів поспіль",
+  "recap.days_logged_singular": "за 1 залогований день",
+  "recap.days_logged_few":      "за {n} залоговані дні",
+  "recap.days_logged_many":     "за {n} залогованих днів",
+  "recap.days_logged_zero":     "ще нічого не логували",
+  "recap.weight_kg":            "{sign}{val} кг",
+  "recap.share_caption":        "🔥 <b>Мій тиждень з KusWise</b>\nСерія: {streak} · Середньо: {avg} ккал/день · Залогованих днів: {days}/7\n\n<i>Поділись цим — натисни на картинку → 📤 Поділитись.</i>",
+  "recap.weekly_caption":       "🔥 <b>Твій тиждень з KusWise</b>\nСерія: {streak} · Середньо: {avg} ккал/день · Залогованих днів: {days}/7"
 }

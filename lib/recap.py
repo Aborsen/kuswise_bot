@@ -238,6 +238,9 @@ def build_user_recap(
     # build_user_recap glues database + datehelpers, which sit higher up.
     from lib.database import get_meals_in_range, get_weight_history, get_streak
     from lib.datehelpers import now_user
+    from lib.i18n import t as _i18n_t, locale_of
+
+    locale = locale_of(profile)
 
     try:
         end_date_obj = now_user(profile).date() if profile else date.today()
@@ -262,27 +265,28 @@ def build_user_recap(
         streak_row=streak_row,
         end_date=end_date_obj,
     )
-    png = render_recap_png(stats, first_name=first_name)
+    png = render_recap_png(stats, first_name=first_name, locale=locale)
 
     # Caption nudges the user to forward — Telegram's native share button
     # does the rest of the heavy lifting.
-    caption = (
-        f"🔥 <b>Мій тиждень з KusWise</b>\n"
-        f"Серія: {stats['streak']} · "
-        f"Середньо: {stats['avg_kcal']} ккал/день · "
-        f"Залогованих днів: {stats['days_logged']}/7\n\n"
-        f"<i>Поділись цим — натисни на картинку → 📤 Поділитись.</i>"
+    caption = _i18n_t(
+        "recap.share_caption",
+        locale=locale,
+        streak=stats["streak"],
+        avg=stats["avg_kcal"],
+        days=stats["days_logged"],
     )
     return png, caption
 
 
-def render_recap_png(stats: dict, first_name: Optional[str] = None) -> bytes:
+def render_recap_png(stats: dict, first_name: Optional[str] = None, locale: str = "en") -> bytes:
     """Render the recap card. Returns PNG bytes (no temp file).
 
     The layout deliberately uses LARGE numbers on a dark canvas so the
     card reads on a phone screen at thumb-distance. Brand watermark sits
     in the bottom-right; subtle, not advertising.
     """
+    from lib.i18n import t as _t
     img = Image.new("RGB", (W, H), _BG_TOP)
     draw = ImageDraw.Draw(img)
 
@@ -311,9 +315,9 @@ def render_recap_png(stats: dict, first_name: Optional[str] = None) -> bytes:
 
     # User line
     if first_name:
-        draw.text((pad, y), f"Тиждень — {first_name}", font=name_font, fill=_DIM)
+        draw.text((pad, y), _t("recap.week_for", locale=locale, name=first_name), font=name_font, fill=_DIM)
     else:
-        draw.text((pad, y), "Тиждень", font=name_font, fill=_DIM)
+        draw.text((pad, y), _t("recap.week_anonymous", locale=locale), font=name_font, fill=_DIM)
     y += 90
 
     # Note: bundled fallback fonts don't include emoji glyphs, so labels
@@ -329,26 +333,30 @@ def render_recap_png(stats: dict, first_name: Optional[str] = None) -> bytes:
 
     # Streak
     streak = stats.get("streak", 0)
-    streak_label = (
-        "1 день поспіль" if streak == 1
-        else f"{streak} дні поспіль" if 2 <= streak <= 4
-        else f"{streak} днів поспіль"
-    )
-    draw.text((pad, y), "СЕРІЯ", font=label_font, fill=_ACCENT)
+    if streak == 1:
+        streak_label = _t("recap.streak_singular", locale=locale)
+    elif 2 <= streak <= 4:
+        streak_label = _t("recap.streak_few", locale=locale, n=streak)
+    else:
+        streak_label = _t("recap.streak_many", locale=locale, n=streak)
+    draw.text((pad, y), _t("recap.label_streak", locale=locale), font=label_font, fill=_ACCENT)
     draw.text((pad, y + 36), str(streak), font=big_font_mid, fill=_FG)
     draw.text((pad, y + 140), streak_label, font=sub_font, fill=_DIM)
     y += section_dy
 
     # Avg kcal
-    draw.text((pad, y), "СЕРЕДНЬО ККАЛ/ДЕНЬ", font=label_font, fill=_ACCENT)
+    draw.text((pad, y), _t("recap.label_avg_kcal", locale=locale), font=label_font, fill=_ACCENT)
     draw.text((pad, y + 36), f"{stats.get('avg_kcal', 0):,}".replace(",", " "),
               font=big_font_mid, fill=_FG)
     days = stats.get("days_logged", 0)
-    days_label = (
-        "за 1 залогований день" if days == 1
-        else f"за {days} залоговані дні" if 2 <= days <= 4
-        else f"за {days} залогованих днів" if days else "ще нічого не логували"
-    )
+    if days == 0:
+        days_label = _t("recap.days_logged_zero", locale=locale)
+    elif days == 1:
+        days_label = _t("recap.days_logged_singular", locale=locale)
+    elif 2 <= days <= 4:
+        days_label = _t("recap.days_logged_few", locale=locale, n=days)
+    else:
+        days_label = _t("recap.days_logged_many", locale=locale, n=days)
     draw.text((pad, y + 140), days_label, font=sub_font, fill=_DIM)
     y += section_dy
 
@@ -356,8 +364,8 @@ def render_recap_png(stats: dict, first_name: Optional[str] = None) -> bytes:
     delta = stats.get("weight_delta")
     if delta is not None:
         sign = "+" if delta > 0 else "-" if delta < 0 else "~"
-        delta_str = f"{sign}{abs(delta):.1f} кг"
-        draw.text((pad, y), "ЗМІНА ВАГИ", font=label_font, fill=_ACCENT)
+        delta_str = _t("recap.weight_kg", locale=locale, sign=sign, val=f"{abs(delta):.1f}")
+        draw.text((pad, y), _t("recap.label_weight_change", locale=locale), font=label_font, fill=_ACCENT)
         draw.text((pad, y + 36), delta_str, font=big_font_mid, fill=_FG)
         y += section_dy
 
@@ -368,10 +376,10 @@ def render_recap_png(stats: dict, first_name: Optional[str] = None) -> bytes:
     c_pct = stats.get("carbs_pct")
     f_pct = stats.get("fat_pct")
     if p_pct is not None and c_pct is not None and f_pct is not None:
-        draw.text((pad, y), "СПІВВІДНОШЕННЯ МАКРО", font=label_font, fill=_ACCENT)
-        macros_str = f"Б {p_pct}%  В {c_pct}%  Ж {f_pct}%"
+        draw.text((pad, y), _t("recap.label_macro_split", locale=locale), font=label_font, fill=_ACCENT)
+        macros_str = _t("recap.macro_line", locale=locale, p=p_pct, c=c_pct, f=f_pct)
         draw.text((pad, y + 36), macros_str, font=macro_font, fill=_FG)
-        draw.text((pad, y + 110), "за весь логований тиждень", font=sub_font, fill=_DIM)
+        draw.text((pad, y + 110), _t("recap.macros_subtitle", locale=locale), font=sub_font, fill=_DIM)
 
     # ----- Bottom row: QR (right) + footer text (left) -----
     qr_size = _QR_PX
@@ -396,7 +404,7 @@ def render_recap_png(stats: dict, first_name: Optional[str] = None) -> bytes:
         pass
 
     # "Скан → @kuswise_bot" line right under the QR tile in white.
-    qr_caption = "Скан → @kuswise_bot"
+    qr_caption = _t("recap.qr_caption", locale=locale)
     cap_y = tile_y + tile_size + 8
     cap_bbox = draw.textbbox((0, 0), qr_caption, font=sub_font)
     cap_w = cap_bbox[2] - cap_bbox[0]
@@ -405,7 +413,7 @@ def render_recap_png(stats: dict, first_name: Optional[str] = None) -> bytes:
         draw.text((cap_x, cap_y), qr_caption, font=sub_font, fill=_DIM)
 
     # Footer watermark on the left, vertically centered against the QR tile.
-    foot_text = "бот який знає кожний кусь"
+    foot_text = _t("recap.footer", locale=locale)
     foot_y = tile_y + tile_size // 2 - 16
     draw.text((pad, foot_y), foot_text, font=foot_font, fill=_DIM)
 

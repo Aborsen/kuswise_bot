@@ -40,29 +40,32 @@ def _resolve_host() -> str:
     return host
 
 
-def _dashboard_url() -> str:
-    """Absolute HTTPS URL for the miniapp dashboard.
+def _build_miniapp_url(path: str, locale: str = "en") -> str:
+    """Absolute HTTPS URL for a Mini App page, with ?v= cache-buster + ?lang= locale.
 
-    Appends ?v=<short SHA> when running on Vercel (VERCEL_GIT_COMMIT_SHA is
-    auto-injected). Telegram's iOS WebView keys its HTML cache by URL, so a
-    new SHA per deploy forces a cache miss and the user sees fresh HTML.
+    Vercel auto-injects VERCEL_GIT_COMMIT_SHA. Telegram's iOS WebView keys
+    its HTML cache by URL, so a new SHA per deploy forces a cache miss.
+    The ?lang= query param lets the Mini App's server-side renderer pick
+    UA vs EN labels per user (F-2b Chunk 7).
     """
-    host = _resolve_host()
-    if not host:
-        # Fall back to a clearly broken-but-safe placeholder rather than
-        # producing https:///api/dashboard, which Telegram would reject.
-        host = "invalid.invalid"
-    base = f"https://{host}/api/dashboard"
-    sha = os.environ.get("VERCEL_GIT_COMMIT_SHA", "")[:8]
-    return f"{base}?v={sha}" if sha else base
-
-
-def _scan_url() -> str:
-    """Absolute HTTPS URL for the F-8 barcode scanner Mini App page."""
     host = _resolve_host() or "invalid.invalid"
-    base = f"https://{host}/api/scan"
+    base = f"https://{host}{path}"
     sha = os.environ.get("VERCEL_GIT_COMMIT_SHA", "")[:8]
-    return f"{base}?v={sha}" if sha else base
+    qs = []
+    if sha:
+        qs.append(f"v={sha}")
+    qs.append(f"lang={locale}")
+    return f"{base}?{'&'.join(qs)}"
+
+
+def _dashboard_url(locale: str = "en") -> str:
+    """Absolute HTTPS URL for the miniapp dashboard."""
+    return _build_miniapp_url("/api/dashboard", locale=locale)
+
+
+def _scan_url(locale: str = "en") -> str:
+    """Absolute HTTPS URL for the F-8 barcode scanner Mini App page."""
+    return _build_miniapp_url("/api/scan", locale=locale)
 
 
 def send_message(chat_id: int, text: str, reply_markup: dict | None = None) -> dict:
@@ -312,7 +315,7 @@ def scanner_inline_keyboard(locale: str = "en") -> dict:
     """
     return {
         "inline_keyboard": [
-            [{"text": _i18n_t("inline_button.open_scanner", locale=locale), "web_app": {"url": _scan_url()}}],
+            [{"text": _i18n_t("inline_button.open_scanner", locale=locale), "web_app": {"url": _scan_url(locale=locale)}}],
             [{"text": _i18n_t("inline_button.scan_manual_entry", locale=locale), "callback_data": "barcode:manual"}],
             [{"text": _i18n_t("inline_button.cancel", locale=locale),            "callback_data": "barcode:cancel"}],
         ]
@@ -636,12 +639,12 @@ def dashboard_inline_keyboard(locale: str = "en") -> dict:
     """
     return {
         "inline_keyboard": [[
-            {"text": _i18n_t("inline_button.open_dashboard", locale=locale), "web_app": {"url": _dashboard_url()}}
+            {"text": _i18n_t("inline_button.open_dashboard", locale=locale), "web_app": {"url": _dashboard_url(locale=locale)}}
         ]]
     }
 
 
-def set_chat_menu_button(chat_id: int | None = None) -> dict:
+def set_chat_menu_button(chat_id: int | None = None, locale: str = "en") -> dict:
     """Register a persistent Mini App button as the bot's chat menu button
     (the icon left of the input area). When chat_id is given, applies to that
     specific chat (the global-default setChatMenuButton call sometimes doesn't
@@ -651,7 +654,7 @@ def set_chat_menu_button(chat_id: int | None = None) -> dict:
         "menu_button": {
             "type": "web_app",
             "text": "📱 Dashboard",
-            "web_app": {"url": _dashboard_url()},
+            "web_app": {"url": _dashboard_url(locale=locale)},
         }
     }
     if chat_id is not None:

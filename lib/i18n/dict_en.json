@@ -437,5 +437,26 @@
   "health_menu.conditions":  "🩺 Conditions",
   "health_menu.clear":       "🧹 Clear all",
 
-  "recent_meals.entry":      "🔁 {desc} · {cal} {kcal_unit}"
+  "recent_meals.entry":      "🔁 {desc} · {cal} {kcal_unit}",
+
+  "recap.label_streak":         "STREAK",
+  "recap.label_avg_kcal":       "AVG KCAL/DAY",
+  "recap.label_weight_change":  "WEIGHT CHANGE",
+  "recap.label_macro_split":    "MACRO SPLIT",
+  "recap.macro_line":           "P {p}%  C {c}%  F {f}%",
+  "recap.macros_subtitle":      "across the logged week",
+  "recap.week_for":             "Week — {name}",
+  "recap.week_anonymous":       "Week",
+  "recap.qr_caption":           "Scan → @kuswise_bot",
+  "recap.footer":               "the bot that knows every kus",
+  "recap.streak_singular":      "1 day in a row",
+  "recap.streak_few":           "{n} days in a row",
+  "recap.streak_many":          "{n} days in a row",
+  "recap.days_logged_singular": "from 1 logged day",
+  "recap.days_logged_few":      "from {n} logged days",
+  "recap.days_logged_many":     "from {n} logged days",
+  "recap.days_logged_zero":     "nothing logged yet",
+  "recap.weight_kg":            "{sign}{val} kg",
+  "recap.share_caption":        "🔥 <b>My week with KusWise</b>\nStreak: {streak} · Avg: {avg} kcal/day · Logged days: {days}/7\n\n<i>Share it — tap the image → 📤 Share.</i>",
+  "recap.weekly_caption":       "🔥 <b>Your week with KusWise</b>\nStreak: {streak} · Avg: {avg} kcal/day · Logged days: {days}/7"
 }

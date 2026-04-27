@@ -158,12 +158,14 @@ def _send_weekly_recap_for(conn, user_id: int) -> bool:
         streak_row=streak_row,
         end_date=end_date_obj,
     )
-    png = recap_mod.render_recap_png(stats, first_name=None)
-    caption = (
-        f"🔥 <b>Твій тиждень з KusWise</b>\n"
-        f"Серія: {stats['streak']} · "
-        f"Середньо: {stats['avg_kcal']} ккал/день · "
-        f"Залогованих днів: {stats['days_logged']}/7"
+    locale = _i18n_locale_of(profile)
+    png = recap_mod.render_recap_png(stats, first_name=None, locale=locale)
+    caption = _i18n_t(
+        "recap.weekly_caption",
+        locale=locale,
+        streak=stats["streak"],
+        avg=stats["avg_kcal"],
+        days=stats["days_logged"],
     )
     resp = send_photo(user_id, png, caption=caption)
     return bool(resp.get("ok"))

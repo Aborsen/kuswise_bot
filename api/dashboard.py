@@ -1285,6 +1285,7 @@ _DASHBOARD_HTML = r"""<!DOCTYPE html>
 
   // --- Spinner rendering ---
   var L = __JS_LABELS__;
+  var LANG = '__LANG__';
   function fmt(s, vars) {
     if (!s) return '';
     if (!vars) return s;

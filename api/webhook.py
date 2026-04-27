@@ -722,11 +722,11 @@ def handle_onboarding_text(conn, chat_id: int, user_id: int, first_name: str | N
         send_message(
             chat_id,
             format_recommendation(profile_after, rec, locale=i18n_mod.locale_of(profile_after)),
-            reply_markup=confirm_calories_keyboard(),
+            reply_markup=confirm_calories_keyboard(locale=i18n_mod.locale_of(profile)),
         )
 
     elif step == "awaiting_confirm":
-        send_message(chat_id, _t("onboarding.need_button", profile), reply_markup=confirm_calories_keyboard())
+        send_message(chat_id, _t("onboarding.need_button", profile), reply_markup=confirm_calories_keyboard(locale=i18n_mod.locale_of(profile)))
 
     elif step == "awaiting_custom_cal":
         cal = _parse_int(text)
@@ -876,7 +876,7 @@ def handle_onboarding_callback(conn, cb: dict) -> None:
         send_message(
             chat_id,
             format_recommendation(profile_after, rec, locale=i18n_mod.locale_of(profile_after)),
-            reply_markup=confirm_calories_keyboard(),
+            reply_markup=confirm_calories_keyboard(locale=i18n_mod.locale_of(profile)),
         )
         return
 
@@ -982,7 +982,7 @@ def _send_health_menu(conn, chat_id: int, user_id: int) -> None:
             allergens=render_health_labels(h["allergens"], HEALTH_ALLERGENS),
             conditions=render_health_labels(h["conditions"], HEALTH_CONDITIONS),
         ),
-        reply_markup=health_menu_keyboard(),
+        reply_markup=health_menu_keyboard(locale=i18n_mod.locale_of(profile)),
     )
 
 
@@ -1111,7 +1111,7 @@ def handle_photo(conn, message: dict) -> None:
         send_message(chat_id, PHOTO_TOO_LARGE)
         return
     save_pending_photo(conn, user_id, file_id)
-    send_message(chat_id, _t("prompts.photo_meal_type", profile), reply_markup=meal_type_keyboard())
+    send_message(chat_id, _t("prompts.photo_meal_type", profile), reply_markup=meal_type_keyboard(locale=i18n_mod.locale_of(profile)))
 
 
 def handle_text_entry(conn, message: dict, text: str) -> None:
@@ -1119,7 +1119,7 @@ def handle_text_entry(conn, message: dict, text: str) -> None:
     user_id = message["from"]["id"]
     profile = get_profile(conn, user_id)
     save_pending_text(conn, user_id, text)
-    send_message(chat_id, _t("prompts.text_meal_type", profile), reply_markup=meal_type_keyboard())
+    send_message(chat_id, _t("prompts.text_meal_type", profile), reply_markup=meal_type_keyboard(locale=i18n_mod.locale_of(profile)))
 
 
 # ---------- Voice entry (Whisper) ----------
@@ -1187,7 +1187,7 @@ def handle_voice(conn, message: dict) -> None:
 
     # Otherwise reuse the existing text-entry flow: saves as pending and asks meal type.
     save_pending_text(conn, user_id, transcript)
-    send_message(chat_id, _t("prompts.text_meal_type", profile), reply_markup=meal_type_keyboard())
+    send_message(chat_id, _t("prompts.text_meal_type", profile), reply_markup=meal_type_keyboard(locale=i18n_mod.locale_of(profile)))
 
 
 # ---------- Callback router ----------
@@ -1346,7 +1346,7 @@ def _send_analysis_preview(
         send_message(
             chat_id,
             format_alternates_intro(meal_type, candidates),
-            reply_markup=alternates_keyboard(candidates),
+            reply_markup=alternates_keyboard(candidates, locale=i18n_mod.locale_of(profile)),
         )
         return
     save_pending_analysis(
@@ -1356,7 +1356,7 @@ def _send_analysis_preview(
     send_message(
         chat_id,
         format_meal_preview(meal_type, analysis, locale=i18n_mod.locale_of(profile)),
-        reply_markup=moderation_keyboard(),
+        reply_markup=moderation_keyboard(locale=i18n_mod.locale_of(profile)),
     )
 
 
@@ -1394,7 +1394,7 @@ def handle_moderation_callback(conn, cb: dict, profile: dict) -> None:
         send_message(
             chat_id,
             format_meal_logged(pending["meal_type"], analysis, today_log, cal_target, first_name, locale=i18n_mod.locale_of(profile)),
-            reply_markup=meal_logged_actions_keyboard(meal_id, is_fav=False),
+            reply_markup=meal_logged_actions_keyboard(meal_id, is_fav=False, locale=i18n_mod.locale_of(profile)),
         )
 
     elif action == "recalc":
@@ -1469,7 +1469,7 @@ def handle_moderation_callback(conn, cb: dict, profile: dict) -> None:
             send_message(chat_id, _t("errors.pending_expired", profile))
             return
         set_awaiting_manual(conn, user_id)
-        send_message(chat_id, _t("prompts.manual_input", profile), reply_markup=cancel_only_keyboard())
+        send_message(chat_id, _t("prompts.manual_input", profile), reply_markup=cancel_only_keyboard(locale=i18n_mod.locale_of(profile)))
 
     elif action == "cancel":
         answer_callback_query(cb_id, "Скасовано")
@@ -1584,7 +1584,7 @@ def handle_alternates_pick(conn, cb: dict, profile: dict) -> None:
     send_message(
         chat_id,
         format_meal_preview(pending["meal_type"], new_analysis, locale=i18n_mod.locale_of(profile)),
-        reply_markup=moderation_keyboard(),
+        reply_markup=moderation_keyboard(locale=i18n_mod.locale_of(profile)),
     )
 
 
@@ -1638,7 +1638,7 @@ def _save_barcode_meal(
     send_message(
         chat_id,
         format_meal_logged(pending["meal_type"], analysis, today_log, cal_target, first_name, locale=i18n_mod.locale_of(profile)),
-        reply_markup=meal_logged_actions_keyboard(meal_id, is_fav=False),
+        reply_markup=meal_logged_actions_keyboard(meal_id, is_fav=False, locale=i18n_mod.locale_of(profile)),
     )
 
 
@@ -1767,7 +1767,7 @@ def handle_menu_photo(conn, message: dict, profile: dict) -> None:
     send_message(
         chat_id,
         "\n".join(lines),
-        reply_markup=menu_log_keyboard(dishes),
+        reply_markup=menu_log_keyboard(dishes, locale=i18n_mod.locale_of(profile)),
     )
 
 
@@ -1922,7 +1922,7 @@ def _send_plan_day(chat_id: int, plan_id: int, plan: dict, day_idx: int, locale:
     body = format_meal_plan_day(day, day_idx, locale)
     if day_idx == 0 and plan.get("notes"):
         body = i18n_mod.t("plan.header_notes", locale, notes=plan["notes"]) + body
-    send_message(chat_id, body, reply_markup=plan_day_keyboard(plan_id, day_idx, day))
+    send_message(chat_id, body, reply_markup=plan_day_keyboard(plan_id, day_idx, day, locale=i18n_mod.locale_of(profile)))
 
 
 def handle_plan_pantry_input(
@@ -2061,7 +2061,7 @@ def _run_suggest_meal(
         print("suggest error:", e, flush=True)
         send_message(chat_id, _t("suggest.failed", profile), reply_markup=main_menu_keyboard(locale=i18n_mod.locale_of(profile)))
         return
-    send_message(chat_id, recipe, reply_markup=suggest_followup_keyboard())
+    send_message(chat_id, recipe, reply_markup=suggest_followup_keyboard(locale=i18n_mod.locale_of(profile)))
 
 
 def handle_fridge_input(
@@ -2291,7 +2291,7 @@ def handle_meal_manage_callback(conn, cb: dict) -> None:
                 "meals_mgmt.edit_prompt", profile,
                 dish=_html.escape(deleted["description"][:40], quote=False),
             ),
-            reply_markup=cancel_only_keyboard(),
+            reply_markup=cancel_only_keyboard(locale=i18n_mod.locale_of(profile)),
         )
 
 
@@ -2312,7 +2312,7 @@ def handle_command(conn, message: dict, text: str, first_name: str | None, profi
         return
 
     if cmd == "/profile":
-        send_message(chat_id, format_profile(profile, locale=i18n_mod.locale_of(profile)), reply_markup=profile_edit_keyboard())
+        send_message(chat_id, format_profile(profile, locale=i18n_mod.locale_of(profile)), reply_markup=profile_edit_keyboard(locale=i18n_mod.locale_of(profile)))
         return
 
     if cmd == "/today":
@@ -2354,13 +2354,13 @@ def handle_command(conn, message: dict, text: str, first_name: str | None, profi
     # F-9: restaurant menu OCR — set state + ask for a photo.
     if cmd == "/menu":
         set_awaiting_input(conn, user_id, "menu_photo")
-        send_message(chat_id, _t("menu.prompt_intro", profile), reply_markup=cancel_only_keyboard())
+        send_message(chat_id, _t("menu.prompt_intro", profile), reply_markup=cancel_only_keyboard(locale=i18n_mod.locale_of(profile)))
         return
 
     # F-10: 3-day meal plan — ask the user for optional pantry items first.
     if cmd == "/plan":
         set_awaiting_input(conn, user_id, "plan_pantry")
-        send_message(chat_id, _t("plan.intro", profile), reply_markup=plan_pantry_keyboard())
+        send_message(chat_id, _t("plan.intro", profile), reply_markup=plan_pantry_keyboard(locale=i18n_mod.locale_of(profile)))
         return
 
     # F-12: shareable PNG recap card on demand.
@@ -2418,6 +2418,7 @@ def handle_command(conn, message: dict, text: str, first_name: str | None, profi
             reply_markup=goals_edit_keyboard(
                 has_target=bool(profile.get("target_weight_kg")),
                 has_delta=profile.get("weekly_delta_kg") is not None,
+                locale=i18n_mod.locale_of(profile),
             ),
         )
         return
@@ -2443,7 +2444,7 @@ def handle_command(conn, message: dict, text: str, first_name: str | None, profi
         send_message(
             chat_id,
             format_meals_list(meals, log=log, daily_cal_target=cal_target, macros=macros, locale=i18n_mod.locale_of(profile)),
-            reply_markup=meals_list_keyboard(meals),
+            reply_markup=meals_list_keyboard(meals, locale=i18n_mod.locale_of(profile)),
         )
         return
 
@@ -2486,7 +2487,7 @@ def handle_command(conn, message: dict, text: str, first_name: str | None, profi
         lines = [_t("favorite.title", profile), ""] + [f"• {format_meal_list_entry(m, locale=locale)}" for m in meals[:20]]
         lines.append("")
         lines.append(_t("favorite.relog_hint", profile))
-        send_message(chat_id, "\n".join(lines), reply_markup=recent_meals_keyboard(meals, variant="fav"))
+        send_message(chat_id, "\n".join(lines), reply_markup=recent_meals_keyboard(meals, variant="fav", locale=i18n_mod.locale_of(profile)))
         return
 
     if cmd == "/recent":
@@ -2498,7 +2499,7 @@ def handle_command(conn, message: dict, text: str, first_name: str | None, profi
         lines = [_t("favorite.recent_title", profile), ""] + [f"• {format_meal_list_entry(m, locale=locale)}" for m in meals]
         lines.append("")
         lines.append(_t("favorite.recent_relog_hint", profile))
-        send_message(chat_id, "\n".join(lines), reply_markup=recent_meals_keyboard(meals, variant="recent"))
+        send_message(chat_id, "\n".join(lines), reply_markup=recent_meals_keyboard(meals, variant="recent", locale=i18n_mod.locale_of(profile)))
         return
 
     if cmd == "/timezone":
@@ -2536,7 +2537,7 @@ def handle_command(conn, message: dict, text: str, first_name: str | None, profi
     if cmd == "/water":
         total = get_water_today(conn, user_id)
         target = get_water_target(conn, user_id)
-        send_message(chat_id, format_water(total, target, locale=i18n_mod.locale_of(profile)), reply_markup=water_keyboard())
+        send_message(chat_id, format_water(total, target, locale=i18n_mod.locale_of(profile)), reply_markup=water_keyboard(locale=i18n_mod.locale_of(profile)))
         return
 
     send_message(chat_id, _t("errors.unknown_command", profile))
@@ -2591,7 +2592,7 @@ def handle_fav_callback(conn, cb: dict) -> None:
         try:
             edit_message_reply_markup(
                 chat_id, message_id,
-                meal_logged_actions_keyboard(meal_id, is_fav=target_state),
+                meal_logged_actions_keyboard(meal_id, is_fav=target_state, locale=i18n_mod.locale_of(profile)),
             )
         except Exception as e:
             print("edit_reply_markup error:", e, flush=True)
@@ -2632,7 +2633,7 @@ def handle_relog_callback(conn, cb: dict) -> None:
             dish=_html.escape((src.get("description") or "—")[:40], quote=False),
             meal_type=meal_type_label,
         ),
-        reply_markup=undo_relog_keyboard(new_id),
+        reply_markup=undo_relog_keyboard(new_id, locale=i18n_mod.locale_of(profile)),
     )
 
 
@@ -2690,7 +2691,7 @@ def handle_water_quickadd(conn, chat_id: int, user_id: int, amount_ml: int) -> N
     profile = get_profile(conn, user_id) or {}
     total = add_water(conn, user_id, amount_ml)
     target = get_water_target(conn, user_id)
-    send_message(chat_id, format_water(total, target, locale=i18n_mod.locale_of(profile)), reply_markup=water_keyboard())
+    send_message(chat_id, format_water(total, target, locale=i18n_mod.locale_of(profile)), reply_markup=water_keyboard(locale=i18n_mod.locale_of(profile)))
 
 
 def handle_water_callback(conn, cb: dict) -> None:
@@ -2719,9 +2720,9 @@ def handle_water_callback(conn, cb: dict) -> None:
         target = get_water_target(conn, user_id)
         answer_callback_query(cb_id, f"+{ml} мл")
         if message_id:
-            edit_message_text(chat_id, message_id, format_water(total, target, locale=i18n_mod.locale_of(profile)), reply_markup=water_keyboard())
+            edit_message_text(chat_id, message_id, format_water(total, target, locale=i18n_mod.locale_of(profile)), reply_markup=water_keyboard(locale=i18n_mod.locale_of(profile)))
         else:
-            send_message(chat_id, format_water(total, target, locale=i18n_mod.locale_of(profile)), reply_markup=water_keyboard())
+            send_message(chat_id, format_water(total, target, locale=i18n_mod.locale_of(profile)), reply_markup=water_keyboard(locale=i18n_mod.locale_of(profile)))
         return
 
     if sub == "undo":
@@ -2732,15 +2733,15 @@ def handle_water_callback(conn, cb: dict) -> None:
         target = get_water_target(conn, user_id)
         answer_callback_query(cb_id, "Відкотив")
         if message_id:
-            edit_message_text(chat_id, message_id, format_water(new_total, target, locale=i18n_mod.locale_of(profile)), reply_markup=water_keyboard())
+            edit_message_text(chat_id, message_id, format_water(new_total, target, locale=i18n_mod.locale_of(profile)), reply_markup=water_keyboard(locale=i18n_mod.locale_of(profile)))
         return
 
     if sub == "goal" and len(parts) == 2:
         answer_callback_query(cb_id)
         if message_id:
-            edit_message_text(chat_id, message_id, _t("water.goal_prompt", profile), reply_markup=water_goal_keyboard())
+            edit_message_text(chat_id, message_id, _t("water.goal_prompt", profile), reply_markup=water_goal_keyboard(locale=i18n_mod.locale_of(profile)))
         else:
-            send_message(chat_id, _t("water.goal_prompt", profile), reply_markup=water_goal_keyboard())
+            send_message(chat_id, _t("water.goal_prompt", profile), reply_markup=water_goal_keyboard(locale=i18n_mod.locale_of(profile)))
         return
 
     if sub == "goal" and len(parts) == 4 and parts[2] == "set":
@@ -2753,7 +2754,7 @@ def handle_water_callback(conn, cb: dict) -> None:
         answer_callback_query(cb_id, _t("water.goal_saved", profile, target=ml))
         total = get_water_today(conn, user_id)
         if message_id:
-            edit_message_text(chat_id, message_id, format_water(total, ml, locale=i18n_mod.locale_of(profile)), reply_markup=water_keyboard())
+            edit_message_text(chat_id, message_id, format_water(total, ml, locale=i18n_mod.locale_of(profile)), reply_markup=water_keyboard(locale=i18n_mod.locale_of(profile)))
         return
 
     if sub == "back":
@@ -2761,7 +2762,7 @@ def handle_water_callback(conn, cb: dict) -> None:
         total = get_water_today(conn, user_id)
         target = get_water_target(conn, user_id)
         if message_id:
-            edit_message_text(chat_id, message_id, format_water(total, target, locale=i18n_mod.locale_of(profile)), reply_markup=water_keyboard())
+            edit_message_text(chat_id, message_id, format_water(total, target, locale=i18n_mod.locale_of(profile)), reply_markup=water_keyboard(locale=i18n_mod.locale_of(profile)))
         return
 
     answer_callback_query(cb_id, "Невідома дія")
@@ -2952,7 +2953,7 @@ def handle_water_target_input(
     send_message(
         chat_id,
         _t("water.goal_saved", profile, target=ml) + "\n\n" + format_water(total, ml, locale=locale),
-        reply_markup=water_keyboard(),
+        reply_markup=water_keyboard(locale=i18n_mod.locale_of(profile)),
     )
 
 
@@ -3072,7 +3073,7 @@ def handle_profile_edit_callback(conn, cb: dict, profile: dict) -> None:
     # prof:goal → show the goal picker.
     if data == "prof:goal":
         answer_callback_query(cb_id)
-        send_message(chat_id, _t("goal.update_prompt", profile), reply_markup=profile_goal_keyboard())
+        send_message(chat_id, _t("goal.update_prompt", profile), reply_markup=profile_goal_keyboard(locale=i18n_mod.locale_of(profile)))
         return
 
     # prof:goal:<lose|maintain|gain> → apply the goal change.
@@ -3140,7 +3141,7 @@ def handle_profile_edit_callback(conn, cb: dict, profile: dict) -> None:
     # prof:water → show preset picker (reuses the existing water_goal_keyboard).
     if data == "prof:water":
         answer_callback_query(cb_id)
-        send_message(chat_id, _t("water.goal_prompt", profile), reply_markup=water_goal_keyboard())
+        send_message(chat_id, _t("water.goal_prompt", profile), reply_markup=water_goal_keyboard(locale=i18n_mod.locale_of(profile)))
         return
 
     # prof:water:custom → prompt for manual ml entry, FSM picks it up.

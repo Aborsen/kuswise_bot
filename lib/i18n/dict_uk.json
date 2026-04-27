@@ -376,5 +376,66 @@
 
   "meal_plan.day_today":    "Сьогодні",
   "meal_plan.day_tomorrow": "Завтра",
-  "meal_plan.day_3":        "День 3"
+  "meal_plan.day_3":        "День 3",
+
+  "inline_button.accept":         "✅ Прийняти",
+  "inline_button.recalc":         "🔄 Перерахувати",
+  "inline_button.manual_entry":   "✏️ Ввести вручну",
+  "inline_button.close":          "❌ Закрити",
+  "inline_button.close_menu":     "❌ Закрити меню",
+  "inline_button.delete_n":       "🗑 Видалити {n}",
+  "inline_button.edit_n":         "✏️ Змінити {n}",
+  "inline_button.delete":         "🗑 Скасувати",
+  "inline_button.edit":           "✏️ Виправити",
+  "inline_button.fav_added":      "✅ В улюблених",
+  "inline_button.fav_add":        "⭐ В улюблені",
+  "inline_button.undo":           "↩️ Скасувати",
+
+  "meal_type.breakfast_btn":  "🍳 Сніданок",
+  "meal_type.lunch_btn":      "🥗 Обід",
+  "meal_type.dinner_btn":     "🍽️ Вечеря",
+  "meal_type.snack_btn":      "🍎 Перекус",
+
+  "confirm_calories.accept":  "✅ Прийняти цю цифру",
+  "confirm_calories.custom":  "✏️ Ввести свою",
+
+  "suggest.from_my_pantry":   "🛒 З моїх продуктів",
+  "suggest.different_version":"🔄 Інша версія",
+
+  "plan_btn.no_pantry":       "🚀 Без списку — згенерувати",
+  "plan_btn.log_entry":       "➕ {emoji} {name} · {kcal} {kcal_unit}",
+  "plan_btn.day_back":        "← День {n}",
+  "plan_btn.day_forward":     "День {n} →",
+
+  "menu_btn.log_entry":       "➕ {name} · {kcal} {kcal_unit}",
+
+  "alternates.candidate":     "{digit} {name} ({kcal} {kcal_unit})",
+
+  "water_btn.undo_last":      "↩️ Відкотити останнє",
+  "water_btn.goal":           "🎯 Ціль",
+  "water_btn.goal_1_5_l":     "1.5 л",
+  "water_btn.goal_2_0_l":     "2.0 л",
+  "water_btn.goal_2_5_l":     "2.5 л",
+  "water_btn.goal_3_0_l":     "3.0 л",
+  "water_btn.custom":         "✏️ Своє значення",
+  "water_btn.back":           "⬅️ Назад",
+
+  "profile_edit.weight":         "⚖️ Змінити вагу",
+  "profile_edit.goal":           "🎯 Змінити мету",
+  "profile_edit.target_weight":  "🏁 Цільова вага",
+  "profile_edit.weekly_delta":   "📈 Тижнева ціль",
+  "profile_edit.water_goal":     "💧 Ціль води",
+  "profile_edit.restart":        "✏️ Все спочатку",
+
+  "goals_edit.set_target":     "🏁 Поставити ціль",
+  "goals_edit.change_target":  "🏁 Змінити ціль",
+  "goals_edit.set_pace":       "📈 Поставити темп",
+  "goals_edit.change_pace":    "📈 Змінити темп",
+  "goals_edit.log_weight":     "⚖️ Записати вагу",
+
+  "health_menu.allergens":   "🥜 Алергени",
+  "health_menu.conditions":  "🩺 Хронічні стани",
+  "health_menu.clear":       "🧹 Очистити все",
+
+  "recent_meals.entry":      "🔁 {desc} · {cal} {kcal_unit}"
 }

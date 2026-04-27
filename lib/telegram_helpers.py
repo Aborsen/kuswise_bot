@@ -178,50 +178,50 @@ def get_file_bytes(file_id: str) -> bytes:
     return resp.content
 
 
-def meal_type_keyboard() -> dict:
+def meal_type_keyboard(locale: str = "en") -> dict:
     return {
         "inline_keyboard": [
             [
-                {"text": "🍳 Сніданок", "callback_data": "meal_type:breakfast"},
-                {"text": "🥗 Обід", "callback_data": "meal_type:lunch"},
+                {"text": _i18n_t("meal_type.breakfast_btn", locale=locale), "callback_data": "meal_type:breakfast"},
+                {"text": _i18n_t("meal_type.lunch_btn",     locale=locale), "callback_data": "meal_type:lunch"},
             ],
             [
-                {"text": "🍽️ Вечеря", "callback_data": "meal_type:dinner"},
-                {"text": "🍎 Перекус", "callback_data": "meal_type:snack"},
+                {"text": _i18n_t("meal_type.dinner_btn",    locale=locale), "callback_data": "meal_type:dinner"},
+                {"text": _i18n_t("meal_type.snack_btn",     locale=locale), "callback_data": "meal_type:snack"},
             ],
             [
-                {"text": "❌ Скасувати", "callback_data": "meal_type:cancel"},
+                {"text": _i18n_t("inline_button.cancel",    locale=locale), "callback_data": "meal_type:cancel"},
             ],
         ]
     }
 
 
-def moderation_keyboard() -> dict:
+def moderation_keyboard(locale: str = "en") -> dict:
     return {
         "inline_keyboard": [
             [
-                {"text": "✅ Прийняти", "callback_data": "mod:accept"},
-                {"text": "🔄 Перерахувати", "callback_data": "mod:recalc"},
+                {"text": _i18n_t("inline_button.accept",       locale=locale), "callback_data": "mod:accept"},
+                {"text": _i18n_t("inline_button.recalc",       locale=locale), "callback_data": "mod:recalc"},
             ],
             [
-                {"text": "✏️ Ввести вручну", "callback_data": "mod:manual"},
+                {"text": _i18n_t("inline_button.manual_entry", locale=locale), "callback_data": "mod:manual"},
             ],
             [
-                {"text": "❌ Скасувати", "callback_data": "mod:cancel"},
+                {"text": _i18n_t("inline_button.cancel",       locale=locale), "callback_data": "mod:cancel"},
             ],
         ]
     }
 
 
-def cancel_only_keyboard() -> dict:
+def cancel_only_keyboard(locale: str = "en") -> dict:
     return {
         "inline_keyboard": [
-            [{"text": "❌ Скасувати", "callback_data": "mod:cancel"}],
+            [{"text": _i18n_t("inline_button.cancel", locale=locale), "callback_data": "mod:cancel"}],
         ]
     }
 
 
-def suggest_followup_keyboard() -> dict:
+def suggest_followup_keyboard(locale: str = "en") -> dict:
     """F-11: shown under each /suggest_meal result.
 
     Lets the user re-run with their own ingredients ("fridge mode") or
@@ -231,28 +231,29 @@ def suggest_followup_keyboard() -> dict:
     """
     return {
         "inline_keyboard": [
-            [{"text": "🛒 З моїх продуктів", "callback_data": "suggest:fridge"}],
-            [{"text": "🔄 Інша версія",      "callback_data": "suggest:variation"}],
+            [{"text": _i18n_t("suggest.from_my_pantry",   locale=locale), "callback_data": "suggest:fridge"}],
+            [{"text": _i18n_t("suggest.different_version", locale=locale), "callback_data": "suggest:variation"}],
         ]
     }
 
 
-def plan_pantry_keyboard() -> dict:
+def plan_pantry_keyboard(locale: str = "en") -> dict:
     """F-10: shown after /plan — let user proceed without typing pantry items."""
     return {
         "inline_keyboard": [
-            [{"text": "🚀 Без списку — згенерувати", "callback_data": "plan:nopantry"}],
-            [{"text": "❌ Скасувати",                 "callback_data": "plan:cancel"}],
+            [{"text": _i18n_t("plan_btn.no_pantry",   locale=locale), "callback_data": "plan:nopantry"}],
+            [{"text": _i18n_t("inline_button.cancel", locale=locale), "callback_data": "plan:cancel"}],
         ]
     }
 
 
-def plan_day_keyboard(plan_id: int, day_idx: int, day: dict) -> dict:
+def plan_day_keyboard(plan_id: int, day_idx: int, day: dict, locale: str = "en") -> dict:
     """F-10: per-day inline buttons — one Log button per slot + day navigator.
 
     Slot buttons fit Telegram's ~64-char limit by trimming the dish name
     and appending kcal. Callback data: ``plan:log:<plan_id>:<day_idx>:<slot>``.
     """
+    kcal_unit = _i18n_t("macro.calories_short", locale=locale)
     emoji = {"breakfast": "🥣", "lunch": "🍱", "dinner": "🍽️", "snack": "🍎"}
     rows = []
     for slot_key in ("breakfast", "lunch", "dinner", "snack"):
@@ -262,37 +263,38 @@ def plan_day_keyboard(plan_id: int, day_idx: int, day: dict) -> dict:
         kcal = int(round(float(slot.get("calories") or 0)))
         name = (slot.get("name") or "")[:28]
         rows.append([{
-            "text": f"➕ {emoji[slot_key]} {name} · {kcal} ккал",
+            "text": _i18n_t("plan_btn.log_entry", locale=locale, emoji=emoji[slot_key], name=name, kcal=kcal, kcal_unit=kcal_unit),
             "callback_data": f"plan:log:{plan_id}:{day_idx}:{slot_key}",
         }])
     nav_row = []
     if day_idx > 0:
-        nav_row.append({"text": "← День " + str(day_idx),
+        nav_row.append({"text": _i18n_t("plan_btn.day_back", locale=locale, n=day_idx),
                         "callback_data": f"plan:view:{plan_id}:{day_idx - 1}"})
     if day_idx < 2:
-        nav_row.append({"text": "День " + str(day_idx + 2) + " →",
+        nav_row.append({"text": _i18n_t("plan_btn.day_forward", locale=locale, n=day_idx + 2),
                         "callback_data": f"plan:view:{plan_id}:{day_idx + 1}"})
     if nav_row:
         rows.append(nav_row)
-    rows.append([{"text": "❌ Закрити", "callback_data": "plan:cancel"}])
+    rows.append([{"text": _i18n_t("inline_button.close", locale=locale), "callback_data": "plan:cancel"}])
     return {"inline_keyboard": rows}
 
 
-def menu_log_keyboard(dishes: list[dict]) -> dict:
+def menu_log_keyboard(dishes: list[dict], locale: str = "en") -> dict:
     """F-9: one button per OCR'd dish that triggers the standard log flow.
 
     Telegram inline-button labels are limited to ~64 chars. We trim each
     name and append the kcal so the user can compare at a glance.
     """
+    kcal_unit = _i18n_t("macro.calories_short", locale=locale)
     rows = []
     for i, d in enumerate(dishes[:25]):
         name = (d.get("name") or "")[:32]
         kcal = int(round(float(d.get("calories") or 0)))
         rows.append([{
-            "text": f"➕ {name} · {kcal} ккал",
+            "text": _i18n_t("menu_btn.log_entry", locale=locale, name=name, kcal=kcal, kcal_unit=kcal_unit),
             "callback_data": f"menu:log:{i}",
         }])
-    rows.append([{"text": "❌ Закрити меню", "callback_data": "menu:cancel"}])
+    rows.append([{"text": _i18n_t("inline_button.close_menu", locale=locale), "callback_data": "menu:cancel"}])
     return {"inline_keyboard": rows}
 
 
@@ -317,34 +319,35 @@ def scanner_inline_keyboard(locale: str = "en") -> dict:
     }
 
 
-def alternates_keyboard(candidates: list[dict]) -> dict:
+def alternates_keyboard(candidates: list[dict], locale: str = "en") -> dict:
     """F-6: 1-3 numbered candidate buttons + manual + cancel.
 
     Each button label fits Telegram's ~64-char inline-button limit; we trim
     long candidate names. Callback data is ``pick:0/1/2``.
     """
     digits = ("1⃣", "2⃣", "3⃣")  # 1️⃣ 2️⃣ 3️⃣
+    kcal_unit = _i18n_t("macro.calories_short", locale=locale)
     rows = []
     for i, cand in enumerate(candidates[:3]):
         name = (cand.get("name") or "")[:32]
         kcal = int(round(float(cand.get("calories") or 0)))
         rows.append([{
-            "text": f"{digits[i]} {name} ({kcal} ккал)",
+            "text": _i18n_t("alternates.candidate", locale=locale, digit=digits[i], name=name, kcal=kcal, kcal_unit=kcal_unit),
             "callback_data": f"pick:{i}",
         }])
-    rows.append([{"text": "✏️ Ввести вручну", "callback_data": "mod:manual"}])
-    rows.append([{"text": "❌ Скасувати",     "callback_data": "mod:cancel"}])
+    rows.append([{"text": _i18n_t("inline_button.manual_entry", locale=locale), "callback_data": "mod:manual"}])
+    rows.append([{"text": _i18n_t("inline_button.cancel",       locale=locale), "callback_data": "mod:cancel"}])
     return {"inline_keyboard": rows}
 
 
-def meals_list_keyboard(meals: list[dict]) -> dict:
+def meals_list_keyboard(meals: list[dict], locale: str = "en") -> dict:
     """Build inline keyboard with Delete/Edit buttons for each meal."""
     rows = []
     for i, m in enumerate(meals, 1):
         meal_id = m["id"]
         rows.append([
-            {"text": f"🗑 Видалити {i}", "callback_data": f"meal_del:{meal_id}"},
-            {"text": f"✏️ Змінити {i}", "callback_data": f"meal_edit:{meal_id}"},
+            {"text": _i18n_t("inline_button.delete_n", locale=locale, n=i), "callback_data": f"meal_del:{meal_id}"},
+            {"text": _i18n_t("inline_button.edit_n",   locale=locale, n=i), "callback_data": f"meal_edit:{meal_id}"},
         ])
     return {"inline_keyboard": rows}
 
@@ -384,14 +387,15 @@ def _truncate(text: str, n: int = 34) -> str:
     return text[:n - 1] + "…"
 
 
-def recent_meals_keyboard(meals: list[dict], variant: str = "recent") -> dict:
+def recent_meals_keyboard(meals: list[dict], variant: str = "recent", locale: str = "en") -> dict:
     """Inline keyboard: one row per meal with re-log + (for favorites) unstar button."""
+    kcal_unit = _i18n_t("macro.calories_short", locale=locale)
     rows = []
     for m in meals:
         mid = m["id"]
         desc = _truncate(m.get("description") or "—", 28)
         cal = round(m.get("calories") or 0)
-        label = f"🔁 {desc} · {cal} ккал"
+        label = _i18n_t("recent_meals.entry", locale=locale, desc=desc, cal=cal, kcal_unit=kcal_unit)
         row = [{"text": label, "callback_data": f"relog:{mid}"}]
         if variant == "fav":
             row.append({"text": "✖", "callback_data": f"fav:{mid}:0"})
@@ -401,29 +405,30 @@ def recent_meals_keyboard(meals: list[dict], variant: str = "recent") -> dict:
     return {"inline_keyboard": rows}
 
 
-def meal_logged_actions_keyboard(meal_id: int, is_fav: bool = False) -> dict:
-    star = {"text": "✅ В улюблених", "callback_data": f"fav:{meal_id}:0"} if is_fav \
-        else {"text": "⭐ В улюблені", "callback_data": f"fav:{meal_id}:1"}
+def meal_logged_actions_keyboard(meal_id: int, is_fav: bool = False, locale: str = "en") -> dict:
+    star_key = "inline_button.fav_added" if is_fav else "inline_button.fav_add"
+    fav_value = 0 if is_fav else 1
+    star = {"text": _i18n_t(star_key, locale=locale), "callback_data": f"fav:{meal_id}:{fav_value}"}
     return {
         "inline_keyboard": [
             [star,
-             {"text": "✏️ Виправити", "callback_data": f"meal_edit:{meal_id}"},
-             {"text": "🗑 Скасувати", "callback_data": f"meal_del:{meal_id}"}],
+             {"text": _i18n_t("inline_button.edit",   locale=locale), "callback_data": f"meal_edit:{meal_id}"},
+             {"text": _i18n_t("inline_button.delete", locale=locale), "callback_data": f"meal_del:{meal_id}"}],
         ]
     }
 
 
-def undo_relog_keyboard(meal_id: int) -> dict:
+def undo_relog_keyboard(meal_id: int, locale: str = "en") -> dict:
     return {
         "inline_keyboard": [
-            [{"text": "↩️ Скасувати", "callback_data": f"undo:{meal_id}"}],
+            [{"text": _i18n_t("inline_button.undo", locale=locale), "callback_data": f"undo:{meal_id}"}],
         ]
     }
 
 
 # --- Water ---
 
-def water_keyboard() -> dict:
+def water_keyboard(locale: str = "en") -> dict:
     return {
         "inline_keyboard": [
             [
@@ -434,24 +439,24 @@ def water_keyboard() -> dict:
                 {"text": "+750", "callback_data": "water:add:750"},
             ],
             [
-                {"text": "↩️ Відкотити останнє", "callback_data": "water:undo"},
-                {"text": "🎯 Ціль", "callback_data": "water:goal"},
+                {"text": _i18n_t("water_btn.undo_last", locale=locale), "callback_data": "water:undo"},
+                {"text": _i18n_t("water_btn.goal",      locale=locale), "callback_data": "water:goal"},
             ],
         ]
     }
 
 
-def water_goal_keyboard(back_action: str = "water:back") -> dict:
+def water_goal_keyboard(back_action: str = "water:back", locale: str = "en") -> dict:
     return {
         "inline_keyboard": [
             [
-                {"text": "1.5 л", "callback_data": "water:goal:set:1500"},
-                {"text": "2.0 л", "callback_data": "water:goal:set:2000"},
-                {"text": "2.5 л", "callback_data": "water:goal:set:2500"},
-                {"text": "3.0 л", "callback_data": "water:goal:set:3000"},
+                {"text": _i18n_t("water_btn.goal_1_5_l", locale=locale), "callback_data": "water:goal:set:1500"},
+                {"text": _i18n_t("water_btn.goal_2_0_l", locale=locale), "callback_data": "water:goal:set:2000"},
+                {"text": _i18n_t("water_btn.goal_2_5_l", locale=locale), "callback_data": "water:goal:set:2500"},
+                {"text": _i18n_t("water_btn.goal_3_0_l", locale=locale), "callback_data": "water:goal:set:3000"},
             ],
-            [{"text": "✏️ Своє значення", "callback_data": "prof:water:custom"}],
-            [{"text": "⬅️ Назад", "callback_data": back_action}],
+            [{"text": _i18n_t("water_btn.custom", locale=locale), "callback_data": "prof:water:custom"}],
+            [{"text": _i18n_t("water_btn.back",   locale=locale), "callback_data": back_action}],
         ]
     }
 
@@ -493,11 +498,11 @@ def goal_keyboard(locale: str = "en") -> dict:
     }
 
 
-def confirm_calories_keyboard() -> dict:
+def confirm_calories_keyboard(locale: str = "en") -> dict:
     return {
         "inline_keyboard": [
-            [{"text": "✅ Прийняти цю цифру", "callback_data": "onb:cal:accept"}],
-            [{"text": "✏️ Ввести свою", "callback_data": "onb:cal:custom"}],
+            [{"text": _i18n_t("confirm_calories.accept", locale=locale), "callback_data": "onb:cal:accept"}],
+            [{"text": _i18n_t("confirm_calories.custom", locale=locale), "callback_data": "onb:cal:custom"}],
         ]
     }
 
@@ -537,13 +542,13 @@ def lang_confirm_keyboard(detected: str) -> dict:
     }
 
 
-def health_menu_keyboard() -> dict:
+def health_menu_keyboard(locale: str = "en") -> dict:
     """Top-level /health menu (F-1)."""
     return {
         "inline_keyboard": [
-            [{"text": "🥜 Алергени",        "callback_data": "h:set:allergens"}],
-            [{"text": "🩺 Хронічні стани",  "callback_data": "h:set:conditions"}],
-            [{"text": "🧹 Очистити все",    "callback_data": "h:clear"}],
+            [{"text": _i18n_t("health_menu.allergens",  locale=locale), "callback_data": "h:set:allergens"}],
+            [{"text": _i18n_t("health_menu.conditions", locale=locale), "callback_data": "h:set:conditions"}],
+            [{"text": _i18n_t("health_menu.clear",      locale=locale), "callback_data": "h:clear"}],
         ]
     }
 
@@ -573,30 +578,30 @@ def tz_keyboard(prefix: str = "tz:set", locale: str = "en") -> dict:
     }
 
 
-def profile_edit_keyboard() -> dict:
+def profile_edit_keyboard(locale: str = "en") -> dict:
     """Quick-edit actions shown under the /profile message."""
     return {
         "inline_keyboard": [
             [
-                {"text": "⚖️ Змінити вагу", "callback_data": "prof:weight"},
-                {"text": "🎯 Змінити мету", "callback_data": "prof:goal"},
+                {"text": _i18n_t("profile_edit.weight", locale=locale), "callback_data": "prof:weight"},
+                {"text": _i18n_t("profile_edit.goal",   locale=locale), "callback_data": "prof:goal"},
             ],
             [
-                {"text": "🏁 Цільова вага", "callback_data": "prof:target_weight"},
-                {"text": "📈 Тижнева ціль", "callback_data": "prof:weekly_delta"},
+                {"text": _i18n_t("profile_edit.target_weight", locale=locale), "callback_data": "prof:target_weight"},
+                {"text": _i18n_t("profile_edit.weekly_delta",  locale=locale), "callback_data": "prof:weekly_delta"},
             ],
             [
-                {"text": "💧 Ціль води", "callback_data": "prof:water"},
-                {"text": "✏️ Все спочатку", "callback_data": "onb:restart"},
+                {"text": _i18n_t("profile_edit.water_goal", locale=locale), "callback_data": "prof:water"},
+                {"text": _i18n_t("profile_edit.restart",    locale=locale), "callback_data": "onb:restart"},
             ],
         ]
     }
 
 
-def goals_edit_keyboard(has_target: bool, has_delta: bool) -> dict:
+def goals_edit_keyboard(has_target: bool, has_delta: bool, locale: str = "en") -> dict:
     """Inline edit buttons shown under the /goals message."""
-    target_label = "🏁 Змінити ціль" if has_target else "🏁 Поставити ціль"
-    delta_label  = "📈 Змінити темп"  if has_delta  else "📈 Поставити темп"
+    target_label = _i18n_t("goals_edit.change_target" if has_target else "goals_edit.set_target", locale=locale)
+    delta_label  = _i18n_t("goals_edit.change_pace"   if has_delta  else "goals_edit.set_pace",   locale=locale)
     return {
         "inline_keyboard": [
             [
@@ -604,19 +609,23 @@ def goals_edit_keyboard(has_target: bool, has_delta: bool) -> dict:
                 {"text": delta_label,  "callback_data": "prof:weekly_delta"},
             ],
             [
-                {"text": "⚖️ Записати вагу", "callback_data": "prof:weight"},
+                {"text": _i18n_t("goals_edit.log_weight", locale=locale), "callback_data": "prof:weight"},
             ],
         ]
     }
 
 
-def profile_goal_keyboard() -> dict:
-    """Inline goal picker used by the /profile → 🎯 Змінити мету flow."""
+def profile_goal_keyboard(locale: str = "en") -> dict:
+    """Inline goal picker used by the /profile → Edit goal flow.
+
+    Reuses the goal_keyboard.* keys (lose/maintain/gain) but with a different
+    callback prefix (`prof:goal:` vs onboarding's `onb:goal:`).
+    """
     return {
         "inline_keyboard": [
-            [{"text": "🔥 Схуднути",           "callback_data": "prof:goal:lose"}],
-            [{"text": "⚖️ Підтримувати вагу",  "callback_data": "prof:goal:maintain"}],
-            [{"text": "💪 Набрати м'язи",      "callback_data": "prof:goal:gain"}],
+            [{"text": _i18n_t("goal_keyboard.lose",     locale=locale), "callback_data": "prof:goal:lose"}],
+            [{"text": _i18n_t("goal_keyboard.maintain", locale=locale), "callback_data": "prof:goal:maintain"}],
+            [{"text": _i18n_t("goal_keyboard.gain",     locale=locale), "callback_data": "prof:goal:gain"}],
         ]
     }
 

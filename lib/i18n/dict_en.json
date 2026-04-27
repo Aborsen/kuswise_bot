@@ -376,5 +376,66 @@
 
   "meal_plan.day_today":    "Today",
   "meal_plan.day_tomorrow": "Tomorrow",
-  "meal_plan.day_3":        "Day 3"
+  "meal_plan.day_3":        "Day 3",
+
+  "inline_button.accept":         "✅ Accept",
+  "inline_button.recalc":         "🔄 Recalculate",
+  "inline_button.manual_entry":   "✏️ Enter manually",
+  "inline_button.close":          "❌ Close",
+  "inline_button.close_menu":     "❌ Close menu",
+  "inline_button.delete_n":       "🗑 Delete {n}",
+  "inline_button.edit_n":         "✏️ Edit {n}",
+  "inline_button.delete":         "🗑 Delete",
+  "inline_button.edit":           "✏️ Edit",
+  "inline_button.fav_added":      "✅ In favorites",
+  "inline_button.fav_add":        "⭐ Add favorite",
+  "inline_button.undo":           "↩️ Undo",
+
+  "meal_type.breakfast_btn":  "🍳 Breakfast",
+  "meal_type.lunch_btn":      "🥗 Lunch",
+  "meal_type.dinner_btn":     "🍽️ Dinner",
+  "meal_type.snack_btn":      "🍎 Snack",
+
+  "confirm_calories.accept":  "✅ Accept this number",
+  "confirm_calories.custom":  "✏️ Enter my own",
+
+  "suggest.from_my_pantry":   "🛒 From my pantry",
+  "suggest.different_version":"🔄 Different version",
+
+  "plan_btn.no_pantry":       "🚀 Skip list — generate",
+  "plan_btn.log_entry":       "➕ {emoji} {name} · {kcal} {kcal_unit}",
+  "plan_btn.day_back":        "← Day {n}",
+  "plan_btn.day_forward":     "Day {n} →",
+
+  "menu_btn.log_entry":       "➕ {name} · {kcal} {kcal_unit}",
+
+  "alternates.candidate":     "{digit} {name} ({kcal} {kcal_unit})",
+
+  "water_btn.undo_last":      "↩️ Undo last",
+  "water_btn.goal":           "🎯 Goal",
+  "water_btn.goal_1_5_l":     "1.5 L",
+  "water_btn.goal_2_0_l":     "2.0 L",
+  "water_btn.goal_2_5_l":     "2.5 L",
+  "water_btn.goal_3_0_l":     "3.0 L",
+  "water_btn.custom":         "✏️ Custom value",
+  "water_btn.back":           "⬅️ Back",
+
+  "profile_edit.weight":         "⚖️ Edit weight",
+  "profile_edit.goal":           "🎯 Edit goal",
+  "profile_edit.target_weight":  "🏁 Target weight",
+  "profile_edit.weekly_delta":   "📈 Weekly goal",
+  "profile_edit.water_goal":     "💧 Water goal",
+  "profile_edit.restart":        "✏️ Start over",
+
+  "goals_edit.set_target":     "🏁 Set target",
+  "goals_edit.change_target":  "🏁 Change target",
+  "goals_edit.set_pace":       "📈 Set pace",
+  "goals_edit.change_pace":    "📈 Change pace",
+  "goals_edit.log_weight":     "⚖️ Log weight",
+
+  "health_menu.allergens":   "🥜 Allergens",
+  "health_menu.conditions":  "🩺 Conditions",
+  "health_menu.clear":       "🧹 Clear all",
+
+  "recent_meals.entry":      "🔁 {desc} · {cal} {kcal_unit}"
 }

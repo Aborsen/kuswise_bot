@@ -299,5 +299,20 @@
   "recommendation.goal":       "Goal: <b>{value}</b>",
   "recommendation.daily_norm": "🔥 Recommended daily target: <b>{cal} kcal</b>",
   "recommendation.macros":     "🥩 Protein: <b>{p}g</b> · 🍚 Carbs: <b>{c}g</b> · 🧈 Fat: <b>{f}g</b>",
-  "recommendation.footer":     "Calculated using grams of protein/fat/carbs per kg of body weight matched to your goal. Accept it — or enter your own. 👇"
+  "recommendation.footer":     "Calculated using grams of protein/fat/carbs per kg of body weight matched to your goal. Accept it — or enter your own. 👇",
+
+  "barcode.not_found_404":    "Couldn't find this barcode.",
+  "barcode.daily_limit":      "Daily limit reached",
+  "barcode.portion_label":    "📦 Portion: {grams}g",
+  "barcode.portion_50g":      "50g",
+  "barcode.portion_100g":     "100g",
+  "barcode.portion_150g":     "150g",
+  "barcode.portion_200g":     "200g",
+  "barcode.portion_custom":   "✏️ Custom amount",
+
+  "rate_limit.daily_quota_hit": "⏳ Daily limit hit for this action. Try again tomorrow — limits reset at midnight (Kyiv).",
+
+  "off.description_template": "{name} ({grams}g)",
+  "off.portion_template":     "{grams}g",
+  "off.scanner_source":       "Barcode scanner · {ean}"
 }

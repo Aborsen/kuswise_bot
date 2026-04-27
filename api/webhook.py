@@ -1628,7 +1628,7 @@ def _save_barcode_meal(
         "per_100g":       pseudo.get("per_100g", {}) or {},
         "serving_size_g": pseudo.get("serving_size_g"),
     }
-    analysis = off_mod.product_to_analysis(product, grams)
+    analysis = off_mod.product_to_analysis(product, grams, locale=i18n_mod.locale_of(profile))
 
     meal_id = save_meal(
         conn, user_id, pending["meal_type"], analysis,
@@ -2124,7 +2124,7 @@ def handle_suggest_callback(conn, cb: dict, profile: dict) -> None:
     answer_callback_query(cb_id, "Невідома дія")
 
 
-def _portion_keyboard_for_product(product: dict) -> dict:
+def _portion_keyboard_for_product(product: dict, locale: str = "en") -> dict:
     """Inline keyboard mirroring api/barcode.py's portion picker.
 
     Kept here (not in lib/telegram_helpers.py) to avoid bloating that
@@ -2134,17 +2134,17 @@ def _portion_keyboard_for_product(product: dict) -> dict:
     rows = []
     if serving and 5 <= serving <= 5000:
         rows.append([{
-            "text": f"📦 Порція: {int(serving)}г",
+            "text": i18n_mod.t("barcode.portion_label", locale=locale, grams=int(serving)),
             "callback_data": f"barcode:g:{int(serving)}",
         }])
     rows.append([
-        {"text": "50г",  "callback_data": "barcode:g:50"},
-        {"text": "100г", "callback_data": "barcode:g:100"},
-        {"text": "150г", "callback_data": "barcode:g:150"},
-        {"text": "200г", "callback_data": "barcode:g:200"},
+        {"text": i18n_mod.t("barcode.portion_50g",  locale=locale), "callback_data": "barcode:g:50"},
+        {"text": i18n_mod.t("barcode.portion_100g", locale=locale), "callback_data": "barcode:g:100"},
+        {"text": i18n_mod.t("barcode.portion_150g", locale=locale), "callback_data": "barcode:g:150"},
+        {"text": i18n_mod.t("barcode.portion_200g", locale=locale), "callback_data": "barcode:g:200"},
     ])
-    rows.append([{"text": "✏️ Інша кількість", "callback_data": "barcode:g:custom"}])
-    rows.append([{"text": "❌ Скасувати",       "callback_data": "barcode:cancel"}])
+    rows.append([{"text": i18n_mod.t("barcode.portion_custom", locale=locale), "callback_data": "barcode:g:custom"}])
+    rows.append([{"text": i18n_mod.t("inline_button.cancel",   locale=locale), "callback_data": "barcode:cancel"}])
     return {"inline_keyboard": rows}
 
 
@@ -2225,7 +2225,7 @@ def handle_barcode_manual_input(
             f=int(round(product["per_100g"]["fat_g"])),
             c=int(round(product["per_100g"]["carbs_g"])),
         ),
-        reply_markup=_portion_keyboard_for_product(product),
+        reply_markup=_portion_keyboard_for_product(product, locale=i18n_mod.locale_of(profile)),
     )
 
 

@@ -180,8 +180,8 @@ def test_rate_limit_blocks_after_quota(monkeypatch):
 
 
 def test_rate_limit_message_uk_and_en():
-    assert "Денний ліміт" in rl.limit_reached_message("ask", lang="uk")
-    assert "Daily limit" in rl.limit_reached_message("ask", lang="en")
+    assert "Денний ліміт" in rl.limit_reached_message("ask", locale="uk")
+    assert "Daily limit" in rl.limit_reached_message("ask", locale="en")
 
 
 # ---------- per-user timezone helpers (lib.datehelpers, F-3) ----------
@@ -1259,13 +1259,17 @@ def test_product_to_analysis_yields_save_meal_shape():
                      "fat_g": 0, "fiber_g": 0, "sugar_g": 10.6},
         "serving_size_g": 330,
     }
-    a = off_mod.product_to_analysis(product, 330)
+    a = off_mod.product_to_analysis(product, 330, locale="uk")
     # Brand prepended once, name not duplicated.
     assert "Coca-Cola" in a["dish_name"]
     assert a["nutrition"]["calories"] == 138.6  # 42 * 3.3
     assert a["estimated_portion"] == "330г"
     assert a["_source"]["kind"] == "barcode"
     assert a["_source"]["ean"] == "5449000000996"
+    # EN locale flips both unit and source label.
+    en = off_mod.product_to_analysis(product, 330, locale="en")
+    assert en["estimated_portion"] == "330g"
+    assert "Barcode scanner" in en["portion_reasoning"]
 
 
 # ---------- F-8 manual-EAN entry validation ----------

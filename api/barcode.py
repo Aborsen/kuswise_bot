@@ -58,8 +58,15 @@ _QUOTA_KIND = "meal_analysis"
 _QUOTA_LIMIT_PER_DAY = 50  # mirrors LIMIT_PHOTO_PER_DAY default
 
 _RESPONSE_OK    = {"ok": True}
-_RESPONSE_404   = {"ok": False, "error": "Не знайшов цей штрих-код у базі."}
 _RESPONSE_ERROR = {"ok": False, "error": "Internal error"}
+
+
+def _response_404(locale: str = "en") -> dict:
+    return {"ok": False, "code": "not_found", "error": _i18n_t("barcode.not_found_404", locale=locale)}
+
+
+def _response_daily_limit(locale: str = "en") -> dict:
+    return {"ok": False, "code": "daily_limit", "error": _i18n_t("barcode.daily_limit", locale=locale)}
 
 
 def _meal_type_by_local_hour(profile: dict | None) -> str:
@@ -79,7 +86,7 @@ def _meal_type_by_local_hour(profile: dict | None) -> str:
     return "snack"
 
 
-def _portion_keyboard(serving_size_g: int | None) -> dict:
+def _portion_keyboard(serving_size_g: int | None, locale: str = "en") -> dict:
     """Inline keyboard for picking the portion grams of a scanned product.
 
     If the OFF product reports a serving size, surface it as an extra
@@ -88,17 +95,17 @@ def _portion_keyboard(serving_size_g: int | None) -> dict:
     rows = []
     if serving_size_g and 5 <= serving_size_g <= 5000:
         rows.append([{
-            "text": f"📦 Порція: {int(serving_size_g)}г",
+            "text": _i18n_t("barcode.portion_label", locale=locale, grams=int(serving_size_g)),
             "callback_data": f"barcode:g:{int(serving_size_g)}",
         }])
     rows.append([
-        {"text": "50г",  "callback_data": "barcode:g:50"},
-        {"text": "100г", "callback_data": "barcode:g:100"},
-        {"text": "150г", "callback_data": "barcode:g:150"},
-        {"text": "200г", "callback_data": "barcode:g:200"},
+        {"text": _i18n_t("barcode.portion_50g",  locale=locale), "callback_data": "barcode:g:50"},
+        {"text": _i18n_t("barcode.portion_100g", locale=locale), "callback_data": "barcode:g:100"},
+        {"text": _i18n_t("barcode.portion_150g", locale=locale), "callback_data": "barcode:g:150"},
+        {"text": _i18n_t("barcode.portion_200g", locale=locale), "callback_data": "barcode:g:200"},
     ])
-    rows.append([{"text": "✏️ Інша кількість", "callback_data": "barcode:g:custom"}])
-    rows.append([{"text": "❌ Скасувати",       "callback_data": "barcode:cancel"}])
+    rows.append([{"text": _i18n_t("barcode.portion_custom", locale=locale), "callback_data": "barcode:g:custom"}])
+    rows.append([{"text": _i18n_t("inline_button.cancel",   locale=locale), "callback_data": "barcode:cancel"}])
     return {"inline_keyboard": rows}
 
 
@@ -153,10 +160,11 @@ class handler(BaseHTTPRequestHandler):
 
             # Quota check — barcode lookups are cheap but a flood is still
             # spam. Bucket alongside photo analysis at 50/day.
+            locale = _i18n_locale_of(profile)
             try:
                 used = consume_quota(conn, user_id, _QUOTA_KIND)
                 if used > _QUOTA_LIMIT_PER_DAY:
-                    self._respond(429, {"ok": False, "error": "Денний ліміт"})
+                    self._respond(429, _response_daily_limit(locale))
                     return
             except Exception as qx:
                 error("barcode_quota_failed", exc=qx, user_id=user_id)
@@ -165,14 +173,14 @@ class handler(BaseHTTPRequestHandler):
                 product = lookup_product(ean)
             except Exception as ox:
                 error("off_lookup_failed", exc=ox, ean=ean)
-                send_message(chat_id, _i18n_t("barcode.lookup_failed", locale=_i18n_locale_of(profile)))
+                send_message(chat_id, _i18n_t("barcode.lookup_failed", locale=locale))
                 self._respond(502, _RESPONSE_ERROR)
                 return
 
             if product is None:
                 info("barcode_not_found", ean=ean, user_id=user_id)
-                send_message(chat_id, _i18n_t("barcode.not_found", locale=_i18n_locale_of(profile), ean=ean))
-                self._respond(404, _RESPONSE_404)
+                send_message(chat_id, _i18n_t("barcode.not_found", locale=locale, ean=ean))
+                self._respond(404, _response_404(locale))
                 return
 
             # Stash the per-100g product so the portion picker callback can
@@ -206,7 +214,7 @@ class handler(BaseHTTPRequestHandler):
                 chat_id,
                 _i18n_t(
                     "barcode.found_header",
-                    locale=_i18n_locale_of(profile),
+                    locale=locale,
                     name=product["name"],
                     brand=product["brand"] or "—",
                     kcal=int(round(product["per_100g"]["calories"])),
@@ -214,7 +222,7 @@ class handler(BaseHTTPRequestHandler):
                     f=int(round(product["per_100g"]["fat_g"])),
                     c=int(round(product["per_100g"]["carbs_g"])),
                 ),
-                reply_markup=_portion_keyboard(product["serving_size_g"]),
+                reply_markup=_portion_keyboard(product["serving_size_g"], locale=locale),
             )
             self._respond(200, _RESPONSE_OK)
         finally:

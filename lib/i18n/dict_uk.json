@@ -299,5 +299,20 @@
   "recommendation.goal":       "Мета: <b>{value}</b>",
   "recommendation.daily_norm": "🔥 Рекомендована денна норма: <b>{cal} ккал</b>",
   "recommendation.macros":     "🥩 Білки: <b>{p}г</b> · 🍚 Вуглеводи: <b>{c}г</b> · 🧈 Жири: <b>{f}г</b>",
-  "recommendation.footer":     "Число порахував за нормою грамів білків/жирів/вуглеводів на кілограм ваги під твою мету. Можеш прийняти — або ввести своє. 👇"
+  "recommendation.footer":     "Число порахував за нормою грамів білків/жирів/вуглеводів на кілограм ваги під твою мету. Можеш прийняти — або ввести своє. 👇",
+
+  "barcode.not_found_404":    "Не знайшов цей штрих-код у базі.",
+  "barcode.daily_limit":      "Денний ліміт",
+  "barcode.portion_label":    "📦 Порція: {grams}г",
+  "barcode.portion_50g":      "50г",
+  "barcode.portion_100g":     "100г",
+  "barcode.portion_150g":     "150г",
+  "barcode.portion_200g":     "200г",
+  "barcode.portion_custom":   "✏️ Інша кількість",
+
+  "rate_limit.daily_quota_hit": "⏳ Денний ліміт цієї дії досягнуто. Спробуй завтра — ліміти оновлюються опівночі (Київ).",
+
+  "off.description_template": "{name} ({grams}г)",
+  "off.portion_template":     "{grams}г",
+  "off.scanner_source":       "Сканер штрих-коду · {ean}"
 }

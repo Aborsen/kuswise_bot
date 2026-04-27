@@ -97,19 +97,7 @@ def get_today_counters(conn, user_id: int) -> dict:
     return dict(zip(("photos", "asks", "ocr", "plans", "total_ai"), row))
 
 
-def limit_reached_message(kind: str = "photo", lang: str = "uk") -> str:
-    """User-facing throttle message.
-
-    Once F-2 (i18n) ships, ``lang`` will be plumbed from the user's profile.
-    Today the bot is UA-only, so we default to Ukrainian and accept "en"
-    for forward compatibility.
-    """
-    if lang == "en":
-        return (
-            "⏳ Daily limit reached for this action. "
-            "Try again tomorrow — limits reset at midnight (Kyiv)."
-        )
-    return (
-        "⏳ Денний ліміт цієї дії досягнуто. "
-        "Спробуй завтра — ліміти оновлюються опівночі (Київ)."
-    )
+def limit_reached_message(kind: str = "photo", locale: str = "en") -> str:
+    """User-facing throttle message. Reads from lib/i18n dictionaries."""
+    from lib.i18n import t
+    return t("rate_limit.daily_quota_hit", locale=locale)

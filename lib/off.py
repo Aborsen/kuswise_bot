@@ -126,7 +126,7 @@ def _parse_serving_size_grams(serving_size: str) -> Optional[float]:
     """
     if not serving_size:
         return None
-    m = re.search(r"(\d{1,4})\s*(?:g|г|грам)", serving_size.lower())
+    m = re.search(r"(\d{1,4})\s*(?:g|г|грам)", serving_size.lower())  # noqa: i18n
     if not m:
         return None
     try:
@@ -187,21 +187,23 @@ def macros_for_grams(per_100g: dict, grams: float) -> dict:
     }
 
 
-def product_to_analysis(product: dict, grams: float) -> dict:
+def product_to_analysis(product: dict, grams: float, locale: str = "en") -> dict:
     """Produce an analysis-shaped dict for a barcode meal at the chosen portion.
 
     Slots into the existing save_meal pipeline so post-meal flows (streaks,
     aliases, daily log) work unchanged.
     """
+    from lib.i18n import t as _t
     nutrition = macros_for_grams(product["per_100g"], grams)
     name = product["name"]
     if product.get("brand"):
         name = f"{product['brand']} {name}".strip()
+    g = int(round(grams))
     return {
         "dish_name":         name,
-        "description":       f"{name} ({int(round(grams))}г)",
-        "estimated_portion": f"{int(round(grams))}г",
-        "portion_reasoning": f"Сканер штрих-коду · {product['ean']}",
+        "description":       _t("off.description_template", locale=locale, name=name, grams=g),
+        "estimated_portion": _t("off.portion_template", locale=locale, grams=g),
+        "portion_reasoning": _t("off.scanner_source", locale=locale, ean=product["ean"]),
         "ingredients":       [],
         "allergen_flags":    [],
         "crohn_flags":       [],

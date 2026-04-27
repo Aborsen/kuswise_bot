@@ -349,27 +349,26 @@ def meals_list_keyboard(meals: list[dict]) -> dict:
     return {"inline_keyboard": rows}
 
 
-def main_menu_keyboard() -> dict:
+def main_menu_keyboard(locale: str = "en") -> dict:
     """Persistent reply keyboard shown below the input field.
 
     All buttons are plain-text — tapping sends the label as a message and
     webhook.py routes it.
 
-    Note: 🔢 Штрих Код and 📋 Скануй Меню are intentionally NOT on this
-    keyboard. Their commands (``/scan`` and ``/menu``) still work, and the
-    button labels remain in ``MENU_BUTTON_LABELS`` + the webhook dispatcher
-    so users with a stale keyboard cached on their phone don't tap into a
-    void. Removed from the visible UI to reduce clutter — most users use
-    photo / text / voice for meal entry.
+    Note: 🔢 Штрих Код / Barcode and 📋 Скануй Меню / Scan menu are
+    intentionally NOT on this keyboard. Their commands (``/scan`` and
+    ``/menu``) still work, and the button labels remain in
+    ``menu_button_labels()`` + the webhook dispatcher so users with a stale
+    keyboard cached on their phone don't tap into a void. Removed from the
+    visible UI to reduce clutter — most users use photo / text / voice for
+    meal entry.
     """
-    from lib.formatters import (
-        BTN_ASK, BTN_FAV, BTN_WATER, BTN_MEALS, BTN_SUGGEST, BTN_PROFILE,
-    )
+    from lib.formatters import btn_label
     return {
         "keyboard": [
-            [{"text": BTN_ASK},     {"text": BTN_FAV}],
-            [{"text": BTN_WATER},   {"text": BTN_MEALS}],
-            [{"text": BTN_SUGGEST}, {"text": BTN_PROFILE}],
+            [{"text": btn_label("ask", locale=locale)},     {"text": btn_label("fav", locale=locale)}],
+            [{"text": btn_label("water", locale=locale)},   {"text": btn_label("meals", locale=locale)}],
+            [{"text": btn_label("suggest", locale=locale)}, {"text": btn_label("profile", locale=locale)}],
         ],
         "resize_keyboard": True,
         "is_persistent": True,

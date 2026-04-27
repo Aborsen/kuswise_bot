@@ -139,18 +139,9 @@ from lib.formatters import (
     format_recommendation,
     # Bulk error/prompt/weight constants migrated to lib/i18n (F-2b Chunk 3).
     # Use _t("section.key", profile) at call sites.
-    BTN_ASK,
-    BTN_TODAY,
-    BTN_YESTERDAY,
-    BTN_MEALS,
-    BTN_PROFILE,
-    BTN_SUGGEST,
-    BTN_DASHBOARD,
-    BTN_FAV,
-    BTN_WATER,
-    BTN_SCAN,
-    BTN_MENU_OCR,
-    MENU_BUTTON_LABELS,
+    btn_label,
+    menu_button_labels,
+    button_text_to_command,
     format_water,
     format_meal_list_entry,
     # FAV_*, RECENT_EMPTY_LIST, RELOG_*, UNDO_*, WATER_* migrated to
@@ -412,30 +403,24 @@ def process_update(update: dict) -> None:
         if not text:
             return
 
-        if text == BTN_DASHBOARD:
+        # Bilingual reply-keyboard dispatch: accepts UA + EN labels for all
+        # 11 buttons, plus legacy pre-F-2b UA labels. See lib.formatters.
+        _menu_labels = menu_button_labels()
+        _dashboard_labels = {btn_label("dashboard", locale=l) for l in ("uk", "en")}
+        _water_labels     = {btn_label("water",     locale=l) for l in ("uk", "en")}
+        if text in _dashboard_labels:
             send_message(
                 chat_id,
                 _t("dashboard.open_prompt", profile),
                 reply_markup=dashboard_inline_keyboard(locale=i18n_mod.locale_of(profile)),
             )
             return
-        if text == BTN_WATER:
+        if text in _water_labels:
             # Quick-add 250 ml and reply with updated bar + keyboard.
             handle_water_quickadd(conn, chat_id, user_id, amount_ml=250)
             return
-        if text in MENU_BUTTON_LABELS:
-            mapped = {
-                BTN_ASK: "/ask",
-                BTN_FAV: "/fav",
-                BTN_MEALS: "/meals",
-                BTN_PROFILE: "/profile",
-                BTN_SUGGEST: "/suggest_meal",
-                BTN_SCAN: "/scan",
-                BTN_MENU_OCR: "/menu",
-                # Legacy labels still on phones with stale reply keyboards.
-                "🔢 Сканер": "/scan",
-                "📋 Меню":    "/menu",
-            }.get(text)
+        if text in _menu_labels:
+            mapped = button_text_to_command(text)
             if mapped:
                 handle_command(conn, message, mapped, first_name, profile)
                 return
@@ -545,7 +530,7 @@ def process_update(update: dict) -> None:
                 if pending and pending["awaiting_manual"]:
                     pop_pending_analysis(conn, user_id)
                     pop_pending_entry(conn, user_id)
-                    send_message(chat_id, _t("meals_mgmt.cancelled", profile), reply_markup=main_menu_keyboard())
+                    send_message(chat_id, _t("meals_mgmt.cancelled", profile), reply_markup=main_menu_keyboard(locale=i18n_mod.locale_of(profile)))
                     return
             handle_command(conn, message, text, first_name, profile)
             return
@@ -603,7 +588,7 @@ def handle_start(
         print("set_chat_menu_button error:", e, flush=True)
 
     if profile_is_complete(profile):
-        send_message(chat_id, welcome_message(first_name, locale=i18n_mod.locale_of(profile)), reply_markup=main_menu_keyboard())
+        send_message(chat_id, welcome_message(first_name, locale=i18n_mod.locale_of(profile)), reply_markup=main_menu_keyboard(locale=i18n_mod.locale_of(profile)))
         return
 
     # Fresh user or unfinished profile: kick off onboarding.
@@ -655,7 +640,7 @@ def _finalize_onboarding(conn, chat_id: int, user_id: int, first_name: str | Non
     if water:
         done_text += "\n\n" + _t("onboarding.done_calorie_line", profile, cal=cal)
         done_text += "\n" + _t("onboarding.done_water_line", profile, water=water)
-    send_message(chat_id, done_text, reply_markup=main_menu_keyboard())
+    send_message(chat_id, done_text, reply_markup=main_menu_keyboard(locale=i18n_mod.locale_of(profile)))
 
 
 def handle_onboarding_text(conn, chat_id: int, user_id: int, first_name: str | None,
@@ -1273,7 +1258,7 @@ def handle_meal_type_callback(conn, cb: dict, profile: dict) -> None:
     if meal_type == "cancel":
         pop_pending_entry(conn, user_id)  # discard photo/text
         answer_callback_query(cb_id, "Скасовано")
-        send_message(chat_id, _t("meals_mgmt.cancelled", profile), reply_markup=main_menu_keyboard())
+        send_message(chat_id, _t("meals_mgmt.cancelled", profile), reply_markup=main_menu_keyboard(locale=i18n_mod.locale_of(profile)))
         return
 
     meal_ua_map = {"breakfast": "сніданок", "lunch": "обід", "dinner": "вечерю", "snack": "перекус"}
@@ -1481,7 +1466,7 @@ def handle_moderation_callback(conn, cb: dict, profile: dict) -> None:
         answer_callback_query(cb_id, "Скасовано")
         pop_pending_analysis(conn, user_id)
         pop_pending_entry(conn, user_id)
-        send_message(chat_id, _t("meals_mgmt.cancelled", profile), reply_markup=main_menu_keyboard())
+        send_message(chat_id, _t("meals_mgmt.cancelled", profile), reply_markup=main_menu_keyboard(locale=i18n_mod.locale_of(profile)))
 
 
 def handle_manual_text_input(conn, message: dict, text: str, pending: dict, profile: dict) -> None:
@@ -1668,7 +1653,7 @@ def handle_barcode_callback(conn, cb: dict, profile: dict) -> None:
         answer_callback_query(cb_id, "Скасовано")
         pop_pending_analysis(conn, user_id)
         set_awaiting_input(conn, user_id, None)
-        send_message(chat_id, _t("meals_mgmt.cancelled", profile), reply_markup=main_menu_keyboard())
+        send_message(chat_id, _t("meals_mgmt.cancelled", profile), reply_markup=main_menu_keyboard(locale=i18n_mod.locale_of(profile)))
         return
 
     # Manual EAN entry — fallback for devices where the Mini App camera
@@ -1754,7 +1739,7 @@ def handle_menu_photo(conn, message: dict, profile: dict) -> None:
     set_awaiting_input(conn, user_id, None)
 
     if not dishes:
-        send_message(chat_id, _t("menu.no_dishes", profile), reply_markup=main_menu_keyboard())
+        send_message(chat_id, _t("menu.no_dishes", profile), reply_markup=main_menu_keyboard(locale=i18n_mod.locale_of(profile)))
         return
 
     try:
@@ -1792,7 +1777,7 @@ def handle_menu_callback(conn, cb: dict, profile: dict) -> None:
 
     if data == "menu:cancel":
         answer_callback_query(cb_id, "Закрив")
-        send_message(chat_id, _t("meals_mgmt.cancelled", profile), reply_markup=main_menu_keyboard())
+        send_message(chat_id, _t("meals_mgmt.cancelled", profile), reply_markup=main_menu_keyboard(locale=i18n_mod.locale_of(profile)))
         return
 
     if not data.startswith("menu:log:"):
@@ -1904,14 +1889,14 @@ def _build_and_send_plan(
         )
     except Exception as e:
         error("plan_generate_failed", exc=e, user_id=user_id)
-        send_message(chat_id, _t("plan.failed", profile), reply_markup=main_menu_keyboard())
+        send_message(chat_id, _t("plan.failed", profile), reply_markup=main_menu_keyboard(locale=i18n_mod.locale_of(profile)))
         return
 
     try:
         plan_id = save_meal_plan(conn, user_id, plan)
     except Exception as e:
         error("plan_save_failed", exc=e, user_id=user_id)
-        send_message(chat_id, _t("plan.failed", profile), reply_markup=main_menu_keyboard())
+        send_message(chat_id, _t("plan.failed", profile), reply_markup=main_menu_keyboard(locale=i18n_mod.locale_of(profile)))
         return
 
     _send_plan_day(chat_id, plan_id, plan, day_idx=0, locale=i18n_mod.locale_of(profile))
@@ -1940,7 +1925,7 @@ def handle_plan_pantry_input(
     cleaned = text.strip()
     if cleaned.lower() in ("/skip", "skip", "/cancel", "cancel"):
         set_awaiting_input(conn, user_id, None)
-        send_message(chat_id, _t("meals_mgmt.cancelled", profile), reply_markup=main_menu_keyboard())
+        send_message(chat_id, _t("meals_mgmt.cancelled", profile), reply_markup=main_menu_keyboard(locale=i18n_mod.locale_of(profile)))
         return
     if len(cleaned) > 200:
         send_message(chat_id, _t("plan.pantry_too_long", profile))
@@ -1967,7 +1952,7 @@ def handle_plan_callback(conn, cb: dict, profile: dict) -> None:
     if data == "plan:cancel":
         answer_callback_query(cb_id, "Закрив")
         set_awaiting_input(conn, user_id, None)
-        send_message(chat_id, _t("meals_mgmt.cancelled", profile), reply_markup=main_menu_keyboard())
+        send_message(chat_id, _t("meals_mgmt.cancelled", profile), reply_markup=main_menu_keyboard(locale=i18n_mod.locale_of(profile)))
         return
 
     if data == "plan:nopantry":
@@ -2062,7 +2047,7 @@ def _run_suggest_meal(
         )
     except Exception as e:
         print("suggest error:", e, flush=True)
-        send_message(chat_id, _t("suggest.failed", profile), reply_markup=main_menu_keyboard())
+        send_message(chat_id, _t("suggest.failed", profile), reply_markup=main_menu_keyboard(locale=i18n_mod.locale_of(profile)))
         return
     send_message(chat_id, recipe, reply_markup=suggest_followup_keyboard())
 
@@ -2078,7 +2063,7 @@ def handle_fridge_input(
     cleaned = text.strip()
     if cleaned.lower() in ("/skip", "skip", "/cancel", "cancel"):
         set_awaiting_input(conn, user_id, None)
-        send_message(chat_id, _t("meals_mgmt.cancelled", profile), reply_markup=main_menu_keyboard())
+        send_message(chat_id, _t("meals_mgmt.cancelled", profile), reply_markup=main_menu_keyboard(locale=i18n_mod.locale_of(profile)))
         return
     if len(cleaned) > 300:
         send_message(chat_id, _t("fridge.too_long", profile))
@@ -2155,7 +2140,7 @@ def handle_barcode_manual_input(
     cleaned = text.strip().replace(" ", "").replace("-", "")
     if cleaned.lower() in ("/skip", "skip", "/cancel", "cancel"):
         set_awaiting_input(conn, user_id, None)
-        send_message(chat_id, _t("meals_mgmt.cancelled", profile), reply_markup=main_menu_keyboard())
+        send_message(chat_id, _t("meals_mgmt.cancelled", profile), reply_markup=main_menu_keyboard(locale=i18n_mod.locale_of(profile)))
         return
 
     if not off_mod.looks_like_ean(cleaned):
@@ -2172,14 +2157,14 @@ def handle_barcode_manual_input(
         product = off_mod.lookup_product(cleaned)
     except Exception as e:
         error("off_lookup_failed", exc=e, ean=cleaned, user_id=user_id)
-        send_message(chat_id, _t("barcode.lookup_failed", profile), reply_markup=main_menu_keyboard())
+        send_message(chat_id, _t("barcode.lookup_failed", profile), reply_markup=main_menu_keyboard(locale=i18n_mod.locale_of(profile)))
         return
 
     if product is None:
         send_message(
             chat_id,
             _t("barcode.not_found", profile, ean=cleaned),
-            reply_markup=main_menu_keyboard(),
+            reply_markup=main_menu_keyboard(locale=i18n_mod.locale_of(profile)),
         )
         return
 
@@ -2233,7 +2218,7 @@ def handle_barcode_grams_input(
     if cleaned.lower() in ("/skip", "skip", "/cancel", "cancel"):
         set_awaiting_input(conn, user_id, None)
         pop_pending_analysis(conn, user_id)
-        send_message(chat_id, _t("meals_mgmt.cancelled", profile), reply_markup=main_menu_keyboard())
+        send_message(chat_id, _t("meals_mgmt.cancelled", profile), reply_markup=main_menu_keyboard(locale=i18n_mod.locale_of(profile)))
         return
 
     grams = _parse_float(cleaned)
@@ -2244,7 +2229,7 @@ def handle_barcode_grams_input(
     pending = get_pending_analysis(conn, user_id)
     if not pending:
         set_awaiting_input(conn, user_id, None)
-        send_message(chat_id, _t("barcode.pending_expired", profile), reply_markup=main_menu_keyboard())
+        send_message(chat_id, _t("barcode.pending_expired", profile), reply_markup=main_menu_keyboard(locale=i18n_mod.locale_of(profile)))
         return
 
     _save_barcode_meal(conn, chat_id, user_id, first_name, profile, pending, float(grams))
@@ -2311,7 +2296,7 @@ def handle_command(conn, message: dict, text: str, first_name: str | None, profi
     cal_target = (profile or {}).get("daily_calorie_target") or 2000
 
     if cmd == "/help":
-        send_message(chat_id, help_message(i18n_mod.locale_of(profile)), reply_markup=main_menu_keyboard())
+        send_message(chat_id, help_message(i18n_mod.locale_of(profile)), reply_markup=main_menu_keyboard(locale=i18n_mod.locale_of(profile)))
         return
 
     if cmd == "/profile":
@@ -2328,7 +2313,7 @@ def handle_command(conn, message: dict, text: str, first_name: str | None, profi
         send_message(
             chat_id,
             format_today_progress(log, cal_target, first_name, profile=profile, streak=streak_row),
-            reply_markup=main_menu_keyboard(),
+            reply_markup=main_menu_keyboard(locale=i18n_mod.locale_of(profile)),
         )
         return
 
@@ -2341,7 +2326,7 @@ def handle_command(conn, message: dict, text: str, first_name: str | None, profi
         send_message(
             chat_id,
             format_streak_summary(streak_row, first_name, locale=i18n_mod.locale_of(profile)),
-            reply_markup=main_menu_keyboard(),
+            reply_markup=main_menu_keyboard(locale=i18n_mod.locale_of(profile)),
         )
         return
 
@@ -2373,7 +2358,7 @@ def handle_command(conn, message: dict, text: str, first_name: str | None, profi
         except Exception as e:
             error("recap_build_failed", exc=e, user_id=user_id)
             send_message(chat_id, "❌ Не зміг скласти recap. Спробуй пізніше.",
-                         reply_markup=main_menu_keyboard())
+                         reply_markup=main_menu_keyboard(locale=i18n_mod.locale_of(profile)))
             return
         resp = send_photo(chat_id, png, caption=caption)
         if not resp.get("ok"):
@@ -2391,7 +2376,7 @@ def handle_command(conn, message: dict, text: str, first_name: str | None, profi
         send_message(
             chat_id,
             format_aliases(aliases, first_name, locale=i18n_mod.locale_of(profile)),
-            reply_markup=main_menu_keyboard(),
+            reply_markup=main_menu_keyboard(locale=i18n_mod.locale_of(profile)),
         )
         return
 
@@ -2430,7 +2415,7 @@ def handle_command(conn, message: dict, text: str, first_name: str | None, profi
         y = (now_user(profile) - timedelta(days=1)).strftime("%Y-%m-%d")
         log = get_log_for_date(conn, user_id, y)
         meals = get_meals_for_day(conn, user_id, y)
-        send_message(chat_id, format_yesterday(log, meals, cal_target, first_name, profile=profile), reply_markup=main_menu_keyboard())
+        send_message(chat_id, format_yesterday(log, meals, cal_target, first_name, profile=profile), reply_markup=main_menu_keyboard(locale=i18n_mod.locale_of(profile)))
         return
 
     if cmd == "/meals":
@@ -2452,7 +2437,7 @@ def handle_command(conn, message: dict, text: str, first_name: str | None, profi
 
     if cmd == "/history":
         rows = get_history(conn, user_id, days=7)
-        send_message(chat_id, format_history(rows, cal_target, locale=i18n_mod.locale_of(profile)), reply_markup=main_menu_keyboard())
+        send_message(chat_id, format_history(rows, cal_target, locale=i18n_mod.locale_of(profile)), reply_markup=main_menu_keyboard(locale=i18n_mod.locale_of(profile)))
         return
 
     if cmd == "/history_detail":
@@ -2484,7 +2469,7 @@ def handle_command(conn, message: dict, text: str, first_name: str | None, profi
         meals = get_favorites(conn, user_id)
         locale = i18n_mod.locale_of(profile)
         if not meals:
-            send_message(chat_id, _t("favorite.empty_list", profile), reply_markup=main_menu_keyboard())
+            send_message(chat_id, _t("favorite.empty_list", profile), reply_markup=main_menu_keyboard(locale=i18n_mod.locale_of(profile)))
             return
         lines = [_t("favorite.title", profile), ""] + [f"• {format_meal_list_entry(m, locale=locale)}" for m in meals[:20]]
         lines.append("")
@@ -2496,7 +2481,7 @@ def handle_command(conn, message: dict, text: str, first_name: str | None, profi
         meals = get_recent_meals(conn, user_id, limit=10)
         locale = i18n_mod.locale_of(profile)
         if not meals:
-            send_message(chat_id, _t("favorite.recent_empty_list", profile), reply_markup=main_menu_keyboard())
+            send_message(chat_id, _t("favorite.recent_empty_list", profile), reply_markup=main_menu_keyboard(locale=i18n_mod.locale_of(profile)))
             return
         lines = [_t("favorite.recent_title", profile), ""] + [f"• {format_meal_list_entry(m, locale=locale)}" for m in meals]
         lines.append("")
@@ -2783,12 +2768,12 @@ def handle_ask(conn, user_id: int, chat_id: int, question: str, profile: dict) -
         answer = ask_chat(question, history, today_log, today_meals, profile)
     except Exception as e:
         print("ask_chat error:", traceback.format_exc(), flush=True)
-        send_message(chat_id, _t("ask.error", profile), reply_markup=main_menu_keyboard())
+        send_message(chat_id, _t("ask.error", profile), reply_markup=main_menu_keyboard(locale=i18n_mod.locale_of(profile)))
         return
 
     append_chat_message(conn, user_id, "user", question)
     append_chat_message(conn, user_id, "assistant", answer)
-    send_message(chat_id, answer, reply_markup=main_menu_keyboard())
+    send_message(chat_id, answer, reply_markup=main_menu_keyboard(locale=i18n_mod.locale_of(profile)))
 
 
 # ---------- Weight / goal edit ----------
@@ -2871,7 +2856,7 @@ def handle_weight_input(
     cleaned = text.strip()
     if cleaned.lower() in ("/skip", "skip"):
         set_awaiting_input(conn, user_id, None)
-        send_message(chat_id, _t("weight.checkin_skipped", profile), reply_markup=main_menu_keyboard())
+        send_message(chat_id, _t("weight.checkin_skipped", profile), reply_markup=main_menu_keyboard(locale=i18n_mod.locale_of(profile)))
         return
 
     new_weight = _parse_float(cleaned)
@@ -2922,7 +2907,7 @@ def handle_weight_input(
     send_message(
         chat_id,
         body,
-        reply_markup=main_menu_keyboard(),
+        reply_markup=main_menu_keyboard(locale=i18n_mod.locale_of(profile)),
     )
 
 
@@ -2936,7 +2921,7 @@ def handle_water_target_input(
     cleaned = text.strip().lower().replace("мл", "").replace("ml", "").strip()
     if cleaned in ("/skip", "skip", "/cancel", "cancel"):
         set_awaiting_input(conn, user_id, None)
-        send_message(chat_id, "👌 Скасовано.", reply_markup=main_menu_keyboard())
+        send_message(chat_id, "👌 Скасовано.", reply_markup=main_menu_keyboard(locale=i18n_mod.locale_of(profile)))
         return
 
     ml = _parse_int(cleaned)
@@ -2970,7 +2955,7 @@ def handle_target_weight_input(
     cleaned = text.strip().lower().replace("кг", "").replace("kg", "").strip()
     if cleaned in ("/skip", "skip", "/cancel", "cancel"):
         set_awaiting_input(conn, user_id, None)
-        send_message(chat_id, "👌 Скасовано.", reply_markup=main_menu_keyboard())
+        send_message(chat_id, "👌 Скасовано.", reply_markup=main_menu_keyboard(locale=i18n_mod.locale_of(profile)))
         return
 
     tw = _parse_float(cleaned)
@@ -2995,7 +2980,7 @@ def handle_target_weight_input(
     send_message(
         chat_id,
         _t("target_weight.saved", profile, target=tw),
-        reply_markup=main_menu_keyboard(),
+        reply_markup=main_menu_keyboard(locale=i18n_mod.locale_of(profile)),
     )
 
 
@@ -3020,7 +3005,7 @@ def handle_weekly_delta_input(
     )
     if cleaned in ("/skip", "skip", "/cancel", "cancel"):
         set_awaiting_input(conn, user_id, None)
-        send_message(chat_id, "👌 Скасовано.", reply_markup=main_menu_keyboard())
+        send_message(chat_id, "👌 Скасовано.", reply_markup=main_menu_keyboard(locale=i18n_mod.locale_of(profile)))
         return
 
     raw = _parse_float(cleaned)
@@ -3035,7 +3020,7 @@ def handle_weekly_delta_input(
 
     goal = profile.get("goal") or "maintain"
     if goal == "maintain":
-        send_message(chat_id, _t("goals.weekly_not_for_maintain", profile), reply_markup=main_menu_keyboard())
+        send_message(chat_id, _t("goals.weekly_not_for_maintain", profile), reply_markup=main_menu_keyboard(locale=i18n_mod.locale_of(profile)))
         set_awaiting_input(conn, user_id, None)
         return
 
@@ -3053,7 +3038,7 @@ def handle_weekly_delta_input(
     send_message(
         chat_id,
         _t("goals.weekly_saved", profile, delta=signed),
-        reply_markup=main_menu_keyboard(),
+        reply_markup=main_menu_keyboard(locale=i18n_mod.locale_of(profile)),
     )
 
 
@@ -3102,7 +3087,7 @@ def handle_profile_edit_callback(conn, cb: dict, profile: dict) -> None:
             f"{_t('goal.updated', profile, goal=_GOAL_LABEL_UA.get(new_goal, new_goal))}\n"
             f"🎯 Нова норма калорій: <b>{new_cal} ккал/день</b>\n"
             f"🥩 Білки {macros['protein']}г · 🍚 Вуглеводи {macros['carbs']}г · 🧈 Жири {macros['fat']}г",
-            reply_markup=main_menu_keyboard(),
+            reply_markup=main_menu_keyboard(locale=i18n_mod.locale_of(profile)),
         )
         if new_goal in ("lose", "gain"):
             set_awaiting_input(conn, user_id, "target_weight")
@@ -3117,7 +3102,7 @@ def handle_profile_edit_callback(conn, cb: dict, profile: dict) -> None:
         goal = profile.get("goal") or "maintain"
         if goal == "maintain":
             answer_callback_query(cb_id, "Для цієї мети не потрібна")
-            send_message(chat_id, _t("target_weight.cleared", profile), reply_markup=main_menu_keyboard())
+            send_message(chat_id, _t("target_weight.cleared", profile), reply_markup=main_menu_keyboard(locale=i18n_mod.locale_of(profile)))
             return
         answer_callback_query(cb_id, "🎯 Чекаю на число")
         set_awaiting_input(conn, user_id, "target_weight")
@@ -3130,7 +3115,7 @@ def handle_profile_edit_callback(conn, cb: dict, profile: dict) -> None:
         goal = profile.get("goal") or "maintain"
         if goal == "maintain":
             answer_callback_query(cb_id, "Для цієї мети не потрібна")
-            send_message(chat_id, _t("goals.weekly_not_for_maintain", profile), reply_markup=main_menu_keyboard())
+            send_message(chat_id, _t("goals.weekly_not_for_maintain", profile), reply_markup=main_menu_keyboard(locale=i18n_mod.locale_of(profile)))
             return
         answer_callback_query(cb_id, "📈 Чекаю на число")
         set_awaiting_input(conn, user_id, "weekly_delta")

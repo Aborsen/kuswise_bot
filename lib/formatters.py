@@ -1253,29 +1253,68 @@ GOALS_STATUS_BEHIND   = "🔴 Відстаєш від плану"
 # --- Reply-keyboard button labels (must match the strings used in main_menu_keyboard) ---
 # When a user taps one of these buttons, Telegram sends its label as a message.
 # webhook.py intercepts these labels and routes them to the corresponding command.
-BTN_ASK = "🤖 Запитати ШІ"
-BTN_FAV = "⭐ Улюблені"
-BTN_WATER = "💧 +250мл"
-BTN_TODAY = "📊 День"
-BTN_SUGGEST = "🍽️ Ідея страви"
-BTN_PROFILE = "⚙️ Профіль"
-BTN_YESTERDAY = "📆 Вчора"
-BTN_MEALS = "📋 Мої страви"
-BTN_DASHBOARD = "📱 Dashboard"
-BTN_SCAN = "🔢 Штрих Код"
-BTN_MENU_OCR = "📋 Скануй Меню"
+#
+# Telegram caches reply keyboards per chat for ~1 hour, so the dispatcher
+# accepts BOTH locales' labels (UK + EN) plus a small legacy set for the
+# older (pre-F-2b) UA labels. btn.* keys are stable; the bilingual dispatcher
+# is permanent so users can /language flip without a transitional dead zone.
+_BTN_NAMES: tuple[str, ...] = (
+    "ask", "fav", "water", "today", "suggest", "profile",
+    "yesterday", "meals", "dashboard", "scan", "menu_ocr",
+)
+
+
+def btn_label(name: str, locale: str = "en") -> str:
+    """Return the localized reply-keyboard label for one of the 11 buttons."""
+    from lib.i18n import t
+    return t(f"btn.{name}", locale=locale)
+
 
 # Legacy labels — kept in the lookup set so users whose phones still have the
-# OLD reply keyboard cached don't get a "I don't understand" reaction when
-# they tap. Removed in a follow-up once we're sure clients have refreshed.
-_LEGACY_BTN_SCAN = "🔢 Сканер"
-_LEGACY_BTN_MENU_OCR = "📋 Меню"
+# pre-F-2b reply keyboard cached don't get a "I don't understand" reaction
+# when they tap. UA + EN current renders are the union of dispatched labels.
+_LEGACY_BTN_LABELS: tuple[str, ...] = (
+    "🔢 Сканер",
+    "📋 Меню",
+)
 
-MENU_BUTTON_LABELS = {
-    BTN_ASK, BTN_FAV, BTN_WATER, BTN_MEALS, BTN_SUGGEST, BTN_PROFILE,
-    BTN_SCAN, BTN_MENU_OCR,
-    _LEGACY_BTN_SCAN, _LEGACY_BTN_MENU_OCR,
-}
+
+def menu_button_labels() -> set[str]:
+    """All accepted reply-keyboard labels: UK + EN current + legacy.
+
+    Used by the webhook dispatcher to decide whether an incoming text
+    message is a button tap to route to a command.
+    """
+    labels: set[str] = set(_LEGACY_BTN_LABELS)
+    for locale in ("uk", "en"):
+        for name in _BTN_NAMES:
+            labels.add(btn_label(name, locale=locale))
+    return labels
+
+
+def button_text_to_command(text: str) -> str | None:
+    """Map a tapped button label (any locale) to its canonical /command.
+
+    Returns None if the text doesn't match any known button.
+    """
+    # Build reverse map: label → command. Cached at first call.
+    cache = button_text_to_command.__dict__.get("_cache")
+    if cache is None:
+        name_to_cmd = {
+            "ask": "/ask", "fav": "/fav", "meals": "/meals",
+            "profile": "/profile", "suggest": "/suggest_meal",
+            "scan": "/scan", "menu_ocr": "/menu",
+            "today": "/today", "yesterday": "/yesterday",
+        }
+        cache = {}
+        for name, cmd in name_to_cmd.items():
+            for locale in ("uk", "en"):
+                cache[btn_label(name, locale=locale)] = cmd
+        # Legacy labels mapped explicitly.
+        cache["🔢 Сканер"] = "/scan"
+        cache["📋 Меню"] = "/menu"
+        button_text_to_command._cache = cache
+    return cache.get(text)
 
 
 # --- Water tracker ---

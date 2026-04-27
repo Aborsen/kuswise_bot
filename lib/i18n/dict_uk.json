@@ -360,5 +360,17 @@
   "favorite.title":              "⭐ <b>Улюблені страви</b>",
   "favorite.relog_hint":         "👇 Тисни 🔁 щоб записати страву на сьогодні:",
   "favorite.recent_title":       "🕘 <b>Останні страви</b>",
-  "favorite.recent_relog_hint":  "👇 Тисни 🔁 щоб повторити:"
+  "favorite.recent_relog_hint":  "👇 Тисни 🔁 щоб повторити:",
+
+  "btn.ask":       "🤖 Запитати ШІ",
+  "btn.fav":       "⭐ Улюблені",
+  "btn.water":     "💧 +250мл",
+  "btn.today":     "📊 День",
+  "btn.suggest":   "🍽️ Ідея страви",
+  "btn.profile":   "⚙️ Профіль",
+  "btn.yesterday": "📆 Вчора",
+  "btn.meals":     "📋 Мої страви",
+  "btn.dashboard": "📱 Dashboard",
+  "btn.scan":      "🔢 Штрих Код",
+  "btn.menu_ocr":  "📋 Скануй Меню"
 }

@@ -360,5 +360,17 @@
   "favorite.title":              "⭐ <b>Favorite meals</b>",
   "favorite.relog_hint":         "👇 Tap 🔁 to log this meal today:",
   "favorite.recent_title":       "🕘 <b>Recent meals</b>",
-  "favorite.recent_relog_hint":  "👇 Tap 🔁 to repeat:"
+  "favorite.recent_relog_hint":  "👇 Tap 🔁 to repeat:",
+
+  "btn.ask":       "🤖 Ask AI",
+  "btn.fav":       "⭐ Favorites",
+  "btn.water":     "💧 +250ml",
+  "btn.today":     "📊 Today",
+  "btn.suggest":   "🍽️ Meal idea",
+  "btn.profile":   "⚙️ Profile",
+  "btn.yesterday": "📆 Yesterday",
+  "btn.meals":     "📋 My meals",
+  "btn.dashboard": "📱 Dashboard",
+  "btn.scan":      "🔢 Barcode",
+  "btn.menu_ocr":  "📋 Scan menu"
 }

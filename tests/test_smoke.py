@@ -1530,6 +1530,25 @@ def test_format_ingredients_uk_handles_garbage_kcal():
     assert "ккал" not in body
 
 
+def test_btn_label_dispatcher_accepts_both_locales_and_legacy():
+    """F-2b Chunk 5: Bilingual reply-keyboard dispatcher accepts UA + EN labels
+    plus legacy pre-F-2b UA labels. The 1-hour Telegram cache means a UA user
+    with a stale keyboard tapping the old label must still dispatch correctly."""
+    # Both locales' "favorites" labels resolve to the same command:
+    assert fm.button_text_to_command(fm.btn_label("fav", locale="uk")) == "/fav"
+    assert fm.button_text_to_command(fm.btn_label("fav", locale="en")) == "/fav"
+    # Legacy pre-F-2b UA labels still dispatch:
+    assert fm.button_text_to_command("🔢 Сканер") == "/scan"
+    assert fm.button_text_to_command("📋 Меню") == "/menu"
+    # Unknown text returns None:
+    assert fm.button_text_to_command("hello world") is None
+    # menu_button_labels() includes both locales + legacy.
+    labels = fm.menu_button_labels()
+    assert fm.btn_label("scan", locale="uk") in labels
+    assert fm.btn_label("scan", locale="en") in labels
+    assert "🔢 Сканер" in labels
+
+
 def test_render_recap_png_returns_pngsignature_bytes():
     """Renderer returns valid PNG bytes (smoke; Pillow available in CI)."""
     stats = {

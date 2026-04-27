@@ -13,12 +13,18 @@ Serves a self-contained HTML page that:
 
 The page also surfaces a clear "Type EAN manually" link as a fallback for
 devices/permissions that block the camera path entirely.
+
+F-2b Chunk 7: locale (uk / en) is read from the ``?lang=`` query string and
+piped to all UA / EN labels rendered by the page. The bot's
+``scanner_inline_keyboard`` already appends the user's locale to the URL.
 """
 from __future__ import annotations
 
+import json
 import os
 import secrets
 from http.server import BaseHTTPRequestHandler
+from urllib.parse import urlsplit, parse_qs
 
 import sys
 _THIS = os.path.dirname(os.path.abspath(__file__))
@@ -27,6 +33,7 @@ if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
 from lib.log import setup_sentry, http_handler
+from lib.i18n import t as _i18n_t
 
 setup_sentry("scan")
 
@@ -35,11 +42,72 @@ setup_sentry("scan")
 _HTML5QR_CDN = "https://cdn.jsdelivr.net/npm/html5-qrcode@2.3.8/html5-qrcode.min.js"
 
 
+# Keys whose values are loaded into the page's ``window._L`` JS object so the
+# inline script can render dynamic banners / errors in the user's locale.
+# Server-side static labels (header, splash hint, button text) are interpolated
+# via ``__LABEL_FOO__`` placeholders below.
+_SCAN_JS_KEYS = (
+    "scan.banner_preparing",
+    "scan.banner_ready",
+    "scan.banner_no_init",
+    "scan.manual_prompt",
+    "scan.invalid_digits",
+    "scan.searching",
+    "scan.done",
+    "scan.unrecognized",
+    "scan.network_error",
+    "scan.scanner_failed",
+    "scan.allow_camera",
+    "scan.not_a_barcode",
+    "scan.searching_in_frame",
+    "scan.cam_denied",
+    "scan.cam_unavailable",
+    "scan.cam_unsupported",
+    "scan.cam_other",
+)
+
+
+def _locale_from_query(path: str) -> str:
+    """Pick a supported locale from the URL's ``?lang=`` query, defaulting to en."""
+    try:
+        qs = urlsplit(path).query
+        params = parse_qs(qs)
+        candidate = (params.get("lang") or [""])[0].lower()
+        if candidate in ("uk", "en"):
+            return candidate
+    except Exception:
+        pass
+    return "en"
+
+
+def _build_js_labels(locale: str) -> str:
+    """Serialize the JS-side labels dict as a JSON string ready to inject."""
+    labels = {}
+    for key in _SCAN_JS_KEYS:
+        short = key.split(".", 1)[1]
+        labels[short] = _i18n_t(key, locale=locale)
+    return json.dumps(labels, ensure_ascii=False)
+
+
 class handler(BaseHTTPRequestHandler):
     @http_handler("scan")
     def do_GET(self):
         nonce = secrets.token_urlsafe(16)
-        body = _SCAN_HTML.replace("__NONCE__", nonce).replace("__CDN__", _HTML5QR_CDN)
+        locale = _locale_from_query(self.path)
+        body = (
+            _SCAN_HTML
+            .replace("__NONCE__", nonce)
+            .replace("__CDN__", _HTML5QR_CDN)
+            .replace("__LANG__", locale)
+            .replace("__LABEL_TITLE__",        _i18n_t("scan.title",        locale=locale))
+            .replace("__LABEL_HEADER__",       _i18n_t("scan.header",       locale=locale))
+            .replace("__LABEL_BANNER_INIT__",  _i18n_t("scan.banner_preparing", locale=locale))
+            .replace("__LABEL_SPLASH_HINT__",  _i18n_t("scan.splash_hint",  locale=locale))
+            .replace("__LABEL_START_BTN__",    _i18n_t("scan.start_btn",    locale=locale))
+            .replace("__LABEL_MANUAL_LINK__",  _i18n_t("scan.manual_link",  locale=locale))
+            .replace("__LABEL_CANCEL_BTN__",   _i18n_t("scan.cancel_btn",   locale=locale))
+            .replace("__JS_LABELS__",          _build_js_labels(locale))
+        )
         self.send_response(200)
         self.send_header("Content-Type", "text/html; charset=utf-8")
         # CSP: lock script execution to our nonce + the html5-qrcode CDN.
@@ -62,11 +130,11 @@ class handler(BaseHTTPRequestHandler):
 
 
 _SCAN_HTML = r"""<!DOCTYPE html>
-<html lang="uk">
+<html lang="__LANG__">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>KusWise — Сканер</title>
+<title>__LABEL_TITLE__</title>
 <link rel="icon" type="image/png" href="/logo.png">
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
 <style>
@@ -120,29 +188,34 @@ _SCAN_HTML = r"""<!DOCTYPE html>
 </head>
 <body>
 <div id="wrap">
-  <header>📷 Сканер штрих-кодів</header>
-  <div id="banner">Готую сканер…</div>
+  <header>__LABEL_HEADER__</header>
+  <div id="banner">__LABEL_BANNER_INIT__</div>
 
   <div id="stage">
     <div id="reader"></div>
     <div id="splash">
-      <p id="splashHint">
-        Натисни кнопку нижче — Telegram попросить дозвіл на камеру.
-        Наведи на штрих-код товару, я знайду його у Open Food Facts.
-      </p>
-      <button id="startBtn" class="btn-primary" disabled>📷 Увімкнути камеру</button>
-      <button id="manualLink">✏️ Ввести цифри вручну</button>
+      <p id="splashHint">__LABEL_SPLASH_HINT__</p>
+      <button id="startBtn" class="btn-primary" disabled>__LABEL_START_BTN__</button>
+      <button id="manualLink">__LABEL_MANUAL_LINK__</button>
     </div>
   </div>
 
   <footer>
-    <button id="cancel">Закрити</button>
+    <button id="cancel">__LABEL_CANCEL_BTN__</button>
   </footer>
 </div>
 
 <script src="__CDN__" nonce="__NONCE__"></script>
 <script nonce="__NONCE__">
 (function () {
+  var L = __JS_LABELS__;
+  function fmt(s, vars) {
+    if (!vars) return s;
+    return s.replace(/\{(\w+)\}/g, function (_, k) {
+      return vars[k] !== undefined ? vars[k] : ('{' + k + '}');
+    });
+  }
+
   var tg = window.Telegram && window.Telegram.WebApp ? window.Telegram.WebApp : null;
   if (tg) { try { tg.ready(); tg.expand(); } catch (_) {} }
 
@@ -175,12 +248,12 @@ _SCAN_HTML = r"""<!DOCTYPE html>
     if (tg && tg.initData && tg.initData.length > 0) {
       initData = tg.initData;
       els.startBtn.disabled = false;
-      setBanner('Готово — натисни «Увімкнути камеру».', 'ok');
+      setBanner(L.banner_ready, 'ok');
       return;
     }
     initAttempts++;
     if (initAttempts > 30) {  // ~3s
-      setBanner('Не отримав ідентифікатор від Telegram. Закрий і відкрий сканер ще раз.', 'err');
+      setBanner(L.banner_no_init, 'err');
       return;
     }
     setTimeout(pollInit, 100);
@@ -195,11 +268,11 @@ _SCAN_HTML = r"""<!DOCTYPE html>
 
   // ---------- Manual entry ----------
   els.manualLink.addEventListener('click', function () {
-    var ean = window.prompt('Введи штрих-код (8-13 цифр):', '');
+    var ean = window.prompt(L.manual_prompt, '');
     if (ean == null) return;
     var clean = String(ean).replace(/\D/g, '');
     if (!/^\d{8,13}$/.test(clean)) {
-      setBanner('Штрих-код має бути 8-13 цифр.', 'err');
+      setBanner(L.invalid_digits, 'err');
       return;
     }
     postEan(clean);
@@ -209,9 +282,9 @@ _SCAN_HTML = r"""<!DOCTYPE html>
   var sent = false;
   function postEan(ean) {
     if (sent) return; sent = true;
-    setBanner('Знайшов: ' + ean + '. Шукаю продукт…', 'ok');
+    setBanner(fmt(L.searching, {ean: ean}), 'ok');
     if (!initData) {
-      setBanner('Не отримав ідентифікатор від Telegram. Закрий і відкрий ще раз.', 'err');
+      setBanner(L.banner_no_init, 'err');
       sent = false;
       return;
     }
@@ -230,16 +303,16 @@ _SCAN_HTML = r"""<!DOCTYPE html>
       })
       .then(function (j) {
         if (j && j.ok) {
-          setBanner('✓ Готово — продовжуй у чаті бота.', 'ok');
+          setBanner(L.done, 'ok');
           if (tg) setTimeout(function () { try { tg.close(); } catch (_) {} }, 800);
           return;
         }
-        var msg = (j && j.error) ? j.error : 'Не зміг розпізнати продукт. Спробуй ще раз або введи назву в боті.';
+        var msg = (j && j.error) ? j.error : L.unrecognized;
         setBanner(msg, 'err');
         sent = false;  // allow retry
       })
       .catch(function (e) {
-        setBanner('Помилка мережі. Спробуй ще раз.', 'err');
+        setBanner(L.network_error, 'err');
         debugAlert('fetch error: ' + (e && e.message || e));
         sent = false;
       });
@@ -252,12 +325,12 @@ _SCAN_HTML = r"""<!DOCTYPE html>
   // token gets lost across an async boundary.
   els.startBtn.addEventListener('click', function () {
     if (typeof Html5Qrcode === 'undefined') {
-      setBanner('Сканер не завантажився. Спробуй ще раз або введи код вручну.', 'err');
+      setBanner(L.scanner_failed, 'err');
       debugAlert('Html5Qrcode is undefined — CDN load failed');
       return;
     }
     els.startBtn.disabled = true;
-    setBanner('Дозволь доступ до камери у спливаючому вікні…', '');
+    setBanner(L.allow_camera, '');
 
     var formats = (typeof Html5QrcodeSupportedFormats !== 'undefined') ? [
       Html5QrcodeSupportedFormats.EAN_13,
@@ -274,7 +347,7 @@ _SCAN_HTML = r"""<!DOCTYPE html>
         scanner.stop().catch(function () {});
         var clean = String(decodedText || '').replace(/\D/g, '');
         if (!/^\d{8,13}$/.test(clean)) {
-          setBanner('Це не схоже на штрих-код товару — спробуй ще раз.', 'err');
+          setBanner(L.not_a_barcode, 'err');
           els.startBtn.disabled = false;
           return;
         }
@@ -283,18 +356,18 @@ _SCAN_HTML = r"""<!DOCTYPE html>
       function (_decodeErr) { /* per-frame decode misses are normal — ignore */ }
     ).then(function () {
       els.splash.classList.add('hidden');
-      setBanner('Шукаю штрих-код у кадрі…', '');
+      setBanner(L.searching_in_frame, '');
     }).catch(function (err) {
       var raw = (err && err.message) || (err && err.name) || String(err);
       var hint;
       if (/NotAllowedError|Permission|denied/i.test(raw)) {
-        hint = 'Доступ до камери заборонено. iOS: Налаштування → Telegram → Камера. Або введи код цифрами вручну.';
+        hint = L.cam_denied;
       } else if (/NotFoundError|NotReadableError|OverconstrainedError/i.test(raw)) {
-        hint = 'Камера недоступна на цьому пристрої. Введи код цифрами вручну.';
+        hint = L.cam_unavailable;
       } else if (/NotSupportedError|secure context/i.test(raw)) {
-        hint = 'Цей браузер не підтримує камеру. Введи код цифрами вручну.';
+        hint = L.cam_unsupported;
       } else {
-        hint = 'Камера: ' + raw + '. Спробуй ще раз або введи цифри вручну.';
+        hint = fmt(L.cam_other, {raw: raw});
       }
       setBanner(hint, 'err');
       els.startBtn.disabled = false;

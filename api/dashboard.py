@@ -47,6 +47,81 @@ from lib.database import (
     remove_last_water_today,
 )
 from lib.log import setup_sentry, http_handler, error
+from lib.i18n import t as _i18n_t
+
+
+# F-2b Chunk 7: keys whose values get serialized into the dashboard JS so the
+# inline script can render dynamic strings (banners, calories summary, plurals)
+# in the user's locale. Static labels (h1 / h2 / button text) interpolate
+# into HTML server-side via __LABEL_FOO__ placeholders.
+_DASHBOARD_JS_KEYS = (
+    "dash.water_units", "dash.cal_subtitle", "dash.cal_remaining_unit",
+    "dash.macro_protein", "dash.macro_carbs", "dash.macro_fat",
+    "dash.share_status_preparing", "dash.share_status_sent",
+    "dash.share_status_failed", "dash.share_status_network",
+    "dash.dow_mon", "dash.dow_tue", "dash.dow_wed", "dash.dow_thu",
+    "dash.dow_fri", "dash.dow_sat", "dash.dow_sun",
+    "dash.month_jan", "dash.month_feb", "dash.month_mar", "dash.month_apr",
+    "dash.month_may", "dash.month_jun", "dash.month_jul", "dash.month_aug",
+    "dash.month_sep", "dash.month_oct", "dash.month_nov", "dash.month_dec",
+    "dash.today_label",
+    "dash.summary_empty_today", "dash.summary_empty_other",
+    "dash.summary_cal_over", "dash.summary_cal_ok", "dash.summary_cal_under",
+    "dash.summary_under_today_tail", "dash.summary_cal_low",
+    "dash.summary_macro_low", "dash.summary_macro_high",
+    "dash.macro_proteins", "dash.macro_carbs_g", "dash.macro_fats",
+    "dash.summary_meals_water",
+    "dash.meal_breakfast", "dash.meal_lunch", "dash.meal_dinner",
+    "dash.meal_snack", "dash.meal_other",
+    "dash.meals_pct_of_goal", "dash.meals_summary_kcal_of",
+    "dash.meal_empty_other",
+    "dash.profile_field_name", "dash.profile_field_age",
+    "dash.profile_field_age_unit", "dash.profile_field_sex",
+    "dash.profile_field_weight", "dash.profile_field_height",
+    "dash.profile_field_gym", "dash.profile_field_goal",
+    "dash.profile_target_weight", "dash.profile_target_done",
+    "dash.profile_target_togo", "dash.profile_target_plain",
+    "dash.profile_weekly_delta", "dash.profile_weekly_delta_v",
+    "dash.profile_projection", "dash.profile_projection_weeks",
+    "dash.profile_status_ahead", "dash.profile_status_on_track",
+    "dash.profile_status_behind", "dash.profile_pace",
+    "dash.profile_pace_actual",
+    "dash.targets_calories", "dash.targets_protein", "dash.targets_carbs",
+    "dash.targets_fat", "dash.targets_water",
+    "dash.avg_empty", "dash.adherence_empty", "dash.avg_subtitle",
+    "dash.streak_singular", "dash.streak_few", "dash.streak_many",
+    "dash.unit_kcal", "dash.unit_g", "dash.unit_kg", "dash.unit_l",
+    "dash.unit_cm",
+)
+
+
+def _build_js_labels(locale: str) -> str:
+    """Serialize the JS-side labels dict as JSON ready to inject into the page."""
+    labels = {}
+    for key in _DASHBOARD_JS_KEYS:
+        short = key.split(".", 1)[1]
+        labels[short] = _i18n_t(key, locale=locale)
+    return json.dumps(labels, ensure_ascii=False)
+
+
+def _locale_from_request(path: str, form: dict | None = None) -> str:
+    """Pick a supported locale from ?lang= query first, then form data, then en."""
+    try:
+        qs = urllib.parse.urlsplit(path).query
+        params = urllib.parse.parse_qs(qs)
+        candidate = (params.get("lang") or [""])[0].lower()
+        if candidate in ("uk", "en"):
+            return candidate
+    except Exception:
+        pass
+    if form:
+        try:
+            candidate = (form.get("lang") or [""])[0].lower()
+            if candidate in ("uk", "en"):
+                return candidate
+        except Exception:
+            pass
+    return "en"
 
 setup_sentry("dashboard")
 
@@ -255,7 +330,8 @@ class handler(BaseHTTPRequestHandler):
     @http_handler("dashboard")
     def do_GET(self):
         nonce = _new_nonce()
-        self._send_html(200, _BOOTSTRAP_HTML.replace("__NONCE__", _esc(nonce)), nonce=nonce)
+        locale = _locale_from_request(self.path)
+        self._send_html(200, _render_bootstrap(nonce=nonce, locale=locale), nonce=nonce)
 
     @http_handler("dashboard")
     def do_POST(self):
@@ -277,12 +353,16 @@ class handler(BaseHTTPRequestHandler):
             self._send_html(400, "<h1>Bad request</h1>")
             return
 
+        # F-2b Chunk 7: locale propagates from query string OR the bootstrap
+        # form. Both render paths (init failure + dashboard SSR) honour it.
+        locale = _locale_from_request(self.path, form)
+
         user = _verify_init_data(init_data)
         if user is None:
             if action == "day_data":
                 self._send_json(401, {"error": "unauthorized"})
             else:
-                self._send_html(401, _unauthorized_html())
+                self._send_html(401, _unauthorized_html(locale=locale))
             return
 
         user_id = user["id"]
@@ -290,7 +370,7 @@ class handler(BaseHTTPRequestHandler):
 
         # F-12.5 (dashboard share): generate the weekly recap PNG and send it
         # to the user's chat via the bot. Mini App stays on screen so the JS
-        # can show "✓ Картка в чаті" → tg.close() shortly after.
+        # can show a "card sent" toast → tg.close() shortly after.
         if action == "request_recap":
             from lib.recap import build_user_recap
             from lib.database import get_profile
@@ -352,7 +432,7 @@ class handler(BaseHTTPRequestHandler):
 
         nonce = _new_nonce()
         try:
-            body = _render_dashboard(user, nonce=nonce)
+            body = _render_dashboard(user, nonce=nonce, locale=locale)
         except Exception:
             print("dashboard render error:", traceback.format_exc(), flush=True)
             body = "<pre>Dashboard error (see logs)</pre>"
@@ -362,7 +442,7 @@ class handler(BaseHTTPRequestHandler):
 # ---------------------------------------------------------------- Bootstrap --
 
 _BOOTSTRAP_HTML = """<!DOCTYPE html>
-<html lang="uk">
+<html lang="__LANG__">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -397,11 +477,13 @@ _BOOTSTRAP_HTML = """<!DOCTYPE html>
 <body>
 <div id="loading">
   <div class="spinner"></div>
-  <p>Завантаження…</p>
+  <p>__LABEL_LOADING__</p>
 </div>
 <div id="error" style="display:none"></div>
 <script nonce="__NONCE__">
 (function(){
+  var L = __JS_LABELS__;
+  var LANG = '__LANG__';
   function applyTheme() {
     var tg = window.Telegram && window.Telegram.WebApp;
     var tp = (tg && tg.themeParams) || {};
@@ -435,10 +517,10 @@ _BOOTSTRAP_HTML = """<!DOCTYPE html>
     var tg = window.Telegram && window.Telegram.WebApp;
     var hasSDK = !!tg, hasInitData = !!(tg && tg.initData);
     err.innerHTML =
-      '<h2 class="err">Не вдалося відкрити Dashboard</h2>' +
-      '<p>Схоже, сторінку відкрили не через кнопку Telegram Mini App.</p>' +
-      '<p>Переконайся, що натискаєш саме кнопку <b>📱 Dashboard</b> на клавіатурі бота.</p>' +
-      '<button onclick="location.reload()">🔄 Спробувати ще раз</button>' +
+      '<h2 class="err">' + L.err_title + '</h2>' +
+      '<p>' + L.err_p1 + '</p>' +
+      '<p>' + L.err_p2 + '</p>' +
+      '<button onclick="location.reload()">' + L.retry + '</button>' +
       '<div class="diag">' +
       'has Telegram SDK: ' + hasSDK + '<br>' +
       'has initData: ' + hasInitData + '<br>' +
@@ -470,6 +552,13 @@ _BOOTSTRAP_HTML = """<!DOCTYPE html>
     inp.name = 'initData';
     inp.value = initDataStr;
     form.appendChild(inp);
+    // F-2b Chunk 7: forward locale to the POST handler so the dashboard
+    // SSR uses the same language as the bootstrap.
+    var langInp = document.createElement('input');
+    langInp.type = 'hidden';
+    langInp.name = 'lang';
+    langInp.value = LANG;
+    form.appendChild(langInp);
     document.body.appendChild(form);
     form.submit();
   }
@@ -489,46 +578,75 @@ _BOOTSTRAP_HTML = """<!DOCTYPE html>
 </html>"""
 
 
-def _unauthorized_html() -> str:
-    return """<!DOCTYPE html>
-<html lang="uk"><head><meta charset="utf-8">
+def _render_bootstrap(nonce: str, locale: str = "en") -> str:
+    """Build the bootstrap page HTML for a given locale + CSP nonce."""
+    bootstrap_js_keys = (
+        "dash.bootstrap_err_title", "dash.bootstrap_err_p1",
+        "dash.bootstrap_err_p2", "dash.bootstrap_retry",
+    )
+    js_labels = json.dumps(
+        {k.split(".", 1)[1].replace("bootstrap_", ""): _i18n_t(k, locale=locale) for k in bootstrap_js_keys},
+        ensure_ascii=False,
+    )
+    # Normalize key names so the JS object reads `L.err_title`, `L.retry`, etc.
+    js_labels = (
+        js_labels
+        .replace('"err_title"', '"err_title"')  # already short
+    )
+    return (
+        _BOOTSTRAP_HTML
+        .replace("__NONCE__", _esc(nonce))
+        .replace("__LANG__", locale)
+        .replace("__LABEL_LOADING__", _esc(_i18n_t("dash.bootstrap_loading", locale=locale)))
+        .replace("__JS_LABELS__", js_labels)
+    )
+
+
+def _unauthorized_html(locale: str = "en") -> str:
+    h1 = _esc(_i18n_t("dash.unauth_h1", locale=locale))
+    # _i18n_t returns the body raw (no <b> escaping needed; static text).
+    p = _i18n_t("dash.unauth_p", locale=locale)
+    return f"""<!DOCTYPE html>
+<html lang="{locale}"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>KusWise Bot</title>
 <link rel="icon" type="image/png" href="/logo.png">
 <style>
-  :root { color-scheme: light dark; }
-  body { margin: 0; padding: 40px 20px;
+  :root {{ color-scheme: light dark; }}
+  body {{ margin: 0; padding: 40px 20px;
          font-family: -apple-system, system-ui, sans-serif;
          background: var(--tg-theme-bg-color, #101014);
-         color: var(--tg-theme-text-color, #e6e6ea); text-align: center; }
-  h1 { color: var(--tg-theme-destructive-text-color, #ef5b5b); }
+         color: var(--tg-theme-text-color, #e6e6ea); text-align: center; }}
+  h1 {{ color: var(--tg-theme-destructive-text-color, #ef5b5b); }}
 </style></head>
 <body>
-<h1>🔒 Доступ заборонено</h1>
-<p>Не вдалося підтвердити ідентичність у Telegram. Спробуй закрити і відкрити знову з бота.</p>
+<h1>{h1}</h1>
+<p>{_esc(p)}</p>
 </body></html>"""
 
 
 # ------------------------------------------------------------ Dashboard SSR --
 
 _MEAL_TYPE_ORDER = ["breakfast", "lunch", "dinner", "snack"]
-_MEAL_TYPE_UA = {
-    "breakfast": "🍳 Сніданок",
-    "lunch":     "🥗 Обід",
-    "dinner":    "🍽️ Вечеря",
-    "snack":     "🍎 Перекус",
-}
-_GOAL_UA = {
-    "lose":     "🔥 Схуднути",
-    "maintain": "⚖️ Підтримувати",
-    "gain":     "💪 Набрати м'язи",
-}
-_SEX_UA = {"male": "Чоловік", "female": "Жінка"}
 
 
-def _render_dashboard(user: dict, nonce: str = "") -> str:
+def _goal_label(goal: str | None, locale: str = "en") -> str:
+    if not goal:
+        return ""
+    return _i18n_t(f"dash.goal_{goal}", locale=locale)
+
+
+def _sex_label(sex: str | None, locale: str = "en") -> str:
+    if not sex:
+        return ""
+    return _i18n_t(f"dash.sex_{sex}", locale=locale)
+
+
+def _render_dashboard(user: dict, nonce: str = "", locale: str = "en") -> str:
     user_id = user["id"]
-    first_name = user.get("first_name") or "друже"
+    # Locale-neutral fallback when no first_name is on file. Telegram always
+    # gives us first_name on initData, so this rarely fires.
+    first_name = user.get("first_name") or ("friend" if locale == "en" else "друже")  # noqa: i18n
     username = user.get("username") or ""
 
     today = _today_str()
@@ -633,19 +751,51 @@ def _render_dashboard(user: dict, nonce: str = "") -> str:
         "today_blob":        today_blob,
         "history":           history_map,
         "adherence":         adherence,
-        "goal_ua":           _GOAL_UA.get(goal or "", ""),
-        "sex_ua":            _SEX_UA.get(profile.get("sex") or "", ""),
+        "goal_ua":           _goal_label(goal, locale=locale),
+        "sex_ua":            _sex_label(profile.get("sex"), locale=locale),
         "bot_url":           f"https://t.me/{TELEGRAM_BOT_USERNAME}" if TELEGRAM_BOT_USERNAME else "",
     }
-    return (
+    body = (
         _DASHBOARD_HTML
         .replace("__DATA_JSON__", _json_for_script(data))
         .replace("__NONCE__", _esc(nonce))
+        .replace("__LANG__", locale)
+        .replace("__JS_LABELS__", _build_js_labels(locale))
     )
+    # Static HTML labels — interpolated server-side.
+    static_labels = {
+        "WATER":              _i18n_t("dash.water",              locale=locale),
+        "WATER_UNITS":        _i18n_t("dash.water_units",        locale=locale),
+        "CAL_REMAINING":      _i18n_t("dash.cal_remaining",      locale=locale),
+        "CAL_REMAINING_UNIT": _i18n_t("dash.cal_remaining_unit", locale=locale),
+        "MACRO_H2":           _i18n_t("dash.macro_h2",           locale=locale),
+        "MACRO_PROTEIN":      _i18n_t("dash.macro_protein",      locale=locale),
+        "MACRO_CARBS":        _i18n_t("dash.macro_carbs",        locale=locale),
+        "MACRO_FAT":          _i18n_t("dash.macro_fat",          locale=locale),
+        "SUMMARY":            _i18n_t("dash.summary",            locale=locale),
+        "SHARE_H2":           _i18n_t("dash.share_h2",           locale=locale),
+        "SHARE_BLURB":        _i18n_t("dash.share_blurb",        locale=locale),
+        "SHARE_BTN":          _i18n_t("dash.share_btn",          locale=locale),
+        "MEALS_H2":           _i18n_t("dash.meals_h2",           locale=locale),
+        "MEALS_LOADING":      _i18n_t("dash.meals_loading",      locale=locale),
+        "MEALS_HINT":         _i18n_t("dash.meals_hint",         locale=locale),
+        "PROFILE_H2":         _i18n_t("dash.profile_h2",         locale=locale),
+        "DAILY_TARGETS":      _i18n_t("dash.daily_targets",      locale=locale),
+        "ALLTIME_AVG":        _i18n_t("dash.alltime_avg",        locale=locale),
+        "ADHERENCE":          _i18n_t("dash.adherence",          locale=locale),
+        "STREAK_H2":          _i18n_t("dash.streak_h2",          locale=locale),
+        "STREAK_PILL_ZERO":   _i18n_t("dash.streak_pill_zero",   locale=locale),
+        "NAV_OVERVIEW":       _i18n_t("dash.nav_overview",       locale=locale),
+        "NAV_MEALS":          _i18n_t("dash.nav_meals",          locale=locale),
+        "NAV_PROFILE":        _i18n_t("dash.nav_profile",        locale=locale),
+    }
+    for k, v in static_labels.items():
+        body = body.replace(f"__LABEL_{k}__", v)
+    return body
 
 
 _DASHBOARD_HTML = r"""<!DOCTYPE html>
-<html lang="uk">
+<html lang="__LANG__">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
@@ -930,8 +1080,8 @@ _DASHBOARD_HTML = r"""<!DOCTYPE html>
   <section id="tab-overview">
     <div class="hero">
       <div class="hero-side">
-        <div class="label">💧 Вода</div>
-        <div class="value" id="waterValue">0 / 0 л</div>
+        <div class="label">__LABEL_WATER__</div>
+        <div class="value" id="waterValue">__LABEL_WATER_UNITS__</div>
         <div class="unit" id="waterPct">0 %</div>
         <div class="mini-bar"><div class="mini-fill" id="waterBar"></div></div>
       </div>
@@ -946,106 +1096,103 @@ _DASHBOARD_HTML = r"""<!DOCTYPE html>
         </svg>
         <div class="ring-center">
           <div class="big" id="calEaten">0</div>
-          <div class="sub">з <span id="calGoal">0</span> ккал</div>
+          <div class="sub" id="calSub">—</div>
           <div class="unit" id="calPct">0 %</div>
         </div>
       </div>
       <div class="hero-side">
-        <div class="label">🔥 Ще можна</div>
+        <div class="label">__LABEL_CAL_REMAINING__</div>
         <div class="value" id="calRemaining">0</div>
-        <div class="unit">ккал</div>
+        <div class="unit">__LABEL_CAL_REMAINING_UNIT__</div>
       </div>
     </div>
 
     <div class="card">
-      <h2>Макро</h2>
+      <h2>__LABEL_MACRO_H2__</h2>
       <div class="macro">
-        <span class="macro-name">🥩 Білок</span>
+        <span class="macro-name">__LABEL_MACRO_PROTEIN__</span>
         <div class="macro-bar"><div id="pFill" class="macro-fill"></div></div>
-        <b class="macro-val" id="pVal">0 / 0 г</b>
+        <b class="macro-val" id="pVal">—</b>
       </div>
       <div class="macro">
-        <span class="macro-name">🍞 Вуглеводи</span>
+        <span class="macro-name">__LABEL_MACRO_CARBS__</span>
         <div class="macro-bar"><div id="cFill" class="macro-fill"></div></div>
-        <b class="macro-val" id="cVal">0 / 0 г</b>
+        <b class="macro-val" id="cVal">—</b>
       </div>
       <div class="macro">
-        <span class="macro-name">🥑 Жири</span>
+        <span class="macro-name">__LABEL_MACRO_FAT__</span>
         <div class="macro-bar"><div id="fFill" class="macro-fill"></div></div>
-        <b class="macro-val" id="fVal">0 / 0 г</b>
+        <b class="macro-val" id="fVal">—</b>
       </div>
     </div>
 
     <div class="card summary-card">
-      <h2>Підсумок</h2>
+      <h2>__LABEL_SUMMARY__</h2>
       <p class="summary-text" id="daySummary">—</p>
     </div>
 
     <div class="card share-card">
-      <h2>Поділись тижнем</h2>
-      <p class="share-blurb">
-        📸 Картка з твоїми результатами за останні 7 днів — серія,
-        середні калорії, макро. З QR на бот, щоб друзі могли спробувати.
-      </p>
-      <button type="button" id="shareBtn">📸 Поділитись тижнем</button>
+      <h2>__LABEL_SHARE_H2__</h2>
+      <p class="share-blurb">__LABEL_SHARE_BLURB__</p>
+      <button type="button" id="shareBtn">__LABEL_SHARE_BTN__</button>
       <div class="share-status" id="shareStatus"></div>
     </div>
   </section>
 
   <section id="tab-meals" hidden>
     <div class="card meals-summary-card">
-      <div class="meals-summary-head" id="mealsDateHeader">Страви</div>
+      <div class="meals-summary-head" id="mealsDateHeader">__LABEL_MEALS_H2__</div>
       <div class="meals-summary-big">
         <span class="meals-summary-kcal" id="sumKcal">0</span>
-        <span class="meals-summary-kcal-of">/ <span id="sumKcalTarget">0</span> ккал</span>
+        <span class="meals-summary-kcal-of" id="sumKcalOfLabel">—</span>
       </div>
       <div class="meals-summary-pct" id="sumPct">0%</div>
       <div class="meals-summary-bar"><div class="meals-summary-fill" id="sumFill"></div></div>
       <div class="meals-summary-macros" id="sumMacros">—</div>
     </div>
     <div class="card">
-      <div id="mealsList"><p class="meal-empty">Завантаження…</p></div>
-      <p class="hint-line">Змінити або видалити можна в боті: <b>/meals</b></p>
+      <div id="mealsList"><p class="meal-empty">__LABEL_MEALS_LOADING__</p></div>
+      <p class="hint-line">__LABEL_MEALS_HINT__</p>
     </div>
   </section>
 
   <section id="tab-profile" hidden>
     <div class="card">
-      <h2>Профіль</h2>
+      <h2>__LABEL_PROFILE_H2__</h2>
       <div class="id-grid" id="profileGrid"></div>
     </div>
 
     <div class="card">
-      <h2>Цілі на день</h2>
+      <h2>__LABEL_DAILY_TARGETS__</h2>
       <div class="id-grid" id="targetsGrid"></div>
     </div>
 
     <div class="card">
-      <h2>Середнє за весь час</h2>
+      <h2>__LABEL_ALLTIME_AVG__</h2>
       <div id="averagesBody"></div>
     </div>
 
     <div class="card">
-      <h2>Влучність (±15 % від цілі)</h2>
+      <h2>__LABEL_ADHERENCE__</h2>
       <div id="adherenceBody"></div>
     </div>
 
     <div class="card" id="streakCard" hidden>
-      <h2>Серія</h2>
-      <span class="streak-pill" id="streakValue">🔥 0 днів поспіль</span>
+      <h2>__LABEL_STREAK_H2__</h2>
+      <span class="streak-pill" id="streakValue">__LABEL_STREAK_PILL_ZERO__</span>
     </div>
   </section>
 </main>
 
 <nav class="bottom-nav" id="bottomNav">
   <button type="button" class="active" data-tab="overview">
-    <span class="nav-icon">🏠</span><span>Огляд</span>
+    <span class="nav-icon">🏠</span><span>__LABEL_NAV_OVERVIEW__</span>
   </button>
   <button type="button" data-tab="meals">
-    <span class="nav-icon">🍽️</span><span>Страви</span>
+    <span class="nav-icon">🍽️</span><span>__LABEL_NAV_MEALS__</span>
   </button>
   <button type="button" data-tab="profile">
-    <span class="nav-icon">👤</span><span>Профіль</span>
+    <span class="nav-icon">👤</span><span>__LABEL_NAV_PROFILE__</span>
   </button>
 </nav>
 
@@ -1116,8 +1263,17 @@ _DASHBOARD_HTML = r"""<!DOCTYPE html>
   weekAnchor = startOfWeek(fromISO(selectedDate));
 
   // --- Spinner rendering ---
-  var DOW_UA = ['Пн','Вт','Ср','Чт','Пт','Сб','Нд'];
-  var MONTH_UA = ['січ','лют','бер','кві','тра','чер','лип','сер','вер','жов','лис','гру'];
+  var L = __JS_LABELS__;
+  function fmt(s, vars) {
+    if (!s) return '';
+    if (!vars) return s;
+    return s.replace(/\{(\w+)\}/g, function(_, k) {
+      return vars[k] !== undefined ? vars[k] : ('{' + k + '}');
+    });
+  }
+  var DOW_UA = [L.dow_mon, L.dow_tue, L.dow_wed, L.dow_thu, L.dow_fri, L.dow_sat, L.dow_sun];
+  var MONTH_UA = [L.month_jan, L.month_feb, L.month_mar, L.month_apr, L.month_may, L.month_jun,
+                  L.month_jul, L.month_aug, L.month_sep, L.month_oct, L.month_nov, L.month_dec];
 
   function renderSpinner() {
     var row = document.getElementById('spinnerRow');
@@ -1136,7 +1292,7 @@ _DASHBOARD_HTML = r"""<!DOCTYPE html>
       if (isToday) btn.classList.add('today');
       if (isSelected) btn.classList.add('selected');
       btn.disabled = isFuture || isTooOld;
-      var label = isToday ? 'Сьогодні' : DOW_UA[i];
+      var label = isToday ? L.today_label : DOW_UA[i];
       btn.innerHTML = '<span class="dow">' + label + '</span>' +
                       '<span class="num">' + d.getDate() + '</span>';
       (function(iso2){
@@ -1206,7 +1362,7 @@ _DASHBOARD_HTML = r"""<!DOCTYPE html>
     shareBtn.addEventListener('click', function() {
       shareBtn.disabled = true;
       shareStatus.className = 'share-status';
-      shareStatus.textContent = '🍳 Готую картку…';
+      shareStatus.textContent = L.share_status_preparing;
       var initData = (TG && TG.initData) || '';
       var body = 'action=request_recap&initData=' + encodeURIComponent(initData);
       fetch(window.location.pathname, {
@@ -1219,18 +1375,18 @@ _DASHBOARD_HTML = r"""<!DOCTYPE html>
       }).then(function(j){
         if (j && j.ok) {
           shareStatus.className = 'share-status ok';
-          shareStatus.textContent = '✓ Картка в чаті — закриваю';
+          shareStatus.textContent = L.share_status_sent;
           setTimeout(function(){
             try { TG && TG.close(); } catch(e) {}
           }, 900);
         } else {
           shareStatus.className = 'share-status err';
-          shareStatus.textContent = '❌ Не вдалось — спробуй ще раз';
+          shareStatus.textContent = L.share_status_failed;
           shareBtn.disabled = false;
         }
       }).catch(function(){
         shareStatus.className = 'share-status err';
-        shareStatus.textContent = '❌ Помилка мережі';
+        shareStatus.textContent = L.share_status_network;
         shareBtn.disabled = false;
       });
     });
@@ -1302,18 +1458,24 @@ _DASHBOARD_HTML = r"""<!DOCTYPE html>
       'stroke-dasharray', circumference.toFixed(1));
     document.getElementById('calRing').setAttribute(
       'stroke-dashoffset', (circumference * (1 - pct)).toFixed(1));
-    document.getElementById('calEaten').textContent = Math.round(cal).toLocaleString('uk-UA');
-    document.getElementById('calGoal').textContent = calTarget.toLocaleString('uk-UA');
+    var localeStr = LANG === 'uk' ? 'uk-UA' : 'en-US';
+    document.getElementById('calEaten').textContent = Math.round(cal).toLocaleString(localeStr);
+    document.getElementById('calGoal').textContent = calTarget.toLocaleString(localeStr);
     document.getElementById('calPct').textContent = Math.round(pct * 100) + ' %';
+    var calSubEl = document.getElementById('calSub');
+    if (calSubEl) {
+      calSubEl.innerHTML = fmt(L.cal_subtitle, {goal: '<span id="calGoal">' + calTarget.toLocaleString(localeStr) + '</span>'});
+    }
 
     // Remaining calories
     var remaining = Math.max(0, calTarget - cal);
-    document.getElementById('calRemaining').textContent = Math.round(remaining).toLocaleString('uk-UA');
+    document.getElementById('calRemaining').textContent = Math.round(remaining).toLocaleString(localeStr);
 
     // Water
-    var waterL = (waterMl / 1000).toFixed(2).replace('.', ',');
-    var waterTargetL = (waterTarget / 1000).toFixed(1).replace('.', ',');
-    document.getElementById('waterValue').textContent = waterL + ' / ' + waterTargetL + ' л';
+    var decSep = LANG === 'uk' ? ',' : '.';
+    var waterL = (waterMl / 1000).toFixed(2).replace('.', decSep);
+    var waterTargetL = (waterTarget / 1000).toFixed(1).replace('.', decSep);
+    document.getElementById('waterValue').textContent = waterL + ' / ' + waterTargetL + ' ' + L.unit_l;
     var waterPctRaw = waterTarget > 0 ? Math.min(1, waterMl / waterTarget) : 0;
     document.getElementById('waterPct').textContent = Math.round(waterPctRaw * 100) + ' %';
     document.getElementById('waterBar').style.width = (waterPctRaw * 100).toFixed(1) + '%';
@@ -1327,7 +1489,7 @@ _DASHBOARD_HTML = r"""<!DOCTYPE html>
       fill.style.width = Math.min(100, pct).toFixed(1) + '%';
       fill.className = 'macro-fill ' + macroClass((value / tgt) * 100);
       document.getElementById(valId).textContent =
-        Math.round(value) + ' / ' + Math.round(tgt) + ' г';
+        Math.round(value) + ' / ' + Math.round(tgt) + ' ' + L.unit_g;
     }
     setMacro('pFill', 'pVal', p, t.protein);
     setMacro('cFill', 'cVal', c, t.carbs);
@@ -1350,26 +1512,26 @@ _DASHBOARD_HTML = r"""<!DOCTYPE html>
     var diff = Math.round(cal - calTarget);
     var parts = [];
 
+    var localeStr2 = LANG === 'uk' ? 'uk-UA' : 'en-US';
+    var decSep2 = LANG === 'uk' ? ',' : '.';
     if (mc === 0) {
-      parts.push(isToday
-        ? 'Сьогодні ще нічого не записано.'
-        : 'На цей день нічого не записано.');
+      parts.push(isToday ? L.summary_empty_today : L.summary_empty_other);
     } else {
       if (calPct > 115) {
-        parts.push('Калорії перевищено: <b>' + calPct + '%</b> цілі (+' + Math.abs(diff).toLocaleString('uk-UA') + ' ккал).');
+        parts.push(fmt(L.summary_cal_over, {pct: calPct, diff: Math.abs(diff).toLocaleString(localeStr2)}));
       } else if (calPct >= 85) {
-        parts.push('Калорії в нормі: <b>' + calPct + '%</b> цілі.');
+        parts.push(fmt(L.summary_cal_ok, {pct: calPct}));
       } else if (calPct >= 50) {
-        parts.push('Калорій з\'їдено <b>' + calPct + '%</b> цілі' + (isToday ? ' — ще є простір.' : '.'));
+        parts.push(fmt(L.summary_cal_under, {pct: calPct, tail: (isToday ? L.summary_under_today_tail : '.')}));
       } else {
-        parts.push('Калорій дуже мало: <b>' + calPct + '%</b> цілі.');
+        parts.push(fmt(L.summary_cal_low, {pct: calPct}));
       }
 
       // Find the most-off macro (largest |pct-100|) and comment on it.
       var macros = [
-        {name: 'білків',    val: p, target: t.protein},
-        {name: 'вуглеводів',val: c, target: t.carbs},
-        {name: 'жирів',     val: f, target: t.fat},
+        {name: L.macro_proteins, val: p, target: t.protein},
+        {name: L.macro_carbs_g,  val: c, target: t.carbs},
+        {name: L.macro_fats,     val: f, target: t.fat},
       ];
       var worst = null, worstOff = 0;
       macros.forEach(function(m){
@@ -1380,15 +1542,11 @@ _DASHBOARD_HTML = r"""<!DOCTYPE html>
       });
       if (worst && worstOff >= 25) {
         var pctR = Math.round(worst.pct);
-        if (worst.pct < 100) {
-          parts.push('Мало ' + worst.m.name + ' — <b>' + pctR + '%</b> цілі.');
-        } else {
-          parts.push('Багато ' + worst.m.name + ' — <b>' + pctR + '%</b> цілі.');
-        }
+        var key = worst.pct < 100 ? L.summary_macro_low : L.summary_macro_high;
+        parts.push(fmt(key, {macro: worst.m.name, pct: pctR}));
       }
 
-      parts.push('<span class="muted">Страв: ' + mc + ' · вода ' +
-                 (waterMl / 1000).toFixed(2).replace('.', ',') + ' л.</span>');
+      parts.push('<span class="muted">' + fmt(L.summary_meals_water, {meals: mc, water: (waterMl / 1000).toFixed(2).replace('.', decSep2)}) + '</span>');
     }
 
     document.getElementById('daySummary').innerHTML = parts.join(' ');
@@ -1396,11 +1554,11 @@ _DASHBOARD_HTML = r"""<!DOCTYPE html>
 
   // --- Meals rendering ---
   var MEAL_TYPE_ORDER = ['breakfast', 'lunch', 'dinner', 'snack'];
-  var MEAL_TYPE_UA = {
-    breakfast: '🍳 Сніданок',
-    lunch:     '🥗 Обід',
-    dinner:    '🍽️ Вечеря',
-    snack:     '🍎 Перекус'
+  var MEAL_TYPE_LABELS = {
+    breakfast: L.meal_breakfast,
+    lunch:     L.meal_lunch,
+    dinner:    L.meal_dinner,
+    snack:     L.meal_snack
   };
 
   function renderMeals(blob) {
@@ -1411,24 +1569,25 @@ _DASHBOARD_HTML = r"""<!DOCTYPE html>
     var log = blob.log || {};
     var list = document.getElementById('mealsList');
     var meals = blob.meals || [];
+    var localeStr = LANG === 'uk' ? 'uk-UA' : 'en-US';
 
     var cal = log.calories || 0;
     var pct = Math.round((cal / calTarget) * 100);
     var fillPct = Math.min(100, Math.max(0, pct));
     document.getElementById('sumKcal').textContent =
-      Math.round(cal).toLocaleString('uk-UA');
-    document.getElementById('sumKcalTarget').textContent =
-      calTarget.toLocaleString('uk-UA');
-    document.getElementById('sumPct').textContent = pct + '% цілі';
+      Math.round(cal).toLocaleString(localeStr);
+    var ofLabel = document.getElementById('sumKcalOfLabel');
+    if (ofLabel) ofLabel.textContent = fmt(L.meals_summary_kcal_of, {target: calTarget.toLocaleString(localeStr)});
+    document.getElementById('sumPct').textContent = fmt(L.meals_pct_of_goal, {pct: pct});
     document.getElementById('sumFill').style.width = fillPct + '%';
     document.getElementById('sumMacros').innerHTML =
-      '🥩 ' + Math.round(log.protein || 0) + ' г · ' +
-      '🍞 ' + Math.round(log.carbs || 0) + ' г · ' +
-      '🥑 ' + Math.round(log.fat || 0) + ' г · ' +
-      'страв: ' + meals.length;
+      '🥩 ' + Math.round(log.protein || 0) + ' ' + L.unit_g + ' · ' +
+      '🍞 ' + Math.round(log.carbs || 0) + ' ' + L.unit_g + ' · ' +
+      '🥑 ' + Math.round(log.fat || 0) + ' ' + L.unit_g + ' · ' +
+      meals.length + ' ' + (LANG === 'uk' ? 'страв' : 'meals');  // noqa: i18n
 
     if (meals.length === 0) {
-      list.innerHTML = '<p class="meal-empty">На цей день нічого не записано.</p>';
+      list.innerHTML = '<p class="meal-empty">' + L.meal_empty_other + '</p>';
       return;
     }
     var grouped = {};
@@ -1443,24 +1602,24 @@ _DASHBOARD_HTML = r"""<!DOCTYPE html>
     MEAL_TYPE_ORDER.forEach(function(t){
       var arr = grouped[t];
       if (arr.length === 0) return;
-      html += '<div class="meal-group"><h3>' + MEAL_TYPE_UA[t] + '</h3>';
+      html += '<div class="meal-group"><h3>' + MEAL_TYPE_LABELS[t] + '</h3>';
       arr.forEach(function(m){
         var pct = calTarget > 0 ? Math.round((m.calories / calTarget) * 100) : 0;
         html += '<div class="meal-row">' +
                 '<div class="meal-desc">' + esc(m.description) + '</div>' +
-                '<div class="meal-kcal">' + Math.round(m.calories) + ' ккал</div>' +
+                '<div class="meal-kcal">' + Math.round(m.calories) + ' ' + L.unit_kcal + '</div>' +
                 '<div class="meal-pct">' + pct + ' %</div>' +
                 '</div>';
       });
       html += '</div>';
     });
     if (unknown.length) {
-      html += '<div class="meal-group"><h3>Інше</h3>';
+      html += '<div class="meal-group"><h3>' + L.meal_other + '</h3>';
       unknown.forEach(function(m){
         var pct = calTarget > 0 ? Math.round((m.calories / calTarget) * 100) : 0;
         html += '<div class="meal-row">' +
                 '<div class="meal-desc">' + esc(m.description) + '</div>' +
-                '<div class="meal-kcal">' + Math.round(m.calories) + ' ккал</div>' +
+                '<div class="meal-kcal">' + Math.round(m.calories) + ' ' + L.unit_kcal + '</div>' +
                 '<div class="meal-pct">' + pct + ' %</div>' +
                 '</div>';
       });
@@ -1482,8 +1641,8 @@ _DASHBOARD_HTML = r"""<!DOCTYPE html>
   }
 
   // --- Profile rendering ---
-  var GOAL_UA = { lose: '🔥 Схуднути', maintain: '⚖️ Підтримувати', gain: '💪 Набрати мʼязи' };
-  var SEX_UA  = { male: 'Чоловік', female: 'Жінка' };
+  // Server-side label maps (DATA.goal_ua / DATA.sex_ua) carry the locale-
+  // resolved label text; JS just uses the strings already produced by Python.
 
   function idRow(k, v) {
     return '<div class="k">' + esc(k) + '</div><div class="v">' + esc(v) + '</div>';
@@ -1492,14 +1651,16 @@ _DASHBOARD_HTML = r"""<!DOCTYPE html>
   function renderProfile() {
     var p = DATA.profile || {}, t = DATA.targets || {}, a = DATA.adherence || {};
     var grid = document.getElementById('profileGrid');
+    var localeStr = LANG === 'uk' ? 'uk-UA' : 'en-US';
+    var decSep = LANG === 'uk' ? ',' : '.';
     var rows =
-      idRow('Імʼя', DATA.user.first_name || '—') +
-      idRow('Вік', p.age != null ? p.age + ' р.' : '—') +
-      idRow('Стать', SEX_UA[p.sex] || '—') +
-      idRow('Вага', p.weight_kg != null ? p.weight_kg + ' кг' : '—') +
-      idRow('Зріст', p.height_cm != null ? p.height_cm + ' см' : '—') +
-      idRow('Зал/тиждень', p.gym_per_week != null ? p.gym_per_week + '×' : '—') +
-      idRow('Ціль', GOAL_UA[p.goal] || '—');
+      idRow(L.profile_field_name, DATA.user.first_name || '—') +
+      idRow(L.profile_field_age, p.age != null ? p.age + ' ' + L.profile_field_age_unit : '—') +
+      idRow(L.profile_field_sex, DATA.sex_ua || '—') +
+      idRow(L.profile_field_weight, p.weight_kg != null ? p.weight_kg + ' ' + L.unit_kg : '—') +
+      idRow(L.profile_field_height, p.height_cm != null ? p.height_cm + ' ' + L.unit_cm : '—') +
+      idRow(L.profile_field_gym, p.gym_per_week != null ? p.gym_per_week + '×' : '—') +
+      idRow(L.profile_field_goal, DATA.goal_ua || '—');
 
     if (p.target_weight_kg != null && (p.goal === 'lose' || p.goal === 'gain')) {
       var togoTxt;
@@ -1507,23 +1668,22 @@ _DASHBOARD_HTML = r"""<!DOCTYPE html>
         var delta = Number(p.weight_kg) - Number(p.target_weight_kg);
         var rem = p.goal === 'lose' ? Math.max(0, delta) : Math.max(0, -delta);
         if (rem <= 0.05) {
-          togoTxt = p.target_weight_kg + ' кг (🎉)';
+          togoTxt = fmt(L.profile_target_done, {target: p.target_weight_kg});
         } else {
           var sign = p.goal === 'lose' ? '−' : '+';
-          togoTxt = p.target_weight_kg + ' кг (' + sign + rem.toFixed(1) + ' кг)';
+          togoTxt = fmt(L.profile_target_togo, {target: p.target_weight_kg, sign: sign, rem: rem.toFixed(1)});
         }
       } else {
-        togoTxt = p.target_weight_kg + ' кг';
+        togoTxt = fmt(L.profile_target_plain, {target: p.target_weight_kg});
       }
-      rows += idRow('Цільова вага', togoTxt);
+      rows += idRow(L.profile_target_weight, togoTxt);
     }
 
     // F-5: Goals projection block (weekly delta + projected date + status).
     var g = p.goals || {};
     if (g.weekly_delta_kg && (p.goal === 'lose' || p.goal === 'gain')) {
-      var deltaTxt = (g.weekly_delta_kg > 0 ? '+' : '') +
-                     Number(g.weekly_delta_kg).toFixed(2) + ' кг/тиждень';
-      rows += idRow('Тижнева ціль', deltaTxt);
+      var deltaTxt = fmt(L.profile_weekly_delta_v, {sign: (g.weekly_delta_kg > 0 ? '+' : ''), val: Number(g.weekly_delta_kg).toFixed(2)});
+      rows += idRow(L.profile_weekly_delta, deltaTxt);
     }
     if (g.reason === 'ok' && g.projected_date) {
       // Format YYYY-MM-DD → DD.MM.YYYY for display.
@@ -1531,76 +1691,79 @@ _DASHBOARD_HTML = r"""<!DOCTYPE html>
       var pdTxt = pd.length === 10
                 ? pd.substring(8, 10) + '.' + pd.substring(5, 7) + '.' + pd.substring(0, 4)
                 : pd;
-      var weeks = g.weeks_to_goal != null ? ' (~' + Number(g.weeks_to_goal) + ' тижнів)' : '';
-      rows += idRow('Прогноз цілі', pdTxt + weeks);
+      var weeks = g.weeks_to_goal != null ? fmt(L.profile_projection_weeks, {n: Number(g.weeks_to_goal)}) : '';
+      rows += idRow(L.profile_projection, pdTxt + weeks);
     }
     if (g.status) {
-      var statusTxt = g.status === 'ahead'    ? '🟢 Випереджаєш'
-                    : g.status === 'on_track' ? '🟡 У графіку'
-                    : g.status === 'behind'   ? '🔴 Відстаєш'
+      var statusTxt = g.status === 'ahead'    ? L.profile_status_ahead
+                    : g.status === 'on_track' ? L.profile_status_on_track
+                    : g.status === 'behind'   ? L.profile_status_behind
                     : '';
       if (statusTxt) {
         var actualTxt = g.actual_weekly_delta != null
-          ? ' (' + (g.actual_weekly_delta > 0 ? '+' : '')
-                 + Number(g.actual_weekly_delta).toFixed(2) + ' кг/тижд)'
+          ? fmt(L.profile_pace_actual, {val: (g.actual_weekly_delta > 0 ? '+' : '') + Number(g.actual_weekly_delta).toFixed(2)})
           : '';
-        rows += idRow('Темп', statusTxt + actualTxt);
+        rows += idRow(L.profile_pace, statusTxt + actualTxt);
       }
     }
     grid.innerHTML = rows;
 
-    var tg = document.getElementById('targetsGrid');
-    tg.innerHTML =
-      idRow('Калорії', (t.calories || 0).toLocaleString('uk-UA') + ' ккал') +
-      idRow('Білок', (t.protein || 0) + ' г') +
-      idRow('Вуглеводи', (t.carbs || 0) + ' г') +
-      idRow('Жири', (t.fat || 0) + ' г') +
-      idRow('Вода', ((t.water_ml || 0) / 1000).toFixed(1).replace('.', ',') + ' л');
+    var tgEl = document.getElementById('targetsGrid');
+    tgEl.innerHTML =
+      idRow(L.targets_calories, (t.calories || 0).toLocaleString(localeStr) + ' ' + L.unit_kcal) +
+      idRow(L.targets_protein, (t.protein || 0) + ' ' + L.unit_g) +
+      idRow(L.targets_carbs, (t.carbs || 0) + ' ' + L.unit_g) +
+      idRow(L.targets_fat, (t.fat || 0) + ' ' + L.unit_g) +
+      idRow(L.targets_water, ((t.water_ml || 0) / 1000).toFixed(1).replace('.', decSep) + ' ' + L.unit_l);
 
     var avg = document.getElementById('averagesBody');
     if (!a.logged_days) {
-      avg.innerHTML = '<p class="meal-empty">Недостатньо даних — почни логувати страви, і статистика зʼявиться.</p>';
+      avg.innerHTML = '<p class="meal-empty">' + L.avg_empty + '</p>';
     } else {
       avg.innerHTML =
-        '<div class="macro"><span class="macro-name">🔥 Ккал</span>' +
+        '<div class="macro"><span class="macro-name">🔥 ' + L.unit_kcal + '</span>' +
         '<div class="macro-bar"><div class="macro-fill ok" style="width:' +
           Math.min(100, (a.avg_calories / (t.calories || 1)) * 100).toFixed(1) + '%"></div></div>' +
         '<b class="macro-val">' + Math.round(a.avg_calories || 0) + ' / ' + (t.calories || 0) + '</b></div>' +
 
-        '<div class="macro"><span class="macro-name">🥩 Білок</span>' +
+        '<div class="macro"><span class="macro-name">' + L.macro_protein + '</span>' +
         '<div class="macro-bar"><div class="macro-fill ok" style="width:' +
           Math.min(100, (a.avg_protein_g / (t.protein || 1)) * 100).toFixed(1) + '%"></div></div>' +
-        '<b class="macro-val">' + Math.round(a.avg_protein_g || 0) + ' / ' + (t.protein || 0) + ' г</b></div>' +
+        '<b class="macro-val">' + Math.round(a.avg_protein_g || 0) + ' / ' + (t.protein || 0) + ' ' + L.unit_g + '</b></div>' +
 
-        '<div class="macro"><span class="macro-name">🍞 Вуглеводи</span>' +
+        '<div class="macro"><span class="macro-name">' + L.macro_carbs + '</span>' +
         '<div class="macro-bar"><div class="macro-fill ok" style="width:' +
           Math.min(100, (a.avg_carbs_g / (t.carbs || 1)) * 100).toFixed(1) + '%"></div></div>' +
-        '<b class="macro-val">' + Math.round(a.avg_carbs_g || 0) + ' / ' + (t.carbs || 0) + ' г</b></div>' +
+        '<b class="macro-val">' + Math.round(a.avg_carbs_g || 0) + ' / ' + (t.carbs || 0) + ' ' + L.unit_g + '</b></div>' +
 
-        '<div class="macro"><span class="macro-name">🥑 Жири</span>' +
+        '<div class="macro"><span class="macro-name">' + L.macro_fat + '</span>' +
         '<div class="macro-bar"><div class="macro-fill ok" style="width:' +
           Math.min(100, (a.avg_fat_g / (t.fat || 1)) * 100).toFixed(1) + '%"></div></div>' +
-        '<b class="macro-val">' + Math.round(a.avg_fat_g || 0) + ' / ' + (t.fat || 0) + ' г</b></div>' +
+        '<b class="macro-val">' + Math.round(a.avg_fat_g || 0) + ' / ' + (t.fat || 0) + ' ' + L.unit_g + '</b></div>' +
 
-        '<p class="muted-note">Середнє за ' + a.logged_days + ' днів з даними.</p>';
+        '<p class="muted-note">' + fmt(L.avg_subtitle, {n: a.logged_days}) + '</p>';
     }
 
     var adh = document.getElementById('adherenceBody');
     if (!a.logged_days || a.logged_days < 3) {
-      adh.innerHTML = '<p class="meal-empty">Недостатньо даних (потрібно ≥ 3 днів).</p>';
+      adh.innerHTML = '<p class="meal-empty">' + L.adherence_empty + '</p>';
     } else {
       adh.innerHTML =
-        adherenceRow('🔥 Калорії', a.calories_hit_pct) +
-        adherenceRow('🥩 Білок',  a.protein_hit_pct) +
-        adherenceRow('🍞 Вуглеводи', a.carbs_hit_pct) +
-        adherenceRow('🥑 Жири',   a.fat_hit_pct);
+        adherenceRow('🔥 ' + L.targets_calories, a.calories_hit_pct) +
+        adherenceRow(L.macro_protein, a.protein_hit_pct) +
+        adherenceRow(L.macro_carbs,   a.carbs_hit_pct) +
+        adherenceRow(L.macro_fat,     a.fat_hit_pct);
     }
 
     var streakCard = document.getElementById('streakCard');
     if (a.current_streak && a.current_streak >= 2) {
+      var n = a.current_streak;
+      var streakKey;
+      if (n === 1) streakKey = L.streak_singular;
+      else if (n >= 2 && n <= 4) streakKey = L.streak_few;
+      else streakKey = L.streak_many;
       streakCard.hidden = false;
-      document.getElementById('streakValue').textContent =
-        '🔥 ' + a.current_streak + ' днів поспіль';
+      document.getElementById('streakValue').textContent = '🔥 ' + fmt(streakKey, {n: n});
     } else {
       streakCard.hidden = true;
     }

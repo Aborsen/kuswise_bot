@@ -15,7 +15,7 @@ set -euo pipefail
 export LC_ALL=en_US.UTF-8
 remaining=$(grep -rn --include="*.py" "[А-яЇїІіЄєҐґ]" api/ lib/ \
   | grep -v -E "(/i18n/|admin_stats\.py|openai_voice\.py)" \
-  | grep -v "# noqa: i18n" \
+  | grep -v -E "(# noqa: i18n|// noqa: i18n)" \
   || true)
 if [ -z "$remaining" ]; then
   printf '✅ i18n: 0 Cyrillic lines remain in scope\n'

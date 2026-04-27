@@ -353,20 +353,41 @@ class handler(BaseHTTPRequestHandler):
             self._send_html(400, "<h1>Bad request</h1>")
             return
 
-        # F-2b Chunk 7: locale propagates from query string OR the bootstrap
-        # form. Both render paths (init failure + dashboard SSR) honour it.
-        locale = _locale_from_request(self.path, form)
+        # F-2b Chunk 7: URL-derived locale is just a hint for the unauth /
+        # bootstrap render. Once we've verified initData and have a user_id,
+        # the AUTHORITATIVE locale is profile.lang from the DB — which
+        # survives /language toggles even though Telegram caches the chat
+        # menu button URL with whatever locale was current at /start time.
+        url_locale = _locale_from_request(self.path, form)
 
         user = _verify_init_data(init_data)
         if user is None:
             if action == "day_data":
                 self._send_json(401, {"error": "unauthorized"})
             else:
-                self._send_html(401, _unauthorized_html(locale=locale))
+                self._send_html(401, _unauthorized_html(locale=url_locale))
             return
 
         user_id = user["id"]
         first_name = user.get("first_name") or None
+
+        # Read the authoritative locale from the user's profile in DB.
+        # Falls back to the URL-derived locale only when no profile row exists
+        # yet (i.e. user has not started onboarding).
+        try:
+            _conn_for_locale = get_conn()
+            try:
+                init_db(_conn_for_locale)
+                _profile_for_locale = get_profile(_conn_for_locale, user_id)
+            finally:
+                try:
+                    _conn_for_locale.close()
+                except Exception:
+                    pass
+            from lib.i18n import locale_of as _locale_of
+            locale = _locale_of(_profile_for_locale) if _profile_for_locale else url_locale
+        except Exception:
+            locale = url_locale
 
         # F-12.5 (dashboard share): generate the weekly recap PNG and send it
         # to the user's chat via the bot. Mini App stays on screen so the JS
@@ -1460,8 +1481,10 @@ _DASHBOARD_HTML = r"""<!DOCTYPE html>
       'stroke-dashoffset', (circumference * (1 - pct)).toFixed(1));
     var localeStr = LANG === 'uk' ? 'uk-UA' : 'en-US';
     document.getElementById('calEaten').textContent = Math.round(cal).toLocaleString(localeStr);
-    document.getElementById('calGoal').textContent = calTarget.toLocaleString(localeStr);
     document.getElementById('calPct').textContent = Math.round(pct * 100) + ' %';
+    // Render the calorie subtitle (e.g. "of 2400 kcal") with the goal value
+    // baked in. Setting innerHTML here also (re)creates the inner #calGoal
+    // span, so we must NOT touch #calGoal before this line — Phase F bug.
     var calSubEl = document.getElementById('calSub');
     if (calSubEl) {
       calSubEl.innerHTML = fmt(L.cal_subtitle, {goal: '<span id="calGoal">' + calTarget.toLocaleString(localeStr) + '</span>'});

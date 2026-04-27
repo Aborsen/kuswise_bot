@@ -802,6 +802,13 @@ def handle_onboarding_callback(conn, cb: dict) -> None:
         # Brief inline ack matching the chosen language.
         ack_key = "lang_confirm_saved_" + chosen
         answer_callback_query(cb_id, i18n_mod.t(ack_key, locale=chosen))
+        # Re-register the chat menu button URL with the chosen locale —
+        # /start fired before profile.lang was set, so the menu button
+        # currently points at a stale ?lang=en URL even for UA users.
+        try:
+            set_chat_menu_button(chat_id=chat_id, locale=chosen)
+        except Exception as e:
+            print("set_chat_menu_button (lang_confirm) error:", e, flush=True)
         # Now run the standard onboarding intro + first question. These
         # strings are still hardcoded UA in Phase 1; Phase 2 migrates them.
         send_message(chat_id, _t("onboarding.intro", profile))
@@ -1036,7 +1043,22 @@ def handle_language_callback(conn, cb: dict, profile: dict) -> None:
     update_profile(conn, user_id, lang=lang)
     answer_callback_query(cb_id, "✅")
     label = i18n_mod.t(f"lang_label_{lang}", locale=lang)
-    send_message(chat_id, i18n_mod.t("language_saved", locale=lang, lang=label))
+    # Attach the new locale's reply keyboard to the confirmation message so
+    # the bottom-bar labels (Ask AI / Favorites / +250ml / etc.) flip
+    # immediately instead of waiting for the user's next interaction.
+    send_message(
+        chat_id,
+        i18n_mod.t("language_saved", locale=lang, lang=label),
+        reply_markup=main_menu_keyboard(locale=lang),
+    )
+    # Re-register the persistent chat menu button so its Mini App URL
+    # carries the new ?lang= query param. Telegram caches the registered
+    # URL until we call setChatMenuButton again, so a stale UA URL would
+    # otherwise keep opening the dashboard in the old locale.
+    try:
+        set_chat_menu_button(chat_id=chat_id, locale=lang)
+    except Exception as e:
+        print("set_chat_menu_button (lang switch) error:", e, flush=True)
 
 
 def handle_health_input(conn, chat_id: int, user_id: int, text: str, kind: str) -> None:

@@ -25,11 +25,7 @@ _ROOT = os.path.dirname(_THIS)
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
-from lib.bot_commands import build_commands
-
-
-COMMANDS_EN = build_commands(locale="en")
-COMMANDS_UA = build_commands(locale="uk")
+from scripts.setup_bot_commands import main as register_commands
 
 
 def _post(token: str, method: str, payload: dict) -> dict:
@@ -69,16 +65,11 @@ def main() -> int:
     if not wh.get("ok"):
         return 2
 
-    # 2. Register command menus (Ukrainian + English fallback)
-    cm_ua = _post(token, "setMyCommands", {"commands": COMMANDS_UA, "language_code": "uk"})
-    print("→ setMyCommands (uk)")
-    print(" ", cm_ua)
-
-    cm_default = _post(token, "setMyCommands", {"commands": COMMANDS_EN})
-    print("→ setMyCommands (default / English fallback)")
-    print(" ", cm_default)
-
-    if not cm_ua.get("ok") or not cm_default.get("ok"):
+    # 2. Register command menus — delegate to setup_bot_commands.py so
+    #    there's a single source of truth for the (scope × language)
+    #    matrix (EN default+private, UK under uk/ru/be × default+private).
+    print("→ setMyCommands (delegated to scripts/setup_bot_commands.py)")
+    if register_commands() != 0:
         return 3
 
     # 3. Register the Mini App chat menu button (persistent; replaces '/' menu).

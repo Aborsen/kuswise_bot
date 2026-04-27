@@ -5,17 +5,18 @@ Run this whenever commands change:
 
     .venv/bin/python scripts/setup_bot_commands.py
 
-We register the command list across BOTH locales × BOTH scopes:
-  1. default scope, no language       → EN (universal fallback)
-  2. default scope, language_code=uk  → UA
-  3. all_private_chats, no language   → EN
-  4. all_private_chats, language_code=uk → UA
+We register the command list across BOTH scopes (default + all_private_chats):
+  - EN with no ``language_code``  → universal fallback for any client
+  - UK under ``language_code`` of "uk", "ru", "be"  → matches every
+    Slavic Telegram-UI code that ``lib.i18n.normalize_lang`` collapses
+    to bot locale "uk", so a Ukrainian user whose Telegram client is
+    in Russian still gets the Ukrainian menu.
 
-Why all four: Telegram's lookup order is
+Why both scopes: Telegram's lookup order is
 ``(scope match) > (language match)``, so a UA user in a DM hits the
 more-specific ``all_private_chats`` registration before falling back
-to the ``default`` + uk match. Without registration #4, those users
-would see English even though we registered Ukrainian at default.
+to ``default``. Without the private-scope UK registrations, those
+users would see English even though we registered Ukrainian at default.
 
 Idempotent — safe to re-run. Reads ``TELEGRAM_BOT_TOKEN`` from env /
 ``.env``. Source of truth for the list itself is ``lib/bot_commands.py``.
@@ -61,36 +62,37 @@ def main() -> int:
 
     en_commands = build_commands(locale="en")
     uk_commands = build_commands(locale="uk")
-    print(f"Registering {len(en_commands)} commands × 2 locales × 2 scopes…")
+
+    # Slavic Telegram-UI codes that lib/i18n/__init__.py:normalize_lang()
+    # collapses to bot locale "uk". "ua" is dropped — it's a country code,
+    # not an ISO 639-1 language tag, so no real Telegram client sends it.
+    uk_language_codes = ("uk", "ru", "be")
+    scopes = (
+        (None, "default scope"),
+        ({"type": "all_private_chats"}, "private scope"),
+    )
+
+    total = len(scopes) * (1 + len(uk_language_codes))
+    print(
+        f"Registering {len(en_commands)} commands across {total} "
+        f"(scope × language) registrations…"
+    )
 
     ok = True
-    # 1. EN at default scope (universal fallback for any non-UK client).
-    ok &= _post(token, {"commands": en_commands}, "EN default scope")
-    # 2. UK at default scope (Telegram serves to clients with language_code=uk).
-    ok &= _post(
-        token,
-        {"commands": uk_commands, "language_code": "uk"},
-        "UK default scope",
-    )
-    # 3. EN at all_private_chats — same scope as #4 below so the lookup
-    #    order doesn't bypass the UA registration for UK users in DMs.
-    ok &= _post(
-        token,
-        {"commands": en_commands, "scope": {"type": "all_private_chats"}},
-        "EN private scope",
-    )
-    # 4. UK at all_private_chats — without this, Telegram's
-    #    "more-specific scope wins over language match" rule would serve
-    #    EN to UK users in DMs from registration #3.
-    ok &= _post(
-        token,
-        {
-            "commands": uk_commands,
-            "scope": {"type": "all_private_chats"},
-            "language_code": "uk",
-        },
-        "UK private scope",
-    )
+    for scope, scope_label in scopes:
+        en_payload: dict = {"commands": en_commands}
+        if scope:
+            en_payload["scope"] = scope
+        ok &= _post(token, en_payload, f"EN {scope_label}")
+
+        for lang_code in uk_language_codes:
+            uk_payload: dict = {
+                "commands": uk_commands,
+                "language_code": lang_code,
+            }
+            if scope:
+                uk_payload["scope"] = scope
+            ok &= _post(token, uk_payload, f"UK ({lang_code}) {scope_label}")
 
     if not ok:
         return 1

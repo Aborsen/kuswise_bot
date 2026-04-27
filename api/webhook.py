@@ -87,6 +87,7 @@ from lib.telegram_helpers import (
     main_menu_keyboard,
     dashboard_inline_keyboard,
     set_chat_menu_button,
+    set_my_commands,
     sex_keyboard,
     gym_keyboard,
     goal_keyboard,
@@ -183,6 +184,7 @@ from lib.health import (
     render_labels as render_health_labels,
 )
 from lib import i18n as i18n_mod
+from lib.bot_commands import build_commands
 
 
 def _t(key: str, profile=None, **kwargs):
@@ -792,6 +794,16 @@ def handle_onboarding_callback(conn, cb: dict) -> None:
         # Brief inline ack matching the chosen language.
         ack_key = "lang_confirm_saved_" + chosen
         answer_callback_query(cb_id, i18n_mod.t(ack_key, locale=chosen))
+        # Pin a chat-scoped `/` command menu in the chosen language so
+        # the autocomplete flips immediately. Without this, a UA user
+        # whose Telegram UI is in English would keep seeing the EN menu.
+        try:
+            set_my_commands(
+                commands=build_commands(locale=chosen),
+                scope={"type": "chat", "chat_id": chat_id},
+            )
+        except Exception as e:
+            print("set_my_commands (lang_confirm) error:", e, flush=True)
         # Re-register the chat menu button URL with the chosen locale —
         # /start fired before profile.lang was set, so the menu button
         # currently points at a stale ?lang=en URL even for UA users.
@@ -1042,6 +1054,17 @@ def handle_language_callback(conn, cb: dict, profile: dict) -> None:
         i18n_mod.t("language_saved", locale=lang, lang=label),
         reply_markup=main_menu_keyboard(locale=lang),
     )
+    # Pin a chat-scoped `/` command menu in the user's chosen language.
+    # Telegram's setMyCommands lookup picks the chat-scope registration
+    # over any language_code match, so this overrides whatever the
+    # client's UI language would otherwise serve.
+    try:
+        set_my_commands(
+            commands=build_commands(locale=lang),
+            scope={"type": "chat", "chat_id": chat_id},
+        )
+    except Exception as e:
+        print("set_my_commands (lang switch) error:", e, flush=True)
     # Re-register the persistent chat menu button so its Mini App URL
     # carries the new ?lang= query param. Telegram caches the registered
     # URL until we call setChatMenuButton again, so a stale UA URL would

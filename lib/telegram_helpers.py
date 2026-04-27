@@ -666,11 +666,22 @@ def set_chat_menu_button(chat_id: int | None = None, locale: str = "en") -> dict
         return {"ok": False, "error": str(e)}
 
 
-def set_my_commands(commands: list[dict], language_code: str | None = None) -> dict:
-    """Register the bot's native command menu (the blue 'Menu' button)."""
+def set_my_commands(
+    commands: list[dict],
+    language_code: str | None = None,
+    scope: dict | None = None,
+) -> dict:
+    """Register the bot's native command menu (the blue 'Menu' button).
+
+    Pass ``scope={"type": "chat", "chat_id": <id>}`` to pin a per-user
+    menu — Telegram's lookup picks chat-scope over language_code, so this
+    overrides whatever the user's client-UI language would have served.
+    """
     payload: dict = {"commands": commands}
     if language_code:
         payload["language_code"] = language_code
+    if scope:
+        payload["scope"] = scope
     try:
         resp = httpx.post(f"{BASE_URL}/setMyCommands", json=payload, timeout=10)
         return resp.json()

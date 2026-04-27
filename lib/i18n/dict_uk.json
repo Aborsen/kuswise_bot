@@ -726,5 +726,29 @@
 
   "alternates.header":  "🤔 <b>Не на 100% впевнений у стравi ({label})</b>",
   "alternates.choose":  "Обери правильний варіант або введи вручну:",
-  "alternates.row":     "{digit} <b>{name}</b> · {kcal} {kcal_unit} · {p_short}{p} {f_short}{f} {c_short}{c} · ~{conf}%"
+  "alternates.row":     "{digit} <b>{name}</b> · {kcal} {kcal_unit} · {p_short}{p} {f_short}{f} {c_short}{c} · ~{conf}%",
+
+  "cmd.start":        "🚀 Почати або оновити профіль",
+  "cmd.today":        "📊 Прогрес за сьогодні",
+  "cmd.yesterday":    "📆 Вчорашній день",
+  "cmd.history":      "📈 Історія за 7 днів",
+  "cmd.streak":       "🔥 Серія логів і заморозки",
+  "cmd.goals":        "🎯 Цілі та прогноз досягнення",
+  "cmd.recap":        "📸 Тижнева PNG-картка",
+  "cmd.scan":         "🔢 Сканер штрих-кодів",
+  "cmd.menu":         "📋 OCR меню в кафе/ресторані",
+  "cmd.plan":         "🗓 3-денний план",
+  "cmd.suggest_meal": "🍽️ Ідея страви на основі цілей",
+  "cmd.meals":        "📋 Список страв (видалити / змінити)",
+  "cmd.fav":          "⭐ Улюблені страви",
+  "cmd.recent":       "🕘 Останні страви (повторити)",
+  "cmd.water":        "💧 Облік води",
+  "cmd.aliases":      "📚 Звичні страви (бот вчиться)",
+  "cmd.ask":          "🤖 Запитати ШІ про їжу",
+  "cmd.health":       "🩺 Алергени + хронічні стани",
+  "cmd.language":     "🌐 Мова інтерфейсу",
+  "cmd.timezone":     "🕒 Часовий пояс",
+  "cmd.profile":      "⚙️ Профіль (вага, ціль, вода)",
+  "cmd.cancel":       "❌ Скасувати поточну дію",
+  "cmd.help":         "ℹ️ Допомога"
 }

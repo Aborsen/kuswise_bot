@@ -726,5 +726,29 @@
 
   "alternates.header":  "🤔 <b>Not 100% sure about the dish ({label})</b>",
   "alternates.choose":  "Pick the right one or enter manually:",
-  "alternates.row":     "{digit} <b>{name}</b> · {kcal} {kcal_unit} · {p_short}{p} {f_short}{f} {c_short}{c} · ~{conf}%"
+  "alternates.row":     "{digit} <b>{name}</b> · {kcal} {kcal_unit} · {p_short}{p} {f_short}{f} {c_short}{c} · ~{conf}%",
+
+  "cmd.start":        "🚀 Start or update profile",
+  "cmd.today":        "📊 Today's progress",
+  "cmd.yesterday":    "📆 Yesterday's summary",
+  "cmd.history":      "📈 Last 7 days history",
+  "cmd.streak":       "🔥 Streak and freeze tokens",
+  "cmd.goals":        "🎯 Goals and projection",
+  "cmd.recap":        "📸 Weekly PNG card",
+  "cmd.scan":         "🔢 Barcode scanner",
+  "cmd.menu":         "📋 Restaurant menu OCR",
+  "cmd.plan":         "🗓 3-day meal plan",
+  "cmd.suggest_meal": "🍽️ Meal idea matched to goals",
+  "cmd.meals":        "📋 Today's meals (delete / edit)",
+  "cmd.fav":          "⭐ Favorite meals",
+  "cmd.recent":       "🕘 Recent meals (re-log)",
+  "cmd.water":        "💧 Water tracker",
+  "cmd.aliases":      "📚 Habitual meals (bot learns)",
+  "cmd.ask":          "🤖 Ask AI about food",
+  "cmd.health":       "🩺 Allergens + conditions",
+  "cmd.language":     "🌐 Interface language",
+  "cmd.timezone":     "🕒 Timezone",
+  "cmd.profile":      "⚙️ Profile (weight, goal, water)",
+  "cmd.cancel":       "❌ Cancel current action",
+  "cmd.help":         "ℹ️ Help"
 }

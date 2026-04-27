@@ -19,36 +19,17 @@ try:
 except ImportError:
     pass
 
+# Make ``lib.*`` importable when run from anywhere in the repo.
+_THIS = os.path.dirname(os.path.abspath(__file__))
+_ROOT = os.path.dirname(_THIS)
+if _ROOT not in sys.path:
+    sys.path.insert(0, _ROOT)
 
-# Native command menu shown under the blue "Menu" button inside Telegram.
-# Ukrainian descriptions (max 256 chars each, must be lowercase-friendly).
-COMMANDS_UA = [
-    {"command": "start", "description": "🚀 Почати або оновити профіль"},
-    {"command": "today", "description": "📊 Прогрес за сьогодні"},
-    {"command": "fav", "description": "⭐ Улюблені страви"},
-    {"command": "recent", "description": "🕘 Останні страви (повторити)"},
-    {"command": "water", "description": "💧 Облік води"},
-    {"command": "suggest_meal", "description": "🍽️ Ідея страви під залишок дня"},
-    {"command": "ask", "description": "💬 Запитати ШІ про їжу і рецепти"},
-    {"command": "profile", "description": "👤 Мій профіль"},
-    {"command": "yesterday", "description": "📆 Вчорашній день"},
-    {"command": "meals", "description": "📋 Список страв (видалити / змінити)"},
-    {"command": "help", "description": "❓ Список команд"},
-]
+from lib.bot_commands import build_commands
 
-COMMANDS_EN = [
-    {"command": "start", "description": "Start or update profile"},
-    {"command": "today", "description": "Today's progress"},
-    {"command": "fav", "description": "Favorite meals"},
-    {"command": "recent", "description": "Recent meals (re-log)"},
-    {"command": "water", "description": "Water tracker"},
-    {"command": "suggest_meal", "description": "AI meal suggestion"},
-    {"command": "ask", "description": "Ask AI about food and recipes"},
-    {"command": "profile", "description": "My profile"},
-    {"command": "yesterday", "description": "Yesterday's summary"},
-    {"command": "meals", "description": "Manage today's meals (delete / edit)"},
-    {"command": "help", "description": "Show commands"},
-]
+
+COMMANDS_EN = build_commands(locale="en")
+COMMANDS_UA = build_commands(locale="uk")
 
 
 def _post(token: str, method: str, payload: dict) -> dict:

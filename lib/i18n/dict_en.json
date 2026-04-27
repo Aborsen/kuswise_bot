@@ -175,5 +175,30 @@
   "meal.warnings_health_header": "💡 <b>Health notes:</b>",
   "meal.warnings_default_ingredient": "this dish",
   "meal.warnings_default_concern":    "concern",
-  "meal.nutrition_line": "🔥 {cal} {kcal_unit} | 🥩 {p}{g_unit} {p_short} | 🍚 {c}{g_unit} {c_short} | 🧈 {f}{g_unit} {f_short}"
+  "meal.nutrition_line": "🔥 {cal} {kcal_unit} | 🥩 {p}{g_unit} {p_short} | 🍚 {c}{g_unit} {c_short} | 🧈 {f}{g_unit} {f_short}",
+
+  "today.header":         "📊 <b>Today's progress ({date})</b>",
+  "today.user_line":      "👤 {name}",
+  "today.cal_line":       "🔥 Calories: {cur} / {target} ({pct}%)",
+  "today.protein_line":   "🥩 Protein:  {cur}{g} / {target}{g} ({pct}%)",
+  "today.carbs_line":     "🍚 Carbs:    {cur}{g} / {target}{g} ({pct}%)",
+  "today.fat_line":       "🧈 Fat:      {cur}{g} / {target}{g} ({pct}%)",
+  "today.fiber_line":     "📈 Fiber:    {cur}{g}",
+  "today.sugar_line":     "🍬 Sugar:    {cur}{g}",
+  "today.meal_count":     "Meals: {n}",
+  "today.remaining":      "Remaining: ~{n} {kcal_unit}",
+  "today.quip_empty":     "Empty so far, like a student's fridge before payday. 😅",
+  "today.quip_low":       "Plenty of room left (for chicken and rice 🍚)",
+  "today.quip_mid":       "Right in the groove — keep it up. 💪",
+  "today.quip_target":    "Bullseye — sniper-precise on the cutlet. 🎯",
+  "today.quip_over":      "Today we celebrated. Tomorrow — easier. 😉",
+
+  "yesterday.header":     "📆 <b>Yesterday ({date})</b>",
+  "yesterday.empty":      "Nothing was logged. Quiet in the kitchen. 🤫",
+  "yesterday.cal_line":   "🔥 Calories: {cur} / {target} ({pct}%)",
+  "yesterday.protein_line": "🥩 Protein:  {cur}{g} / {target}{g}",
+  "yesterday.carbs_line": "🍚 Carbs:    {cur}{g} / {target}{g}",
+  "yesterday.fat_line":   "🧈 Fat:      {cur}{g} / {target}{g}",
+  "yesterday.meals_header": "<b>Meals ({n}):</b>",
+  "yesterday.meal_row":   "• {meal_type}: {desc} ({cal} {kcal_unit})"
 }

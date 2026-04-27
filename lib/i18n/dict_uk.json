@@ -175,5 +175,30 @@
   "meal.warnings_health_header": "💡 <b>Нотатки щодо здоров'я (для кату):</b>",
   "meal.warnings_default_ingredient": "цієї страви",
   "meal.warnings_default_concern":    "питання",
-  "meal.nutrition_line": "🔥 {cal} {kcal_unit} | 🥩 {p}{g_unit} {p_short} | 🍚 {c}{g_unit} {c_short} | 🧈 {f}{g_unit} {f_short}"
+  "meal.nutrition_line": "🔥 {cal} {kcal_unit} | 🥩 {p}{g_unit} {p_short} | 🍚 {c}{g_unit} {c_short} | 🧈 {f}{g_unit} {f_short}",
+
+  "today.header":         "📊 <b>Прогрес на сьогодні ({date})</b>",
+  "today.user_line":      "👤 {name}",
+  "today.cal_line":       "🔥 Калорії:  {cur} / {target} ({pct}%)",
+  "today.protein_line":   "🥩 Білки:    {cur}{g} / {target}{g} ({pct}%)",
+  "today.carbs_line":     "🍚 Вуглеводи:{cur}{g} / {target}{g} ({pct}%)",
+  "today.fat_line":       "🧈 Жири:     {cur}{g} / {target}{g} ({pct}%)",
+  "today.fiber_line":     "📈 Клітковина: {cur}{g}",
+  "today.sugar_line":     "🍬 Цукор:      {cur}{g}",
+  "today.meal_count":     "Прийомів їжі: {n}",
+  "today.remaining":      "Залишилось: ~{n} {kcal_unit}",
+  "today.quip_empty":     "Поки порожньо, як у холодильнику студента перед стипендією. 😅",
+  "today.quip_low":       "Ще є місце для маневрів (і для курки з рисом). 🍚",
+  "today.quip_mid":       "Цілковита гармонія — продовжуй у тому ж дусі. 💪",
+  "today.quip_target":    "Ідеально в ціль, як снайпер по котлеті. 🎯",
+  "today.quip_over":      "Сьогодні ми святкували. Завтра — легше. 😉",
+
+  "yesterday.header":     "📆 <b>Вчора ({date})</b>",
+  "yesterday.empty":      "Нічого не було записано. Тиша в холодильнику. 🤫",
+  "yesterday.cal_line":   "🔥 Калорії:  {cur} / {target} ({pct}%)",
+  "yesterday.protein_line": "🥩 Білки:    {cur}{g} / {target}{g}",
+  "yesterday.carbs_line": "🍚 Вуглеводи:{cur}{g} / {target}{g}",
+  "yesterday.fat_line":   "🧈 Жири:     {cur}{g} / {target}{g}",
+  "yesterday.meals_header": "<b>Страви ({n}):</b>",
+  "yesterday.meal_row":   "• {meal_type}: {desc} ({cal} {kcal_unit})"
 }

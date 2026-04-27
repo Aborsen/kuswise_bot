@@ -538,7 +538,14 @@ def format_today_progress(
     profile: dict | None = None,
     streak: dict | None = None,
 ) -> str:
-    date_display = _ua_date_long(datetime.now(LOCAL_TZ))
+    from lib.i18n import t
+    from lib.datehelpers import format_date_long
+
+    locale = (profile or {}).get("lang") or "en"
+    if locale not in ("en", "uk"):
+        locale = "en"
+
+    date_display = format_date_long(datetime.now(LOCAL_TZ), locale)
     if profile and profile.get("weight_kg") and profile.get("goal"):
         macros = macro_gram_targets_from_profile(profile["weight_kg"], profile["goal"])
     else:
@@ -554,40 +561,41 @@ def format_today_progress(
     name = _name_or_default(first_name)
 
     if meals == 0:
-        quip = "Поки порожньо, як у холодильнику студента перед стипендією. 😅"
+        quip = t("today.quip_empty", locale)
     elif cal < daily_cal_target * 0.5:
-        quip = "Ще є місце для маневрів (і для курки з рисом). 🍚"
+        quip = t("today.quip_low", locale)
     elif cal < daily_cal_target * 0.9:
-        quip = "Цілковита гармонія — продовжуй у тому ж дусі. 💪"
+        quip = t("today.quip_mid", locale)
     elif cal <= daily_cal_target * 1.05:
-        quip = "Ідеально в ціль, як снайпер по котлеті. 🎯"
+        quip = t("today.quip_target", locale)
     else:
-        quip = "Сьогодні ми святкували. Завтра — легше. 😉"
+        quip = t("today.quip_over", locale)
 
-    locale = (profile or {}).get("lang") or "en"
-    if locale not in ("en", "uk"):
-        locale = "en"
     streak_line = _format_streak_line(streak, locale)
     streak_block = f"{streak_line}\n" if streak_line else ""
 
+    g = t("macro.gram_short", locale)
+    kcal_unit = t("macro.calories_short", locale)
+    sep = "━━━━━━━━━━━━━━━━━━━━━"
+
     return (
-        f"📊 <b>Прогрес на сьогодні ({date_display})</b>\n"
-        f"━━━━━━━━━━━━━━━━━━━━━\n"
-        f"👤 {name}\n"
+        f"{t('today.header', locale, date=date_display)}\n"
+        f"{sep}\n"
+        f"{t('today.user_line', locale, name=name)}\n"
         f"{streak_block}"
-        f"🔥 Калорії:  {round(cal)} / {daily_cal_target} ({_pct(cal, daily_cal_target)}%)\n"
+        f"{t('today.cal_line', locale, cur=round(cal), target=daily_cal_target, pct=_pct(cal, daily_cal_target))}\n"
         f"   {_bar(cal, daily_cal_target)}\n"
-        f"🥩 Білки:    {round(p)}г / {macros['protein']}г ({_pct(p, macros['protein'])}%)\n"
+        f"{t('today.protein_line', locale, cur=round(p), target=macros['protein'], pct=_pct(p, macros['protein']), g=g)}\n"
         f"   {_bar(p, macros['protein'])}\n"
-        f"🍚 Вуглеводи:{round(c)}г / {macros['carbs']}г ({_pct(c, macros['carbs'])}%)\n"
+        f"{t('today.carbs_line', locale, cur=round(c), target=macros['carbs'], pct=_pct(c, macros['carbs']), g=g)}\n"
         f"   {_bar(c, macros['carbs'])}\n"
-        f"🧈 Жири:     {round(f)}г / {macros['fat']}г ({_pct(f, macros['fat'])}%)\n"
+        f"{t('today.fat_line', locale, cur=round(f), target=macros['fat'], pct=_pct(f, macros['fat']), g=g)}\n"
         f"   {_bar(f, macros['fat'])}\n"
-        f"📈 Клітковина: {round(fib)}г\n"
-        f"🍬 Цукор:      {round(sug)}г\n"
-        f"━━━━━━━━━━━━━━━━━━━━━\n"
-        f"Прийомів їжі: {meals}\n"
-        f"Залишилось: ~{round(remaining)} ккал\n\n"
+        f"{t('today.fiber_line', locale, cur=round(fib), g=g)}\n"
+        f"{t('today.sugar_line', locale, cur=round(sug), g=g)}\n"
+        f"{sep}\n"
+        f"{t('today.meal_count', locale, n=meals)}\n"
+        f"{t('today.remaining', locale, n=round(remaining), kcal_unit=kcal_unit)}\n\n"
         f"<i>{quip}</i>"
     )
 
@@ -923,9 +931,16 @@ def format_yesterday(
     profile: dict | None = None,
 ) -> str:
     """Yesterday's progress + meal list in one message."""
+    from lib.i18n import t
+    from lib.datehelpers import format_date_long
+
+    locale = (profile or {}).get("lang") or "en"
+    if locale not in ("en", "uk"):
+        locale = "en"
+
     date_str = log.get("date", "")
     try:
-        date_display = _ua_date_long(datetime.strptime(date_str, "%Y-%m-%d"))
+        date_display = format_date_long(datetime.strptime(date_str, "%Y-%m-%d"), locale)
     except Exception:
         date_display = date_str
 
@@ -940,38 +955,49 @@ def format_yesterday(
 
     if meal_count == 0:
         return (
-            f"📆 <b>Вчора ({date_display})</b>\n"
-            f"Нічого не було записано. Тиша в холодильнику. 🤫"
+            f"{t('yesterday.header', locale, date=date_display)}\n"
+            f"{t('yesterday.empty', locale)}"
         )
+
+    g = t("macro.gram_short", locale)
+    kcal_unit = t("macro.calories_short", locale)
 
     meal_lines = []
     for m in meals:
         mt_raw = (m.get("meal_type") or "").lower()
-        mt = _MEAL_TYPE_UA.get(mt_raw, _esc(mt_raw.capitalize() or "—"))
+        if mt_raw in ("breakfast", "lunch", "dinner", "snack"):
+            mt = t(f"meal_type.{mt_raw}", locale)
+        else:
+            mt = _esc(mt_raw.capitalize() or "—")
         desc = _esc((m.get("description") or "")[:60])
-        meal_lines.append(f"• {mt}: {desc} ({round(m.get('calories', 0))} ккал)")
+        meal_lines.append(t(
+            "yesterday.meal_row", locale,
+            meal_type=mt, desc=desc,
+            cal=round(m.get("calories", 0)), kcal_unit=kcal_unit,
+        ))
     meal_section = "\n".join(meal_lines)
 
     if profile and profile.get("weight_kg") and profile.get("goal"):
         macros = macro_gram_targets_from_profile(profile["weight_kg"], profile["goal"])
     else:
         macros = macro_gram_targets(daily_cal_target)
+    sep = "━━━━━━━━━━━━━━━━━━━━━"
     return (
-        f"📆 <b>Вчора ({date_display})</b>\n"
-        f"━━━━━━━━━━━━━━━━━━━━━\n"
-        f"👤 {name}\n"
-        f"🔥 Калорії:  {round(cal)} / {daily_cal_target} ({_pct(cal, daily_cal_target)}%)\n"
+        f"{t('yesterday.header', locale, date=date_display)}\n"
+        f"{sep}\n"
+        f"{t('today.user_line', locale, name=name)}\n"
+        f"{t('yesterday.cal_line', locale, cur=round(cal), target=daily_cal_target, pct=_pct(cal, daily_cal_target))}\n"
         f"   {_bar(cal, daily_cal_target)}\n"
-        f"🥩 Білки:    {round(p)}г / {macros['protein']}г\n"
+        f"{t('yesterday.protein_line', locale, cur=round(p), target=macros['protein'], g=g)}\n"
         f"   {_bar(p, macros['protein'])}\n"
-        f"🍚 Вуглеводи:{round(c)}г / {macros['carbs']}г\n"
+        f"{t('yesterday.carbs_line', locale, cur=round(c), target=macros['carbs'], g=g)}\n"
         f"   {_bar(c, macros['carbs'])}\n"
-        f"🧈 Жири:     {round(f)}г / {macros['fat']}г\n"
+        f"{t('yesterday.fat_line', locale, cur=round(f), target=macros['fat'], g=g)}\n"
         f"   {_bar(f, macros['fat'])}\n"
-        f"📈 Клітковина: {round(fib)}г\n"
-        f"🍬 Цукор:      {round(sug)}г\n"
-        f"━━━━━━━━━━━━━━━━━━━━━\n"
-        f"<b>Страви ({meal_count}):</b>\n"
+        f"{t('today.fiber_line', locale, cur=round(fib), g=g)}\n"
+        f"{t('today.sugar_line', locale, cur=round(sug), g=g)}\n"
+        f"{sep}\n"
+        f"{t('yesterday.meals_header', locale, n=meal_count)}\n"
         f"{meal_section}"
     )
 

@@ -372,5 +372,9 @@
   "btn.meals":     "📋 Мої страви",
   "btn.dashboard": "📱 Dashboard",
   "btn.scan":      "🔢 Штрих Код",
-  "btn.menu_ocr":  "📋 Скануй Меню"
+  "btn.menu_ocr":  "📋 Скануй Меню",
+
+  "meal_plan.day_today":    "Сьогодні",
+  "meal_plan.day_tomorrow": "Завтра",
+  "meal_plan.day_3":        "День 3"
 }

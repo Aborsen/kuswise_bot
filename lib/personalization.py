@@ -151,9 +151,9 @@ def _portion_grams_from_analysis(analysis: dict) -> Optional[float]:
             return total
 
     portion = analysis.get("estimated_portion") or ""
-    # Match the first integer (with optional space) before "г" / "g" / "грам".
+    # Match the first integer (with optional space) before "г" / "g" / "грам".  # noqa: i18n
     import re
-    m = re.search(r"(\d{2,4})\s*(?:г|g|грам)", str(portion).lower())
+    m = re.search(r"(\d{2,4})\s*(?:г|g|грам)", str(portion).lower())  # noqa: i18n
     if m:
         try:
             return float(m.group(1))
@@ -298,10 +298,10 @@ def aliases_prompt_block(
         kcal  = r["default_kcal"]
         if kcal <= 0:
             continue
-        portion_txt = f"~{int(round(grams))}г, " if grams > 0 else ""
+        portion_txt = f"~{int(round(grams))}g, " if grams > 0 else ""
         body.append(
-            f'- "{r["normalized_name"]}" зазвичай {portion_txt}'
-            f'{int(round(kcal))} ккал'
+            f'- "{r["normalized_name"]}" usually {portion_txt}'
+            f'{int(round(kcal))} kcal'
         )
     if not body:
         return ""

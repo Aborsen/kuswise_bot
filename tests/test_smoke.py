@@ -1307,9 +1307,10 @@ def test_normalize_plan_pads_short_days():
     }}]}
     out = mp.normalize_plan(raw)
     assert len(out["days"]) == 3
-    # Default labels for missing days
-    assert out["days"][1]["date_label"] == "Завтра"
-    assert out["days"][2]["date_label"] == "День 3"
+    # F-2b Chunk 6: default labels are EN tokens; the formatter translates
+    # them client-side based on user locale.
+    assert out["days"][1]["date_label"] == "Tomorrow"
+    assert out["days"][2]["date_label"] == "Day 3"
 
 
 def test_normalize_plan_drops_blank_slot_names():
@@ -1528,6 +1529,49 @@ def test_format_ingredients_uk_handles_garbage_kcal():
     assert "тест — ~100г" in body
     assert "oops" not in body
     assert "ккал" not in body
+
+
+def test_phase_e_prompts_carry_language_directive():
+    """F-2b Chunk 6: every GPT prompt-builder must produce a `Respond in {language}.`
+    directive (or equivalent) so the model output language flips with the user."""
+    from lib import config as _cfg
+    from lib import mealplan as _mp
+
+    # Functions that build complete system prompts — verify both EN and UK
+    # branches contain the language token in the right place.
+    en_analysis = _cfg.analysis_system_prompt(language="English")
+    uk_analysis = _cfg.analysis_system_prompt(language="Ukrainian")
+    assert "Respond in English." in en_analysis
+    assert "Respond in Ukrainian." in uk_analysis
+    assert "MUST be written in English" in en_analysis
+    assert "MUST be written in Ukrainian" in uk_analysis
+
+    en_menu = _cfg.analyze_menu_prompt(language="English")
+    assert "Respond in English." in en_menu
+
+    en_recalc = _cfg.recalc_prompt(language="English")
+    uk_recalc = _cfg.recalc_prompt(language="Ukrainian")
+    assert "Respond in English." in en_recalc
+    assert "Respond in Ukrainian." in uk_recalc
+
+    # Templates: the {language} placeholder is consumed by callers' .format().
+    assert "{language}" in _cfg.SUMMARY_PROMPT_TEMPLATE
+    assert "{language}" in _cfg.CHAT_SYSTEM_PROMPT
+    assert "{language}" in _cfg.RECIPE_PROMPT_TEMPLATE
+
+    # Mealplan system prompt builder.
+    en_plan = _mp._build_system_prompt(language="English")
+    uk_plan = _mp._build_system_prompt(language="Ukrainian")
+    assert 'Every "name", "recipe", and "notes" string in English.' in en_plan
+    assert 'Every "name", "recipe", and "notes" string in Ukrainian.' in uk_plan
+
+
+def test_language_for_locale_maps_uk_to_ukrainian_else_english():
+    from lib.config import language_for_locale
+    assert language_for_locale("uk") == "Ukrainian"
+    assert language_for_locale("en") == "English"
+    assert language_for_locale("") == "English"
+    assert language_for_locale("ru") == "English"  # ru/be users get EN per F-2b decision
 
 
 def test_btn_label_dispatcher_accepts_both_locales_and_legacy():

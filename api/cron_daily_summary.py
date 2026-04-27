@@ -25,7 +25,9 @@ from lib.database import (
     profile_is_complete,
 )
 from lib.telegram_helpers import send_message
+from lib.config import language_for_locale
 from lib.openai_nutrition import generate_daily_summary
+from lib import i18n as i18n_mod
 from lib.log import setup_sentry, http_handler, error
 
 setup_sentry("cron_daily_summary")
@@ -76,7 +78,7 @@ def run_daily_summary() -> dict:
                     continue
                 log = get_today_log(conn, user_id)
                 meals = get_meals_for_day(conn, user_id, date)
-                text = generate_daily_summary(meals, log, profile)
+                text = generate_daily_summary(meals, log, profile, language=language_for_locale(i18n_mod.locale_of(profile)))
                 send_message(user_id, text)
                 save_recommendation(conn, user_id, date, text)
                 mark_summary_sent(conn, user_id, date)

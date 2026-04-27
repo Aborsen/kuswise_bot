@@ -840,7 +840,12 @@ SUGGEST_VARIATION_HINT = (
 def format_meal_plan_day(day: dict, day_idx: int, locale: str = "en") -> str:
     """Render one day's slots as a single Telegram message body (UA + EN)."""
     from lib.i18n import t
-    lines = [t("plan.day_header", locale, label=day["date_label"])]
+    # Model emits English tokens for date_label ("Today" / "Tomorrow" / "Day 3");
+    # translate per user locale here.
+    raw = (day.get("date_label") or "").strip()
+    label_map = {"Today": "meal_plan.day_today", "Tomorrow": "meal_plan.day_tomorrow", "Day 3": "meal_plan.day_3"}
+    label = t(label_map[raw], locale) if raw in label_map else raw
+    lines = [t("plan.day_header", locale, label=label)]
     slot_emojis = {"breakfast": "🥣", "lunch": "🍱", "dinner": "🍽️", "snack": "🍎"}
     kcal_unit = t("macro.calories_short", locale)
     p_short   = t("macro.protein_short",  locale)

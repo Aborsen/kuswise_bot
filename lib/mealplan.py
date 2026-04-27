@@ -32,34 +32,48 @@ _SLOT_LABELS_UA = {
     "snack":     "Перекус",
 }
 
+_SLOT_LABELS_EN = {
+    "breakfast": "Breakfast",
+    "lunch":     "Lunch",
+    "dinner":    "Dinner",
+    "snack":     "Snack",
+}
+
 
 def slot_label_uk(slot: str) -> str:
     return _SLOT_LABELS_UA.get(slot, slot.capitalize())
 
 
-_SYSTEM_PROMPT = """You generate practical 3-day meal plans tailored to one user.
+def slot_label_for_locale(slot: str, locale: str = "en") -> str:
+    table = _SLOT_LABELS_UA if locale == "uk" else _SLOT_LABELS_EN
+    return table.get(slot, slot.capitalize())
+
+
+def _build_system_prompt(language: str = "English") -> str:
+    return f"""You generate practical 3-day meal plans tailored to one user.
 
 OUTPUT: ONLY valid JSON, matching this schema EXACTLY (no markdown, no prose):
 
-{
+{{
   "days": [
-    {
+    {{
       "date_label": "Today" | "Tomorrow" | "Day 3",
-      "slots": {
-        "breakfast": { "name": "...", "calories": 420, "protein_g": 25, "carbs_g": 50, "fat_g": 12, "recipe": "..." },
-        "lunch":     { ... same shape ... },
-        "dinner":    { ... },
-        "snack":     { ... }
-      }
-    },
-    { ... },
-    { ... }
+      "slots": {{
+        "breakfast": {{ "name": "...", "calories": 420, "protein_g": 25, "carbs_g": 50, "fat_g": 12, "recipe": "..." }},
+        "lunch":     {{ ... same shape ... }},
+        "dinner":    {{ ... }},
+        "snack":     {{ ... }}
+      }}
+    }},
+    {{ ... }},
+    {{ ... }}
   ],
-  "notes": "Optional 1-2 sentence summary; in Ukrainian."
-}
+  "notes": "Optional 1-2 sentence summary in {language}."
+}}
 
 RULES:
-- Every "name", "recipe", and "notes" string in UKRAINIAN.
+- Every "name", "recipe", and "notes" string in {language}.
+- "date_label" stays in English ("Today" / "Tomorrow" / "Day 3"); the bot translates it client-side.
 - "recipe" is 1-3 short steps (one paragraph, ≤120 chars). Not a full how-to.
 - Macros are integers (grams + kcal); calories ≈ p*4 + c*4 + f*9 ± 10%.
 - Each day's total kcal should be within ±10% of the daily target.
@@ -123,6 +137,7 @@ def generate_meal_plan(
     goal:       str,
     pantry:     str = "",
     health_addendum: str = "",
+    language:   str = "English",
 ) -> dict:
     """Call GPT-4o JSON mode and return a normalized plan dict.
 
@@ -140,7 +155,7 @@ def generate_meal_plan(
         max_tokens=1800,
         response_format={"type": "json_object"},
         messages=[
-            {"role": "system", "content": _SYSTEM_PROMPT},
+            {"role": "system", "content": _build_system_prompt(language=language)},
             {"role": "user",   "content": user_msg},
         ],
     )
@@ -161,7 +176,9 @@ def normalize_plan(raw: dict) -> dict:
         raw = {}
     days_in = raw.get("days") or []
     days_out: list[dict] = []
-    default_labels = ("Сьогодні", "Завтра", "День 3")
+    # date_label is English-language model output; the formatter translates
+    # client-side based on user locale (see lib.formatters.format_meal_plan_day).
+    default_labels = ("Today", "Tomorrow", "Day 3")
     for i in range(3):
         src = days_in[i] if (i < len(days_in) and isinstance(days_in[i], dict)) else {}
         slots_src = src.get("slots") or {}
@@ -210,8 +227,10 @@ def slot_to_analysis(slot: dict) -> dict:
     return {
         "dish_name":         slot["name"],
         "description":       slot["name"],
-        "estimated_portion": "плановий прийом їжі",
-        "portion_reasoning": "З 3-денного плану",
+        # Locale-neutral source markers — the bot localises display via t()
+        # at render time. Stored as English; treated as data, not display.
+        "estimated_portion": "planned meal",
+        "portion_reasoning": "from 3-day plan",
         "ingredients":       [],
         "allergen_flags":    [],
         "crohn_flags":       [],

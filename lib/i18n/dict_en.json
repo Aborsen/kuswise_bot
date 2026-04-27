@@ -372,5 +372,9 @@
   "btn.meals":     "📋 My meals",
   "btn.dashboard": "📱 Dashboard",
   "btn.scan":      "🔢 Barcode",
-  "btn.menu_ocr":  "📋 Scan menu"
+  "btn.menu_ocr":  "📋 Scan menu",
+
+  "meal_plan.day_today":    "Today",
+  "meal_plan.day_tomorrow": "Tomorrow",
+  "meal_plan.day_3":        "Day 3"
 }

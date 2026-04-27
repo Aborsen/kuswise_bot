@@ -8,6 +8,7 @@ from lib.config import (
     SUMMARY_PROMPT_TEMPLATE,
     RECIPE_PROMPT_TEMPLATE,
     goal_context,
+    language_for_locale,
     macro_gram_targets,
     profile_summary_line,
 )
@@ -43,11 +44,12 @@ def _shrink_meal(m: dict) -> dict:
     return out
 
 
-def generate_daily_summary(meals: list[dict], totals: dict, profile: dict) -> str:
+def generate_daily_summary(meals: list[dict], totals: dict, profile: dict, language: str = "English") -> str:
     cal_target = profile.get("daily_calorie_target") or 2000
     macros = macro_gram_targets(cal_target)
     safe_meals = [_shrink_meal(m) for m in (meals or [])]
     prompt = SUMMARY_PROMPT_TEMPLATE.format(
+        language=language,
         profile_line=profile_summary_line(profile),
         cal_target=cal_target,
         p_target=macros["protein"],
@@ -78,6 +80,7 @@ def suggest_meal(
     pantry: str = "",
     extra_hint: str = "",
     health_addendum: str = "",
+    language: str = "English",
 ) -> str:
     """Generate a single recipe recommendation.
 
@@ -111,6 +114,7 @@ def suggest_meal(
     today_intake = "\n".join(intake_lines) if intake_lines else "(nothing logged yet)"
 
     prompt = RECIPE_PROMPT_TEMPLATE.format(
+        language=language,
         profile_line=profile_summary_line(profile),
         cal_target=cal_target,
         p_target=macros["protein"],
@@ -128,16 +132,16 @@ def suggest_meal(
         # Length-cap the pantry text so a hostile user can't blow the prompt budget.
         pantry_clean = pantry.strip()[:300]
         prompt += (
-            "\n\n--- ОБМЕЖЕННЯ ПО ІНГРЕДІЄНТАХ ---\n"
-            f"Користувач хоче використати тільки ці продукти (плюс базові: сіль, олія, спеції):\n"
+            "\n\n--- INGREDIENT CONSTRAINTS ---\n"
+            f"User wants to use only these foods (plus basics: salt, oil, spices):\n"
             f"{pantry_clean}\n"
-            "Рецепт МАЄ використовувати лише ці інгредієнти. Якщо чогось критичного бракує — "
-            "пропусти і запропонуй просту страву на основі того, що є."
+            "The recipe MUST use only these ingredients. If something critical is missing, "
+            "skip it and suggest a simple dish based on what's available."
         )
     if extra_hint.strip():
-        prompt += f"\n\n--- ДОДАТКОВО ---\n{extra_hint.strip()[:200]}"
+        prompt += f"\n\n--- EXTRA ---\n{extra_hint.strip()[:200]}"
     if health_addendum.strip():
-        prompt += f"\n\n--- ЗДОРОВ'Я ---\n{health_addendum.strip()}"
+        prompt += f"\n\n--- HEALTH ---\n{health_addendum.strip()}"
 
     prompt += _PROMPT_INJECTION_GUARD
     resp = _get_client().chat.completions.create(

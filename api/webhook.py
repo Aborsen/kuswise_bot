@@ -14,12 +14,14 @@ if _ROOT not in sys.path:
 
 from lib.config import (
     WEBHOOK_SECRET,
-    RECALC_PROMPT,
     ALLOWED_USER_IDS,
     calorie_target_from_profile,
     macro_gram_targets_from_profile,
     macro_gram_targets,
+    language_for_locale,
+    recalc_prompt,
 )
+from lib import config as config_mod
 from lib.database import (
     consume_quota,
     get_conn,
@@ -1281,6 +1283,7 @@ def handle_meal_type_callback(conn, cb: dict, profile: dict) -> None:
         personal_ctx = personalization_mod.aliases_prompt_block(conn, user_id)
     except Exception as _px:
         error("personalization_prompt_failed", exc=_px, user_id=user_id)
+    language = config_mod.language_for_locale(i18n_mod.locale_of(profile))
     analysis, raw = None, ""
     try:
         if file_id:
@@ -1294,12 +1297,14 @@ def handle_meal_type_callback(conn, cb: dict, profile: dict) -> None:
                 image_bytes,
                 health_addendum=health_ctx,
                 personalization_addendum=personal_ctx,
+                language=language,
             )
         elif text_description:
             analysis, raw = analyze_text(
                 text_description,
                 health_addendum=health_ctx,
                 personalization_addendum=personal_ctx,
+                language=language,
             )
         else:
             send_message(chat_id, _t("errors.pending_expired", profile))
@@ -1408,21 +1413,25 @@ def handle_moderation_callback(conn, cb: dict, profile: dict) -> None:
             personal_ctx = personalization_mod.aliases_prompt_block(conn, user_id)
         except Exception as _px:
             error("personalization_prompt_failed", exc=_px, user_id=user_id)
+        language = language_for_locale(i18n_mod.locale_of(profile))
+        recalc_text = recalc_prompt(language=language)
         try:
             if pending["photo_file_id"]:
                 image_bytes = get_file_bytes(pending["photo_file_id"])
                 analysis, raw = analyze_photo(
                     image_bytes,
-                    retry_prompt=RECALC_PROMPT,
+                    retry_prompt=recalc_text,
                     health_addendum=health_ctx,
                     personalization_addendum=personal_ctx,
+                    language=language,
                 )
             elif pending["text_description"]:
                 analysis, raw = analyze_text(
                     pending["text_description"],
-                    retry_prompt=RECALC_PROMPT,
+                    retry_prompt=recalc_text,
                     health_addendum=health_ctx,
                     personalization_addendum=personal_ctx,
+                    language=language,
                 )
             else:
                 send_message(chat_id, _t("errors.pending_expired", profile))
@@ -1489,6 +1498,7 @@ def handle_manual_text_input(conn, message: dict, text: str, pending: dict, prof
             text,
             health_addendum=health_ctx,
             personalization_addendum=personal_ctx,
+            language=language_for_locale(i18n_mod.locale_of(profile)),
         )
     except Exception as e:
         print("manual text analysis error:", e, flush=True)
@@ -1729,7 +1739,7 @@ def handle_menu_photo(conn, message: dict, profile: dict) -> None:
         return
 
     try:
-        dishes, _raw = analyze_menu([image_bytes])
+        dishes, _raw = analyze_menu([image_bytes], language=language_for_locale(i18n_mod.locale_of(profile)))
     except Exception as e:
         error("menu_analyze_failed", exc=e, user_id=user_id)
         send_message(chat_id, _t("menu.ocr_failed", profile))
@@ -1886,6 +1896,7 @@ def _build_and_send_plan(
             goal=goal,
             pantry=pantry,
             health_addendum=health_ctx,
+            language=language_for_locale(i18n_mod.locale_of(profile)),
         )
     except Exception as e:
         error("plan_generate_failed", exc=e, user_id=user_id)
@@ -2044,6 +2055,7 @@ def _run_suggest_meal(
             pantry=pantry,
             extra_hint=extra_hint,
             health_addendum=health_ctx,
+            language=language_for_locale(i18n_mod.locale_of(profile)),
         )
     except Exception as e:
         print("suggest error:", e, flush=True)
@@ -2765,7 +2777,7 @@ def handle_ask(conn, user_id: int, chat_id: int, question: str, profile: dict) -
         today_log = get_today_log(conn, user_id)
         today_meals = get_meals_for_day(conn, user_id, today_log["date"])
         history = get_chat_history(conn, user_id, limit=10, minutes=60)
-        answer = ask_chat(question, history, today_log, today_meals, profile)
+        answer = ask_chat(question, history, today_log, today_meals, profile, language=language_for_locale(i18n_mod.locale_of(profile)))
     except Exception as e:
         print("ask_chat error:", traceback.format_exc(), flush=True)
         send_message(chat_id, _t("ask.error", profile), reply_markup=main_menu_keyboard(locale=i18n_mod.locale_of(profile)))

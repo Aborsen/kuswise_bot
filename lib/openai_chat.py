@@ -5,6 +5,7 @@ from lib.config import (
     CHAT_SYSTEM_PROMPT,
     OPENAI_API_KEY,
     goal_context,
+    language_for_locale,
     macro_gram_targets,
     profile_summary_line,
 )
@@ -57,7 +58,7 @@ def _get_client() -> OpenAI:
 
 def _render_today_intake(today_meals: list[dict]) -> str:
     if not today_meals:
-        return "(сьогодні ще нічого не записано)"
+        return "(nothing logged yet today)"
     lines = []
     for m in today_meals:
         lines.append(
@@ -76,6 +77,7 @@ def ask_chat(
     today_log: dict,
     today_meals: list[dict],
     profile: dict,
+    language: str = "English",
 ) -> str:
     """Run one chat turn. System prompt is rebuilt each call so today's intake is always fresh."""
     cal_target = profile.get("daily_calorie_target") or 2000
@@ -91,6 +93,7 @@ def ask_chat(
     trimmed_history = _trim_history(history, MAX_HISTORY_CHARS)
 
     system = CHAT_SYSTEM_PROMPT.format(
+        language=language,
         profile_line=profile_summary_line(profile),
         cal_target=cal_target,
         p_target=macros["protein"],

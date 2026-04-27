@@ -5,13 +5,20 @@ Run this whenever commands change:
 
     .venv/bin/python scripts/setup_bot_commands.py
 
-It POSTs to ``setMyCommands`` once for the EN default scope and once
-with ``language_code="uk"`` so UA-locale Telegram clients pick up
-Ukrainian descriptions while everyone else sees English. Idempotent —
-safe to re-run.
+We register the command list across BOTH locales × BOTH scopes:
+  1. default scope, no language       → EN (universal fallback)
+  2. default scope, language_code=uk  → UA
+  3. all_private_chats, no language   → EN
+  4. all_private_chats, language_code=uk → UA
 
-Reads ``TELEGRAM_BOT_TOKEN`` from environment / ``.env``. Source of
-truth for the command list itself is ``lib/bot_commands.py``.
+Why all four: Telegram's lookup order is
+``(scope match) > (language match)``, so a UA user in a DM hits the
+more-specific ``all_private_chats`` registration before falling back
+to the ``default`` + uk match. Without registration #4, those users
+would see English even though we registered Ukrainian at default.
+
+Idempotent — safe to re-run. Reads ``TELEGRAM_BOT_TOKEN`` from env /
+``.env``. Source of truth for the list itself is ``lib/bot_commands.py``.
 """
 from __future__ import annotations
 
@@ -54,23 +61,35 @@ def main() -> int:
 
     en_commands = build_commands(locale="en")
     uk_commands = build_commands(locale="uk")
-    print(f"Registering {len(en_commands)} commands per locale (EN + UK)…")
+    print(f"Registering {len(en_commands)} commands × 2 locales × 2 scopes…")
 
     ok = True
-    # 1. EN default scope (covers every user whose Telegram client isn't UK).
+    # 1. EN at default scope (universal fallback for any non-UK client).
     ok &= _post(token, {"commands": en_commands}, "EN default scope")
-    # 2. EN explicit, all-private-chats scope. Locks the DM list against future
-    #    default-scope edits.
+    # 2. UK at default scope (Telegram serves to clients with language_code=uk).
+    ok &= _post(
+        token,
+        {"commands": uk_commands, "language_code": "uk"},
+        "UK default scope",
+    )
+    # 3. EN at all_private_chats — same scope as #4 below so the lookup
+    #    order doesn't bypass the UA registration for UK users in DMs.
     ok &= _post(
         token,
         {"commands": en_commands, "scope": {"type": "all_private_chats"}},
         "EN private scope",
     )
-    # 3. UK localized list (Telegram serves it to clients with language_code=uk).
+    # 4. UK at all_private_chats — without this, Telegram's
+    #    "more-specific scope wins over language match" rule would serve
+    #    EN to UK users in DMs from registration #3.
     ok &= _post(
         token,
-        {"commands": uk_commands, "language_code": "uk"},
-        "UK locale",
+        {
+            "commands": uk_commands,
+            "scope": {"type": "all_private_chats"},
+            "language_code": "uk",
+        },
+        "UK private scope",
     )
 
     if not ok:

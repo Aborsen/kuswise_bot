@@ -196,7 +196,7 @@ def _t(key: str, profile=None, **kwargs):
 # All HEALTH_* string constants migrated to lib/i18n keys (F-2b Phase 3 — health.*)
 
 
-NOT_AUTHORIZED = "🔒 Цей бот зараз недоступний. Спробуй пізніше."
+# auth.* keys live in lib/i18n; callers use i18n_mod.t("auth.foo", locale=...).
 
 
 def _is_allowed(user_id: int | None) -> bool:
@@ -217,25 +217,9 @@ DAILY_QUOTAS: dict[str, int] = {
     "plan_generate": 3,     # F-10: /plan 3-day meal plan (GPT-4o JSON, ~1800 tokens)
 }
 
-QUOTA_ACTION_LABELS = {
-    "meal_analysis": "запис страви",
-    "voice_transcribe": "голосове повідомлення",
-    "ask": "запит до ШІ",
-    "suggest": "ідея страви",
-    "menu_ocr": "сканер меню",
-    "plan_generate": "3-денний план",
-}
-
-QUOTA_REJECT_TEMPLATE = (
-    "⏳ На сьогодні твій ліміт для «{action}» вичерпано ({limit}/день). "
-    "Спробуй завтра або напиши страву текстом, якщо це фото."
-)
-
-
 def _enforce_quota(conn, chat_id: int, user_id: int, action: str) -> bool:
     """Atomically increment the quota counter; if over limit, send a friendly
-    Ukrainian reject message and return False. Returns True when the caller
-    is allowed to proceed.
+    locale-aware reject message and return False. Returns True when allowed.
 
     Errors talking to the DB fall open (return True) so a transient quota-table
     failure doesn't break the bot for legitimate users — the daily limit is a
@@ -250,8 +234,11 @@ def _enforce_quota(conn, chat_id: int, user_id: int, action: str) -> bool:
         print("quota check error:", e, flush=True)
         return True
     if new_count > limit:
-        label = QUOTA_ACTION_LABELS.get(action, action)
-        send_message(chat_id, QUOTA_REJECT_TEMPLATE.format(action=label, limit=limit))
+        # Locale resolved per-call from profile so cron contexts work too.
+        profile = get_profile(conn, user_id) or {}
+        locale = i18n_mod.locale_of(profile)
+        label = i18n_mod.t(f"quota.kind_{action}", locale=locale) or action
+        send_message(chat_id, i18n_mod.t("quota.daily_limit_message", locale=locale, action=label, limit=limit))
         return False
     return True
 
@@ -353,7 +340,10 @@ def process_update(update: dict) -> None:
         if not _is_allowed(user_id):
             chat_id = message.get("chat", {}).get("id")
             if chat_id:
-                send_message(chat_id, NOT_AUTHORIZED)
+                # Profile may not exist yet — locale falls back to EN. The
+                # rejection path only fires under a non-empty ALLOWED_USER_IDS
+                # (dev/staging), so polishing per-user locale isn't worth it.
+                send_message(chat_id, i18n_mod.t("auth.not_authorized", locale="en"))
             return
 
         if user_id:
@@ -438,7 +428,7 @@ def process_update(update: dict) -> None:
             handle_weight_input(conn, chat_id, user_id, first_name, text, profile)
             return
 
-        # Manual water-target entry from /profile → 💧 Ціль води → Своє значення.
+        # Manual water-target entry from /profile → Water goal → Custom value.
         if (
             user_id
             and profile
@@ -448,7 +438,7 @@ def process_update(update: dict) -> None:
             handle_water_target_input(conn, chat_id, user_id, text)
             return
 
-        # Motivation target-weight entry from /profile → 🏁 Цільова вага.
+        # Motivation target-weight entry from /profile → Target weight.
         if (
             user_id
             and profile
@@ -508,7 +498,7 @@ def process_update(update: dict) -> None:
             handle_fridge_input(conn, chat_id, user_id, text, profile)
             return
 
-        # Free-text IANA timezone from /timezone → ✏️ Інша зона.
+        # Free-text IANA timezone from /timezone → Other zone.
         if (
             user_id
             and profile
@@ -570,8 +560,8 @@ def _reject_cb(cb: dict) -> None:
     message = cb.get("message", {})
     chat_id = message.get("chat", {}).get("id")
     if chat_id:
-        send_message(chat_id, NOT_AUTHORIZED)
-    answer_callback_query(cb["id"], "🔒 Недоступно")
+        send_message(chat_id, i18n_mod.t("auth.not_authorized", locale="en"))
+    answer_callback_query(cb["id"], i18n_mod.t("auth.unavailable_short", locale="en"))
 
 
 # ---------- Onboarding ----------
@@ -779,7 +769,7 @@ def handle_onboarding_callback(conn, cb: dict) -> None:
 
     # Allow restart from the profile screen regardless of step
     if data == "onb:restart":
-        answer_callback_query(cb_id, "🔄 Починаємо заново")
+        answer_callback_query(cb_id, _t("toast.restart", profile))
         reset_onboarding(conn, user_id)
         send_message(chat_id, _t("onboarding.intro", profile))
         send_message(chat_id, _t("onboarding.ask_age", profile))
@@ -817,42 +807,42 @@ def handle_onboarding_callback(conn, cb: dict) -> None:
 
     if data.startswith("onb:sex:"):
         if step != "awaiting_sex":
-            answer_callback_query(cb_id, "Вже відповів(ла) 🙂")
+            answer_callback_query(cb_id, _t("toast.already_answered", profile))
             return
         sex = data.split(":", 2)[2]
         if sex not in ("male", "female"):
-            answer_callback_query(cb_id, "Невірна відповідь")
+            answer_callback_query(cb_id, _t("toast.invalid", profile))
             return
         update_profile(conn, user_id, sex=sex, onboarding_step="awaiting_weight")
-        answer_callback_query(cb_id, "Записав")
+        answer_callback_query(cb_id, _t("toast.saved", profile))
         send_message(chat_id, _t("onboarding.ask_weight", profile))
         return
 
     if data.startswith("onb:gym:"):
         if step != "awaiting_gym":
-            answer_callback_query(cb_id, "Вже відповів(ла) 🙂")
+            answer_callback_query(cb_id, _t("toast.already_answered", profile))
             return
         freq = data.split(":", 2)[2]
         if freq not in _VALID_GYM_FREQ:
-            answer_callback_query(cb_id, "Невірна відповідь")
+            answer_callback_query(cb_id, _t("toast.invalid", profile))
             return
         update_profile(conn, user_id, gym_per_week=freq, onboarding_step="awaiting_goal")
-        answer_callback_query(cb_id, "Записав")
+        answer_callback_query(cb_id, _t("toast.saved", profile))
         send_message(chat_id, _t("onboarding.ask_goal", profile), reply_markup=goal_keyboard(locale=i18n_mod.locale_of(profile)))
         return
 
     if data.startswith("onb:goal:"):
         if step != "awaiting_goal":
-            answer_callback_query(cb_id, "Вже відповів(ла) 🙂")
+            answer_callback_query(cb_id, _t("toast.already_answered", profile))
             return
         goal = data.split(":", 2)[2]
         if goal not in _VALID_GOALS:
-            answer_callback_query(cb_id, "Невірна відповідь")
+            answer_callback_query(cb_id, _t("toast.invalid", profile))
             return
         updated = get_profile(conn, user_id) or {}
         if not updated.get("weight_kg"):
             reset_onboarding(conn, user_id)
-            answer_callback_query(cb_id, "Щось пішло не так, починаємо заново")
+            answer_callback_query(cb_id, _t("toast.something_wrong", profile))
             send_message(chat_id, _t("onboarding.ask_age", profile))
             return
 
@@ -864,7 +854,7 @@ def handle_onboarding_callback(conn, cb: dict) -> None:
                 target_weight_kg=None,
                 onboarding_step="awaiting_target_weight",
             )
-            answer_callback_query(cb_id, "Записав")
+            answer_callback_query(cb_id, _t("toast.saved", profile))
             prompt = _t("target_weight.ask_lose" if goal == "lose" else "target_weight.ask_gain", profile)
             send_message(chat_id, prompt)
             return
@@ -878,7 +868,7 @@ def handle_onboarding_callback(conn, cb: dict) -> None:
             recommended_calorie_target=rec,
             onboarding_step="awaiting_confirm",
         )
-        answer_callback_query(cb_id, "Рахую твою норму…")
+        answer_callback_query(cb_id, _t("toast.calculating", profile))
         profile_after = get_profile(conn, user_id) or {}
         send_message(
             chat_id,
@@ -889,7 +879,7 @@ def handle_onboarding_callback(conn, cb: dict) -> None:
 
     if data == "onb:cal:accept":
         if step != "awaiting_confirm":
-            answer_callback_query(cb_id, "Вже прийнято 🙂")
+            answer_callback_query(cb_id, _t("toast.already_accepted", profile))
             return
         profile_after = get_profile(conn, user_id) or {}
         rec = profile_after.get("recommended_calorie_target") or 2000
@@ -898,39 +888,39 @@ def handle_onboarding_callback(conn, cb: dict) -> None:
             daily_calorie_target=rec,
             onboarding_step="awaiting_tz",
         )
-        answer_callback_query(cb_id, "✅ Прийнято")
+        answer_callback_query(cb_id, _t("toast.accepted", profile))
         send_message(chat_id, _t("onboarding.ask_tz", profile), reply_markup=tz_keyboard(prefix="onb:tz", locale=i18n_mod.locale_of(profile)))
         return
 
     if data.startswith("onb:tz:"):
         if step != "awaiting_tz":
-            answer_callback_query(cb_id, "Вже відповів(ла) 🙂")
+            answer_callback_query(cb_id, _t("toast.already_answered", profile))
             return
         tz_value = data.split(":", 2)[2]
         if tz_value == "custom":
             update_profile(conn, user_id, onboarding_step="awaiting_tz_custom")
-            answer_callback_query(cb_id, "Чекаю на назву зони")
+            answer_callback_query(cb_id, _t("toast.waiting_zone", profile))
             send_message(chat_id, _t("onboarding.tz_custom_prompt", profile))
             return
         if not is_valid_tz(tz_value):
-            answer_callback_query(cb_id, "Невідома зона")
+            answer_callback_query(cb_id, _t("toast.unknown_zone", profile))
             return
         update_profile(conn, user_id, tz=tz_value, onboarding_step="done")
-        answer_callback_query(cb_id, "✅ Записав")
+        answer_callback_query(cb_id, _t("toast.saved_check", profile))
         send_message(chat_id, _t("onboarding.tz_saved", profile, tz=tz_value))
         _finalize_onboarding(conn, chat_id, user_id, first_name)
         return
 
     if data == "onb:cal:custom":
         if step != "awaiting_confirm":
-            answer_callback_query(cb_id, "Вже прийнято 🙂")
+            answer_callback_query(cb_id, _t("toast.already_accepted", profile))
             return
         update_profile(conn, user_id, onboarding_step="awaiting_custom_cal")
-        answer_callback_query(cb_id, "Чекаю на число")
+        answer_callback_query(cb_id, _t("toast.waiting_number", profile))
         send_message(chat_id, _t("onboarding.custom_cal_prompt", profile))
         return
 
-    answer_callback_query(cb_id, "Невідома дія")
+    answer_callback_query(cb_id, _t("toast.unknown_action", profile))
 
 
 def handle_timezone_callback(conn, cb: dict, profile: dict) -> None:
@@ -944,25 +934,25 @@ def handle_timezone_callback(conn, cb: dict, profile: dict) -> None:
         answer_callback_query(cb_id)
         return
     if not data.startswith("tz:set:"):
-        answer_callback_query(cb_id, "Невідома дія")
+        answer_callback_query(cb_id, _t("toast.unknown_action", profile))
         return
     tz_value = data.split(":", 2)[2]
     if tz_value == "custom":
         set_awaiting_input(conn, user_id, "timezone")
-        answer_callback_query(cb_id, "Чекаю на назву зони")
+        answer_callback_query(cb_id, _t("toast.waiting_zone", profile))
         send_message(chat_id, _t("timezone.custom_prompt", profile))
         return
     if not is_valid_tz(tz_value):
-        answer_callback_query(cb_id, "Невідома зона")
+        answer_callback_query(cb_id, _t("toast.unknown_zone", profile))
         return
     update_profile(conn, user_id, tz=tz_value)
     set_awaiting_input(conn, user_id, None)
-    answer_callback_query(cb_id, "✅ Записав")
+    answer_callback_query(cb_id, _t("toast.saved_check", profile))
     send_message(chat_id, _t("timezone.saved", profile, tz=tz_value))
 
 
 def handle_timezone_input(conn, chat_id: int, user_id: int, text: str) -> None:
-    """Free-text IANA timezone input from /timezone → ✏️ Інша зона."""
+    """Free-text IANA timezone input from /timezone → Other zone."""
     profile = get_profile(conn, user_id)
     cleaned = text.strip()
     if cleaned.lower() in ("/cancel", "cancel"):
@@ -1005,22 +995,22 @@ def handle_health_callback(conn, cb: dict, profile: dict) -> None:
         return
     if data == "h:set:allergens":
         set_awaiting_input(conn, user_id, "health_allergens")
-        answer_callback_query(cb_id, "Чекаю на список")
+        answer_callback_query(cb_id, _t("toast.waiting_list", profile))
         send_message(chat_id, _t("health.allergens_prompt", profile))
         return
     if data == "h:set:conditions":
         set_awaiting_input(conn, user_id, "health_conditions")
-        answer_callback_query(cb_id, "Чекаю на список")
+        answer_callback_query(cb_id, _t("toast.waiting_list", profile))
         send_message(chat_id, _t("health.conditions_prompt", profile))
         return
     if data == "h:clear":
         clear_health_profile(conn, user_id)
         set_awaiting_input(conn, user_id, None)
-        answer_callback_query(cb_id, "🧹 Очищено")
+        answer_callback_query(cb_id, _t("toast.cleared", profile))
         send_message(chat_id, _t("health.cleared", profile))
         _send_health_menu(conn, chat_id, user_id)
         return
-    answer_callback_query(cb_id, "Невідома дія")
+    answer_callback_query(cb_id, _t("toast.unknown_action", profile))
 
 
 def handle_language_callback(conn, cb: dict, profile: dict) -> None:
@@ -1111,8 +1101,6 @@ def handle_health_input(conn, chat_id: int, user_id: int, text: str, kind: str) 
 
 # ---------- Photo / text entry ----------
 
-PHOTO_TOO_LARGE = "📸 Фото завелике — будь ласка, до 5 МБ."
-
 # Hard cap on photo size before we pay to download the file from Telegram and
 # ship it to GPT-4o vision. The largest entry in `photo[]` is the highest-
 # resolution version Telegram is willing to surface.
@@ -1130,7 +1118,7 @@ def handle_photo(conn, message: dict) -> None:
         return
     file_size = int(largest.get("file_size") or 0)
     if file_size > MAX_PHOTO_BYTES:
-        send_message(chat_id, PHOTO_TOO_LARGE)
+        send_message(chat_id, _t("errors.photo_too_large", profile))
         return
     save_pending_photo(conn, user_id, file_id)
     send_message(chat_id, _t("prompts.photo_meal_type", profile), reply_markup=meal_type_keyboard(locale=i18n_mod.locale_of(profile)))
@@ -1146,15 +1134,10 @@ def handle_text_entry(conn, message: dict, text: str) -> None:
 
 # ---------- Voice entry (Whisper) ----------
 
-VOICE_TOO_LONG = "🎙 Задовге повідомлення — будь ласка, до 60 с."
-VOICE_EMPTY = "🤔 Не розпізнав їжу. Спробуй ще раз або напиши текстом."
-VOICE_ERROR = "😵 Не вийшло розпізнати голос. Спробуй ще раз або напиши текстом."
-VOICE_TRANSCRIPT = "🎙 Почув: «{text}»"
-
-
 def handle_voice(conn, message: dict) -> None:
     chat_id = message["chat"]["id"]
     user_id = message["from"]["id"]
+    profile = get_profile(conn, user_id) or {}
     voice = message.get("voice") or message.get("audio") or {}
     file_id = voice.get("file_id")
     file_size = voice.get("file_size") or 0
@@ -1163,7 +1146,7 @@ def handle_voice(conn, message: dict) -> None:
 
     # Hard cap ~2 MB (≈60–90 s OGG/Opus) to keep Whisper + analysis under Vercel timeout.
     if file_size > 2 * 1024 * 1024:
-        send_message(chat_id, VOICE_TOO_LONG)
+        send_message(chat_id, _t("voice.too_long", profile))
         return
 
     if not _enforce_quota(conn, chat_id, user_id, "voice_transcribe"):
@@ -1175,22 +1158,22 @@ def handle_voice(conn, message: dict) -> None:
         audio_bytes = get_file_bytes(file_id)
     except Exception as e:
         print("voice getFile error:", e, flush=True)
-        send_message(chat_id, VOICE_ERROR)
+        send_message(chat_id, _t("voice.error", profile))
         return
 
     try:
         transcript = transcribe_voice(audio_bytes)
     except Exception as e:
         print("whisper error:", e, flush=True)
-        send_message(chat_id, VOICE_ERROR)
+        send_message(chat_id, _t("voice.error", profile))
         return
 
     if not transcript or len(transcript) < 3:
-        send_message(chat_id, VOICE_EMPTY)
+        send_message(chat_id, _t("voice.empty", profile))
         return
 
     safe = _html.escape(transcript, quote=False)
-    send_message(chat_id, VOICE_TRANSCRIPT.format(text=safe))
+    send_message(chat_id, _t("voice.transcript", profile, text=safe))
 
     # If this voice message is a reply to the /ask prompt, treat transcript as a
     # chat question and route to handle_ask instead of the meal-logging flow.
@@ -1223,7 +1206,7 @@ def handle_callback(conn, cb: dict) -> None:
     user_id = cb["from"]["id"]
     profile = get_profile(conn, user_id)
     if not profile_is_complete(profile):
-        answer_callback_query(cb["id"], "Спочатку /start")
+        answer_callback_query(cb["id"], _t("toast.first_start", profile))
         message = cb.get("message", {})
         chat_id = message.get("chat", {}).get("id")
         if chat_id:
@@ -1265,7 +1248,7 @@ def handle_callback(conn, cb: dict) -> None:
     elif data == "noop":
         answer_callback_query(cb["id"])
     else:
-        answer_callback_query(cb["id"], "Невідома дія")
+        answer_callback_query(cb["id"], i18n_mod.t("toast.unknown_action", locale=i18n_mod.locale_of(profile) if profile else "en"))
 
 
 # ---------- Meal type selection → analyze → show preview ----------
@@ -1281,12 +1264,13 @@ def handle_meal_type_callback(conn, cb: dict, profile: dict) -> None:
 
     if meal_type == "cancel":
         pop_pending_entry(conn, user_id)  # discard photo/text
-        answer_callback_query(cb_id, "Скасовано")
+        answer_callback_query(cb_id, _t("toast.cancelled", profile))
         send_message(chat_id, _t("meals_mgmt.cancelled", profile), reply_markup=main_menu_keyboard(locale=i18n_mod.locale_of(profile)))
         return
 
-    meal_ua_map = {"breakfast": "сніданок", "lunch": "обід", "dinner": "вечерю", "snack": "перекус"}
-    answer_callback_query(cb_id, f"Аналізую твій {meal_ua_map.get(meal_type, meal_type)}…")
+    locale_for_toast = i18n_mod.locale_of(profile)
+    meal_label = i18n_mod.t(f"meal_type.{meal_type}", locale=locale_for_toast).lower() if meal_type else meal_type
+    answer_callback_query(cb_id, _t("toast.analyzing_meal", profile, meal_type=meal_label))
 
     entry = pop_pending_entry(conn, user_id)
     if entry is None:
@@ -1393,7 +1377,7 @@ def handle_moderation_callback(conn, cb: dict, profile: dict) -> None:
     chat_id = message.get("chat", {}).get("id", user_id)
 
     if action == "accept":
-        answer_callback_query(cb_id, "✅ Записую!")
+        answer_callback_query(cb_id, _t("toast.saved_kg", profile))
         pending = pop_pending_analysis(conn, user_id)
         if not pending:
             send_message(chat_id, _t("errors.pending_expired", profile))
@@ -1420,7 +1404,7 @@ def handle_moderation_callback(conn, cb: dict, profile: dict) -> None:
         )
 
     elif action == "recalc":
-        answer_callback_query(cb_id, "🔄 Перераховую…")
+        answer_callback_query(cb_id, _t("toast.recalculating", profile))
         pending = get_pending_analysis(conn, user_id)
         if not pending:
             send_message(chat_id, _t("errors.pending_expired", profile))
@@ -1485,7 +1469,7 @@ def handle_moderation_callback(conn, cb: dict, profile: dict) -> None:
         )
 
     elif action == "manual":
-        answer_callback_query(cb_id, "✏️ Чекаю на текст")
+        answer_callback_query(cb_id, _t("toast.waiting_text", profile))
         pending = get_pending_analysis(conn, user_id)
         if not pending:
             send_message(chat_id, _t("errors.pending_expired", profile))
@@ -1494,7 +1478,7 @@ def handle_moderation_callback(conn, cb: dict, profile: dict) -> None:
         send_message(chat_id, _t("prompts.manual_input", profile), reply_markup=cancel_only_keyboard(locale=i18n_mod.locale_of(profile)))
 
     elif action == "cancel":
-        answer_callback_query(cb_id, "Скасовано")
+        answer_callback_query(cb_id, _t("toast.cancelled", profile))
         pop_pending_analysis(conn, user_id)
         pop_pending_entry(conn, user_id)
         send_message(chat_id, _t("meals_mgmt.cancelled", profile), reply_markup=main_menu_keyboard(locale=i18n_mod.locale_of(profile)))
@@ -1566,7 +1550,7 @@ def handle_alternates_pick(conn, cb: dict, profile: dict) -> None:
     try:
         idx = int(cb["data"].split(":", 1)[1])
     except (ValueError, IndexError):
-        answer_callback_query(cb_id, "Невідомий варіант")
+        answer_callback_query(cb_id, _t("toast.unknown_option", profile))
         return
 
     pending = get_pending_analysis(conn, user_id)
@@ -1577,7 +1561,7 @@ def handle_alternates_pick(conn, cb: dict, profile: dict) -> None:
 
     candidates = pending.get("candidates") or []
     if idx < 0 or idx >= len(candidates):
-        answer_callback_query(cb_id, "Варіант недоступний")
+        answer_callback_query(cb_id, _t("toast.option_unavailable", profile))
         return
 
     chosen = candidates[idx]
@@ -1600,7 +1584,7 @@ def handle_alternates_pick(conn, cb: dict, profile: dict) -> None:
         conn, user_id, pending["meal_type"], new_analysis,
         pending.get("photo_file_id"), pending.get("text_description"),
         pending.get("raw_response", ""),
-        # Drop candidates so the next "Прийняти" goes through the normal path.
+        # Drop candidates so the next "Accept" goes through the normal path.
         candidates=None,
     )
     send_message(
@@ -1682,7 +1666,7 @@ def handle_barcode_callback(conn, cb: dict, profile: dict) -> None:
     data = cb["data"]
 
     if data == "barcode:cancel":
-        answer_callback_query(cb_id, "Скасовано")
+        answer_callback_query(cb_id, _t("toast.cancelled", profile))
         pop_pending_analysis(conn, user_id)
         set_awaiting_input(conn, user_id, None)
         send_message(chat_id, _t("meals_mgmt.cancelled", profile), reply_markup=main_menu_keyboard(locale=i18n_mod.locale_of(profile)))
@@ -1691,13 +1675,13 @@ def handle_barcode_callback(conn, cb: dict, profile: dict) -> None:
     # Manual EAN entry — fallback for devices where the Mini App camera
     # doesn't work (older iOS, denied camera permission, etc.).
     if data == "barcode:manual":
-        answer_callback_query(cb_id, "✏️ Чекаю на цифри")
+        answer_callback_query(cb_id, _t("toast.waiting_digits", profile))
         set_awaiting_input(conn, user_id, "barcode_manual")
         send_message(chat_id, _t("barcode.manual_prompt", profile))
         return
 
     if data == "barcode:g:custom":
-        answer_callback_query(cb_id, "✏️ Чекаю на грами")
+        answer_callback_query(cb_id, _t("toast.waiting_grams", profile))
         set_awaiting_input(conn, user_id, "barcode_grams")
         send_message(chat_id, _t("barcode.grams_prompt", profile))
         return
@@ -1706,21 +1690,21 @@ def handle_barcode_callback(conn, cb: dict, profile: dict) -> None:
         try:
             grams = int(data.split(":", 2)[2])
         except (ValueError, IndexError):
-            answer_callback_query(cb_id, "Неправильна кількість")
+            answer_callback_query(cb_id, _t("toast.invalid_amount", profile))
             return
         if not (1 <= grams <= 5000):
-            answer_callback_query(cb_id, "Неправильна кількість")
+            answer_callback_query(cb_id, _t("toast.invalid_amount", profile))
             return
         pending = get_pending_analysis(conn, user_id)
         if not pending:
             answer_callback_query(cb_id)
             send_message(chat_id, _t("barcode.pending_expired", profile))
             return
-        answer_callback_query(cb_id, f"{grams}г · записую")
+        answer_callback_query(cb_id, _t("toast.grams_logging", profile, grams=grams))
         _save_barcode_meal(conn, chat_id, user_id, first_name, profile, pending, float(grams))
         return
 
-    answer_callback_query(cb_id, "Невідома дія")
+    answer_callback_query(cb_id, _t("toast.unknown_action", profile))
 
 
 def handle_menu_photo(conn, message: dict, profile: dict) -> None:
@@ -1750,7 +1734,7 @@ def handle_menu_photo(conn, message: dict, profile: dict) -> None:
         send_message(chat_id, _t("menu.ocr_failed", profile))
         return
 
-    send_message(chat_id, "🔎 Читаю меню… це може зайняти 5-10 секунд.")
+    send_message(chat_id, _t("menu.reading", profile))
 
     try:
         image_bytes = get_file_bytes(file_id)
@@ -1808,18 +1792,18 @@ def handle_menu_callback(conn, cb: dict, profile: dict) -> None:
     data = cb["data"]
 
     if data == "menu:cancel":
-        answer_callback_query(cb_id, "Закрив")
+        answer_callback_query(cb_id, _t("toast.closed", profile))
         send_message(chat_id, _t("meals_mgmt.cancelled", profile), reply_markup=main_menu_keyboard(locale=i18n_mod.locale_of(profile)))
         return
 
     if not data.startswith("menu:log:"):
-        answer_callback_query(cb_id, "Невідома дія")
+        answer_callback_query(cb_id, _t("toast.unknown_action", profile))
         return
 
     try:
         idx = int(data.split(":", 2)[2])
     except (ValueError, IndexError):
-        answer_callback_query(cb_id, "Поза діапазоном")
+        answer_callback_query(cb_id, _t("toast.out_of_range", profile))
         return
 
     dishes = get_menu_ocr_result(conn, user_id) or []
@@ -1836,11 +1820,12 @@ def handle_menu_callback(conn, cb: dict, profile: dict) -> None:
     # moderation card. We pass NO photo_file_id and a synthetic
     # text_description (so /recalc has something sensible to retry against).
     portion_note = chosen.get("portion_note", "")
+    locale_for_menu = i18n_mod.locale_of(profile)
     analysis = {
         "dish_name":         chosen["name"],
         "description":       chosen["name"],
-        "estimated_portion": portion_note or "ресторанна порція",
-        "portion_reasoning": f"Меню OCR · впевненість {int(round(chosen.get('confidence', 0) * 100))}%",
+        "estimated_portion": portion_note or i18n_mod.t("menu.restaurant_portion", locale=locale_for_menu),
+        "portion_reasoning": i18n_mod.t("menu.ocr_source", locale=locale_for_menu, pct=int(round(chosen.get('confidence', 0) * 100))),
         "ingredients":       [],
         "allergen_flags":    [],
         "crohn_flags":       [],
@@ -1878,7 +1863,7 @@ def _build_and_send_plan(
     """Generate a plan, persist it, send the day-1 message + day keyboard.
 
     Pulled out so both ``handle_plan_pantry_input`` (typed list) and the
-    "Без списку" callback can share the heavy lifting.
+    "Skip list" callback can share the heavy lifting.
     """
     if not _enforce_quota(conn, chat_id, user_id, "plan_generate"):
         set_awaiting_input(conn, user_id, None)
@@ -1983,27 +1968,27 @@ def handle_plan_callback(conn, cb: dict, profile: dict) -> None:
     data = cb["data"]
 
     if data == "plan:cancel":
-        answer_callback_query(cb_id, "Закрив")
+        answer_callback_query(cb_id, _t("toast.closed", profile))
         set_awaiting_input(conn, user_id, None)
         send_message(chat_id, _t("meals_mgmt.cancelled", profile), reply_markup=main_menu_keyboard(locale=i18n_mod.locale_of(profile)))
         return
 
     if data == "plan:nopantry":
-        answer_callback_query(cb_id, "🍳 Готую…")
+        answer_callback_query(cb_id, _t("toast.preparing", profile))
         _build_and_send_plan(conn, chat_id, user_id, profile, pantry="")
         return
 
     parts = data.split(":")
     # Both view + log forms have plan_id at index 2 and day at index 3.
     if len(parts) < 4:
-        answer_callback_query(cb_id, "Невідома дія")
+        answer_callback_query(cb_id, _t("toast.unknown_action", profile))
         return
 
     try:
         plan_id = int(parts[2])
         day_idx = int(parts[3])
     except ValueError:
-        answer_callback_query(cb_id, "Невідома дія")
+        answer_callback_query(cb_id, _t("toast.unknown_action", profile))
         return
 
     plan = get_meal_plan(conn, plan_id, user_id)
@@ -2019,16 +2004,16 @@ def handle_plan_callback(conn, cb: dict, profile: dict) -> None:
 
     if data.startswith("plan:log:"):
         if len(parts) < 5:
-            answer_callback_query(cb_id, "Помилка")
+            answer_callback_query(cb_id, _t("toast.error", profile))
             return
         slot_key = parts[4]
         days = plan.get("days") or []
         if day_idx < 0 or day_idx >= len(days):
-            answer_callback_query(cb_id, "Поза діапазоном")
+            answer_callback_query(cb_id, _t("toast.out_of_range", profile))
             return
         slot = (days[day_idx].get("slots") or {}).get(slot_key)
         if not slot:
-            answer_callback_query(cb_id, "Прийом їжі недоступний")
+            answer_callback_query(cb_id, _t("toast.meal_type_unavailable", profile))
             return
         answer_callback_query(cb_id, f"➕ {slot.get('name', '')[:32]}")
         analysis = mealplan_mod.slot_to_analysis(slot)
@@ -2043,7 +2028,7 @@ def handle_plan_callback(conn, cb: dict, profile: dict) -> None:
         )
         return
 
-    answer_callback_query(cb_id, "Невідома дія")
+    answer_callback_query(cb_id, _t("toast.unknown_action", profile))
 
 
 # ---------- F-11: /suggest_meal extensions (fridge + variation) ----------
@@ -2056,7 +2041,7 @@ def _run_suggest_meal(
     pantry: str = "",
     extra_hint: str = "",
 ) -> None:
-    """Shared body for /suggest_meal, the fridge handler, and "інша версія".
+    """Shared body for /suggest_meal, the fridge handler, and "different version".
 
     Always reuses the existing ``suggest`` quota counter — fridge / variation
     are not separate buckets to keep the cost surface predictable.
@@ -2120,18 +2105,18 @@ def handle_suggest_callback(conn, cb: dict, profile: dict) -> None:
     data = cb["data"]
 
     if data == "suggest:fridge":
-        answer_callback_query(cb_id, "🛒 Чекаю на список")
+        answer_callback_query(cb_id, _t("toast.waiting_pantry", profile))
         set_awaiting_input(conn, user_id, "fridge_ingredients")
         send_message(chat_id, _t("fridge.prompt", profile))
         return
 
     if data == "suggest:variation":
-        answer_callback_query(cb_id, "🔄 Готую іншу")
+        answer_callback_query(cb_id, _t("toast.preparing_other", profile))
         _run_suggest_meal(conn, chat_id, user_id, profile,
                           pantry="", extra_hint=_t("fridge.variation_hint", profile))
         return
 
-    answer_callback_query(cb_id, "Невідома дія")
+    answer_callback_query(cb_id, _t("toast.unknown_action", profile))
 
 
 def _portion_keyboard_for_product(product: dict, locale: str = "en") -> dict:
@@ -2248,7 +2233,7 @@ def handle_barcode_grams_input(
     profile: dict,
 ) -> None:
     """F-8: custom-grams typed reply for a pending barcode lookup."""
-    cleaned = text.strip().replace(",", ".").replace("г", "").replace("g", "").strip()
+    cleaned = text.strip().replace(",", ".").replace("г", "").replace("g", "").strip()  # noqa: i18n
     if cleaned.lower() in ("/skip", "skip", "/cancel", "cancel"):
         set_awaiting_input(conn, user_id, None)
         pop_pending_analysis(conn, user_id)
@@ -2281,7 +2266,7 @@ def handle_meal_manage_callback(conn, cb: dict) -> None:
 
     if data.startswith("meal_del:"):
         meal_id = int(data.split(":", 1)[1])
-        answer_callback_query(cb_id, "🗑 Видаляю…")
+        answer_callback_query(cb_id, _t("toast.deleting", profile))
         deleted = delete_meal(conn, meal_id, user_id)
         if not deleted:
             send_message(chat_id, _t("errors.meal_not_found", profile))
@@ -2299,7 +2284,7 @@ def handle_meal_manage_callback(conn, cb: dict) -> None:
 
     elif data.startswith("meal_edit:"):
         meal_id = int(data.split(":", 1)[1])
-        answer_callback_query(cb_id, "✏️ Готуюсь до заміни…")
+        answer_callback_query(cb_id, _t("toast.getting_ready_swap", profile))
         deleted = delete_meal(conn, meal_id, user_id)
         if not deleted:
             send_message(chat_id, _t("errors.meal_not_found", profile))
@@ -2391,13 +2376,13 @@ def handle_command(conn, message: dict, text: str, first_name: str | None, profi
             png, caption = recap_mod.build_user_recap(conn, user_id, profile, first_name)
         except Exception as e:
             error("recap_build_failed", exc=e, user_id=user_id)
-            send_message(chat_id, "❌ Не зміг скласти recap. Спробуй пізніше.",
+            send_message(chat_id, _t("errors.recap_render_failed", profile),
                          reply_markup=main_menu_keyboard(locale=i18n_mod.locale_of(profile)))
             return
         resp = send_photo(chat_id, png, caption=caption)
         if not resp.get("ok"):
             error("recap_send_failed", user_id=user_id, response=resp)
-            send_message(chat_id, "❌ Не зміг відправити картинку. Спробуй пізніше.")
+            send_message(chat_id, _t("errors.recap_send_failed", profile))
         return
 
     # F-7: user's learned food aliases (read-only view; auto-built from accepted meals).
@@ -2583,7 +2568,7 @@ def _meal_type_by_local_hour(profile: dict | None = None) -> str:
     return "snack"
 
 
-_MEAL_TYPE_UA = {"breakfast": "сніданок", "lunch": "обід", "dinner": "вечерю", "snack": "перекус"}
+# _MEAL_TYPE_UA dropped — meal-type label lookups now use lib/i18n meal_type.* keys.
 
 
 def handle_fav_callback(conn, cb: dict) -> None:
@@ -2593,22 +2578,22 @@ def handle_fav_callback(conn, cb: dict) -> None:
     message = cb.get("message", {})
     chat_id = message.get("chat", {}).get("id", user_id)
     message_id = message.get("message_id")
+    profile = get_profile(conn, user_id) or {}
 
     parts = data.split(":")
     if len(parts) != 3:
-        answer_callback_query(cb_id, "Помилка")
+        answer_callback_query(cb_id, _t("toast.error", profile))
         return
     try:
         meal_id = int(parts[1])
     except ValueError:
-        answer_callback_query(cb_id, "Помилка")
+        answer_callback_query(cb_id, _t("toast.error", profile))
         return
     target_state = parts[2] == "1"
     ok = set_favorite(conn, meal_id, user_id, target_state)
     if not ok:
-        answer_callback_query(cb_id, "Страву не знайдено")
+        answer_callback_query(cb_id, _t("toast.meal_not_found", profile))
         return
-    profile = get_profile(conn, user_id) or {}
     answer_callback_query(cb_id, _t("favorite.added" if target_state else "favorite.removed", profile))
     if message_id:
         try:
@@ -2626,26 +2611,26 @@ def handle_relog_callback(conn, cb: dict) -> None:
     user_id = cb["from"]["id"]
     message = cb.get("message", {})
     chat_id = message.get("chat", {}).get("id", user_id)
+    profile = get_profile(conn, user_id) or {}
 
     try:
         meal_id = int(data.split(":", 1)[1])
     except (ValueError, IndexError):
-        answer_callback_query(cb_id, "Помилка")
+        answer_callback_query(cb_id, _t("toast.error", profile))
         return
 
     src = get_meal_by_id(conn, meal_id, user_id)
     if not src:
-        answer_callback_query(cb_id, "Страву не знайдено")
+        answer_callback_query(cb_id, _t("toast.meal_not_found", profile))
         return
 
-    profile = get_profile(conn, user_id) or {}
     meal_type = _meal_type_by_local_hour(profile)
     new_id = clone_meal_for_today(conn, meal_id, user_id, meal_type)
     if not new_id:
-        answer_callback_query(cb_id, "Не вдалося")
+        answer_callback_query(cb_id, _t("toast.failed", profile))
         send_message(chat_id, _t("relog.failed", profile))
         return
-    answer_callback_query(cb_id, "✅ Записав")
+    answer_callback_query(cb_id, _t("toast.saved_check", profile))
     locale = i18n_mod.locale_of(profile)
     meal_type_label = i18n_mod.t(f"meal_type.{meal_type}", locale=locale) if meal_type else meal_type
     send_message(
@@ -2667,16 +2652,17 @@ def handle_undo_callback(conn, cb: dict) -> None:
     message = cb.get("message", {})
     chat_id = message.get("chat", {}).get("id", user_id)
     message_id = message.get("message_id")
+    profile = get_profile(conn, user_id) or {}
 
     try:
         meal_id = int(data.split(":", 1)[1])
     except (ValueError, IndexError):
-        answer_callback_query(cb_id, "Помилка")
+        answer_callback_query(cb_id, _t("toast.error", profile))
         return
 
     meal = get_meal_by_id(conn, meal_id, user_id)
     if not meal:
-        answer_callback_query(cb_id, "Уже немає")
+        answer_callback_query(cb_id, _t("toast.already_gone", profile))
         return
 
     # 10-min TTL
@@ -2685,8 +2671,7 @@ def handle_undo_callback(conn, cb: dict) -> None:
         if created.tzinfo is None:
             created = created.replace(tzinfo=timezone.utc)
         if datetime.now(timezone.utc) - created > timedelta(minutes=10):
-            profile = get_profile(conn, user_id) or {}
-            answer_callback_query(cb_id, "Пізно")
+            answer_callback_query(cb_id, _t("toast.too_late", profile))
             send_message(chat_id, _t("undo.expired", profile))
             return
     except Exception:
@@ -2694,15 +2679,14 @@ def handle_undo_callback(conn, cb: dict) -> None:
 
     deleted = delete_meal(conn, meal_id, user_id)
     if not deleted:
-        answer_callback_query(cb_id, "Не знайдено")
+        answer_callback_query(cb_id, _t("toast.not_found", profile))
         return
     recalc_daily_log(conn, user_id, deleted["date"])
-    profile = get_profile(conn, user_id) or {}
     answer_callback_query(cb_id, _t("undo.done", profile))
     if message_id:
         try:
             safe_desc = _html.escape(deleted["description"][:40], quote=False)
-            edit_message_text(chat_id, message_id, f"↩️ Скасовано: {safe_desc}")
+            edit_message_text(chat_id, message_id, _t("undo.message_text", profile, desc=safe_desc))
         except Exception:
             pass
 
@@ -2733,14 +2717,14 @@ def handle_water_callback(conn, cb: dict) -> None:
         try:
             ml = int(parts[2])
         except ValueError:
-            answer_callback_query(cb_id, "Помилка")
+            answer_callback_query(cb_id, _t("toast.error", profile))
             return
         if ml not in (200, 250, 300, 500, 750):
-            answer_callback_query(cb_id, "Невірно")
+            answer_callback_query(cb_id, _t("toast.invalid_short", profile))
             return
         total = add_water(conn, user_id, ml)
         target = get_water_target(conn, user_id)
-        answer_callback_query(cb_id, f"+{ml} мл")
+        answer_callback_query(cb_id, _t("toast.water_added_ml", profile, ml=ml))
         if message_id:
             edit_message_text(chat_id, message_id, format_water(total, target, locale=i18n_mod.locale_of(profile)), reply_markup=water_keyboard(locale=i18n_mod.locale_of(profile)))
         else:
@@ -2753,7 +2737,7 @@ def handle_water_callback(conn, cb: dict) -> None:
             answer_callback_query(cb_id, _t("water.undo_empty", profile))
             return
         target = get_water_target(conn, user_id)
-        answer_callback_query(cb_id, "Відкотив")
+        answer_callback_query(cb_id, _t("toast.reverted", profile))
         if message_id:
             edit_message_text(chat_id, message_id, format_water(new_total, target, locale=i18n_mod.locale_of(profile)), reply_markup=water_keyboard(locale=i18n_mod.locale_of(profile)))
         return
@@ -2770,7 +2754,7 @@ def handle_water_callback(conn, cb: dict) -> None:
         try:
             ml = int(parts[3])
         except ValueError:
-            answer_callback_query(cb_id, "Помилка")
+            answer_callback_query(cb_id, _t("toast.error", profile))
             return
         set_water_target(conn, user_id, ml, overridden=True)
         answer_callback_query(cb_id, _t("water.goal_saved", profile, target=ml))
@@ -2787,7 +2771,7 @@ def handle_water_callback(conn, cb: dict) -> None:
             edit_message_text(chat_id, message_id, format_water(total, target, locale=i18n_mod.locale_of(profile)), reply_markup=water_keyboard(locale=i18n_mod.locale_of(profile)))
         return
 
-    answer_callback_query(cb_id, "Невідома дія")
+    answer_callback_query(cb_id, _t("toast.unknown_action", profile))
 
 
 # ---------- /ask chat mode ----------
@@ -2813,11 +2797,9 @@ def handle_ask(conn, user_id: int, chat_id: int, question: str, profile: dict) -
 
 # ---------- Weight / goal edit ----------
 
-_GOAL_LABEL_UA = {
-    "lose": "🔥 Схуднути",
-    "maintain": "⚖️ Підтримувати вагу",
-    "gain": "💪 Набрати м'язи",
-}
+def _goal_label(goal: str, locale: str = "en") -> str:
+    """Locale-aware goal label, reused from goal_keyboard.* dict keys."""
+    return i18n_mod.t(f"goal_keyboard.{goal}", locale=locale)
 
 
 def _apply_new_weight(conn, user_id: int, new_weight: float, goal: str, source: str) -> dict:
@@ -2847,35 +2829,40 @@ def _weight_change_reply(
     macros: dict,
     goal: str | None = None,
     target_weight: float | None = None,
+    locale: str = "en",
 ) -> str:
     lines = []
     if old_weight:
         delta_kg = float(new_weight) - float(old_weight)
         delta_g = round(delta_kg * 1000)
         if delta_g == 0:
-            delta_txt = "без змін"
+            delta_txt = i18n_mod.t("weight.recap_no_change", locale=locale)
         else:
-            delta_txt = f"{'+' if delta_g > 0 else ''}{delta_g}г за тиждень"
-        lines.append(f"✅ Записав: <b>{new_weight} кг</b> ({delta_txt}).")
+            delta_txt = i18n_mod.t(
+                "weight.recap_delta_g", locale=locale,
+                sign="+" if delta_g > 0 else "",
+                delta_g=delta_g,
+            )
+        lines.append(i18n_mod.t("weight.recap_logged", locale=locale, weight=new_weight, delta_txt=delta_txt))
     else:
-        lines.append(f"✅ Записав: <b>{new_weight} кг</b>.")
+        lines.append(i18n_mod.t("weight.recap_logged_simple", locale=locale, weight=new_weight))
 
     if target_weight and goal in ("lose", "gain"):
         delta = float(new_weight) - float(target_weight)  # + = need to lose, − = need to gain
         if goal == "lose":
             togo = max(0.0, delta)
             reached = togo <= 0.05
-            tail = "досягнуто 🎉" if reached else f"залишилось −{togo:.1f} кг"
+            tail = i18n_mod.t("weight.recap_target_done", locale=locale) if reached \
+                else i18n_mod.t("weight.recap_target_lose", locale=locale, togo=f"{togo:.1f}")
         else:
             togo = max(0.0, -delta)
             reached = togo <= 0.05
-            tail = "досягнуто 🎉" if reached else f"залишилось +{togo:.1f} кг"
-        lines.append(f"🏁 Ціль <b>{target_weight} кг</b> — {tail}")
+            tail = i18n_mod.t("weight.recap_target_done", locale=locale) if reached \
+                else i18n_mod.t("weight.recap_target_gain", locale=locale, togo=f"{togo:.1f}")
+        lines.append(i18n_mod.t("weight.recap_target_line", locale=locale, target=target_weight, tail=tail))
 
-    lines.append(f"🎯 Нова норма калорій: <b>{new_cal} ккал/день</b>")
-    lines.append(
-        f"🥩 Білки {macros['protein']}г · 🍚 Вуглеводи {macros['carbs']}г · 🧈 Жири {macros['fat']}г"
-    )
+    lines.append(i18n_mod.t("weight.recap_new_target", locale=locale, cal=new_cal))
+    lines.append(i18n_mod.t("weight.recap_macros", locale=locale, p=macros["protein"], c=macros["carbs"], f=macros["fat"]))
     return "\n".join(lines)
 
 
@@ -2914,6 +2901,7 @@ def handle_weight_input(
         float(new_weight), old_weight,
         result["calories"], result["macros"],
         goal=goal, target_weight=target_weight,
+        locale=i18n_mod.locale_of(profile),
     )
 
     # F-5: append a one-line projection / on-track-ness summary when meaningful.
@@ -2952,30 +2940,30 @@ def handle_water_target_input(
     user_id: int,
     text: str,
 ) -> None:
-    """Process a manual water-goal reply (ml) from the /profile → 💧 Ціль води flow."""
-    cleaned = text.strip().lower().replace("мл", "").replace("ml", "").strip()
+    """Process a manual water-goal reply (ml) from the /profile → Water goal flow."""
+    profile = get_profile(conn, user_id) or {}
+    cleaned = text.strip().lower().replace("мл", "").replace("ml", "").strip()  # noqa: i18n
     if cleaned in ("/skip", "skip", "/cancel", "cancel"):
         set_awaiting_input(conn, user_id, None)
-        send_message(chat_id, "👌 Скасовано.", reply_markup=main_menu_keyboard(locale=i18n_mod.locale_of(profile)))
+        send_message(chat_id, _t("common.cancelled", profile), reply_markup=main_menu_keyboard(locale=i18n_mod.locale_of(profile)))
         return
 
     ml = _parse_int(cleaned)
     if ml is None:
-        send_message(chat_id, "Напиши ціле число в мл (наприклад, 2500).")
+        send_message(chat_id, _t("profile.water_invalid_int", profile))
         return
     if not (1500 <= ml <= 4000):
-        send_message(chat_id, "Ціль має бути від 1500 до 4000 мл. Спробуй ще раз.")
+        send_message(chat_id, _t("profile.water_range", profile))
         return
 
     set_water_target(conn, user_id, ml, overridden=True)
     set_awaiting_input(conn, user_id, None)
-    profile = get_profile(conn, user_id) or {}
     locale = i18n_mod.locale_of(profile)
     total = get_water_today(conn, user_id)
     send_message(
         chat_id,
         _t("water.goal_saved", profile, target=ml) + "\n\n" + format_water(total, ml, locale=locale),
-        reply_markup=water_keyboard(locale=i18n_mod.locale_of(profile)),
+        reply_markup=water_keyboard(locale=locale),
     )
 
 
@@ -2986,11 +2974,11 @@ def handle_target_weight_input(
     text: str,
     profile: dict,
 ) -> None:
-    """Process a target-weight reply from the /profile → 🏁 Цільова вага flow."""
-    cleaned = text.strip().lower().replace("кг", "").replace("kg", "").strip()
+    """Process a target-weight reply from the /profile → Target weight flow."""
+    cleaned = text.strip().lower().replace("кг", "").replace("kg", "").strip()  # noqa: i18n
     if cleaned in ("/skip", "skip", "/cancel", "cancel"):
         set_awaiting_input(conn, user_id, None)
-        send_message(chat_id, "👌 Скасовано.", reply_markup=main_menu_keyboard(locale=i18n_mod.locale_of(profile)))
+        send_message(chat_id, _t("common.cancelled", profile), reply_markup=main_menu_keyboard(locale=i18n_mod.locale_of(profile)))
         return
 
     tw = _parse_float(cleaned)
@@ -3033,14 +3021,14 @@ def handle_weekly_delta_input(
     """
     cleaned = (
         text.strip().lower()
-            .replace("кг", "")
+            .replace("кг", "")  # noqa: i18n
             .replace("kg", "")
             .replace(",", ".")
             .strip()
     )
     if cleaned in ("/skip", "skip", "/cancel", "cancel"):
         set_awaiting_input(conn, user_id, None)
-        send_message(chat_id, "👌 Скасовано.", reply_markup=main_menu_keyboard(locale=i18n_mod.locale_of(profile)))
+        send_message(chat_id, _t("common.cancelled", profile), reply_markup=main_menu_keyboard(locale=i18n_mod.locale_of(profile)))
         return
 
     raw = _parse_float(cleaned)
@@ -3087,7 +3075,7 @@ def handle_profile_edit_callback(conn, cb: dict, profile: dict) -> None:
 
     # prof:weight → prompt for new weight, FSM picks it up via awaiting_input_type.
     if data == "prof:weight":
-        answer_callback_query(cb_id, "⚖️ Чекаю на вагу")
+        answer_callback_query(cb_id, _t("toast.waiting_weight", profile))
         set_awaiting_input(conn, user_id, "weight")
         send_message(chat_id, _t("weight.input_prompt", profile))
         return
@@ -3102,7 +3090,7 @@ def handle_profile_edit_callback(conn, cb: dict, profile: dict) -> None:
     if data.startswith("prof:goal:"):
         new_goal = data.split(":", 2)[2]
         if new_goal not in _VALID_GOALS:
-            answer_callback_query(cb_id, "Невірна відповідь")
+            answer_callback_query(cb_id, _t("toast.invalid", profile))
             return
         weight = profile.get("weight_kg") or 70
         new_cal = calorie_target_from_profile(float(weight), new_goal)
@@ -3115,14 +3103,15 @@ def handle_profile_edit_callback(conn, cb: dict, profile: dict) -> None:
             recommended_calorie_target=new_cal,
             target_weight_kg=None,
         )
-        answer_callback_query(cb_id, "🎯 Оновив")
+        answer_callback_query(cb_id, _t("toast.goal_updated", profile))
         macros = macro_gram_targets_from_profile(float(weight), new_goal)
+        locale = i18n_mod.locale_of(profile)
+        goal_label = _goal_label(new_goal, locale=locale)
         send_message(
             chat_id,
-            f"{_t('goal.updated', profile, goal=_GOAL_LABEL_UA.get(new_goal, new_goal))}\n"
-            f"🎯 Нова норма калорій: <b>{new_cal} ккал/день</b>\n"
-            f"🥩 Білки {macros['protein']}г · 🍚 Вуглеводи {macros['carbs']}г · 🧈 Жири {macros['fat']}г",
-            reply_markup=main_menu_keyboard(locale=i18n_mod.locale_of(profile)),
+            f"{_t('goal.updated', profile, goal=goal_label)}\n"
+            + _t("profile.recompute_msg", profile, cal=new_cal, p=macros["protein"], c=macros["carbs"], f=macros["fat"]),
+            reply_markup=main_menu_keyboard(locale=locale),
         )
         if new_goal in ("lose", "gain"):
             set_awaiting_input(conn, user_id, "target_weight")
@@ -3136,10 +3125,10 @@ def handle_profile_edit_callback(conn, cb: dict, profile: dict) -> None:
     if data == "prof:target_weight":
         goal = profile.get("goal") or "maintain"
         if goal == "maintain":
-            answer_callback_query(cb_id, "Для цієї мети не потрібна")
+            answer_callback_query(cb_id, _t("toast.not_needed_for_goal", profile))
             send_message(chat_id, _t("target_weight.cleared", profile), reply_markup=main_menu_keyboard(locale=i18n_mod.locale_of(profile)))
             return
-        answer_callback_query(cb_id, "🎯 Чекаю на число")
+        answer_callback_query(cb_id, _t("toast.waiting_target_number", profile))
         set_awaiting_input(conn, user_id, "target_weight")
         send_message(chat_id,
                      _t("target_weight.ask_lose" if goal == "lose" else "target_weight.ask_gain", profile))
@@ -3149,10 +3138,10 @@ def handle_profile_edit_callback(conn, cb: dict, profile: dict) -> None:
     if data == "prof:weekly_delta":
         goal = profile.get("goal") or "maintain"
         if goal == "maintain":
-            answer_callback_query(cb_id, "Для цієї мети не потрібна")
+            answer_callback_query(cb_id, _t("toast.not_needed_for_goal", profile))
             send_message(chat_id, _t("goals.weekly_not_for_maintain", profile), reply_markup=main_menu_keyboard(locale=i18n_mod.locale_of(profile)))
             return
-        answer_callback_query(cb_id, "📈 Чекаю на число")
+        answer_callback_query(cb_id, _t("toast.waiting_pace_number", profile))
         set_awaiting_input(conn, user_id, "weekly_delta")
         send_message(
             chat_id,
@@ -3168,9 +3157,9 @@ def handle_profile_edit_callback(conn, cb: dict, profile: dict) -> None:
 
     # prof:water:custom → prompt for manual ml entry, FSM picks it up.
     if data == "prof:water:custom":
-        answer_callback_query(cb_id, "💧 Чекаю на число")
+        answer_callback_query(cb_id, _t("toast.waiting_water_number", profile))
         set_awaiting_input(conn, user_id, "water_target")
-        send_message(chat_id, "💧 Напиши ціль по воді в мл (1500–4000):")
+        send_message(chat_id, _t("profile.water_prompt", profile))
         return
 
-    answer_callback_query(cb_id, "Невідома дія")
+    answer_callback_query(cb_id, _t("toast.unknown_action", profile))

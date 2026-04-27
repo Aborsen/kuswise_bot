@@ -354,55 +354,9 @@ def welcome_message(first_name: str | None = None, locale: str = "en") -> str:
 # Use ``api.webhook._t("onboarding.foo", profile)`` at call sites.
 # Also includes the timezone substep (F-3) under "onboarding.tz_*".
 
-# /timezone command
-TIMEZONE_PROMPT = (
-    "🌐 <b>Часовий пояс</b>\n"
-    "Поточний: <b>{current}</b>\n\n"
-    "Обери нову зону зі списку або «Інша зона» для введення вручну."
-)
-TIMEZONE_NOT_ONBOARDED = "Спершу пройди /start, щоб налаштувати профіль ☺️"
-TIMEZONE_SAVED = "✅ Готово. Часовий пояс: <b>{tz}</b>"
-TIMEZONE_CUSTOM_PROMPT = (
-    "Введи назву зони у форматі IANA (<code>Region/City</code>), "
-    "наприклад <code>Asia/Tokyo</code>. /cancel — щоб скасувати."
-)
-TIMEZONE_CANCELLED = "Скасовано. Часовий пояс не змінено."
-
-# Health profile (F-1)
-HEALTH_HEADER = (
-    "⚕️ <b>Здоровʼя</b>\n\n"
-    "🥜 Алергени: <b>{allergens}</b>\n"
-    "🩺 Стани: <b>{conditions}</b>\n\n"
-    "Це впливає на попередження в аналізі страв (allergen_flags / crohn_flags) — "
-    "кнопки нижче дозволяють відредагувати."
-)
-HEALTH_NOT_ONBOARDED = "Спершу пройди /start ☺️"
-HEALTH_ALLERGENS_PROMPT = (
-    "🥜 <b>Алергени</b>\n\n"
-    "Введи список через кому. Розпізнаю:\n"
-    "<i>peanut, tree_nut, dairy, egg, soy, gluten, fish, shellfish, "
-    "sesame, mustard, sulphites, celery, lupin, mollusks</i>\n\n"
-    "Або українською: <i>арахіс, горіхи, молочне, яйце, соя, глютен, "
-    "риба, морепродукти, кунжут, гірчиця, сульфіти, селера, люпин, мідії</i>\n\n"
-    "Напиши <code>немає</code> щоб очистити, /cancel — скасувати."
-)
-HEALTH_CONDITIONS_PROMPT = (
-    "🩺 <b>Хронічні стани</b>\n\n"
-    "Введи через кому. Розпізнаю:\n"
-    "<i>crohns, ibs, celiac, diabetes_t1, diabetes_t2, hypertension, "
-    "pcos, kidney, thyroid, gestational</i>\n\n"
-    "Українською: <i>хвороба Крона, СРК, целіакія, діабет 1, діабет 2, "
-    "гіпертонія, СПКЯ, нирки, щитоподібна, вагітність</i>\n\n"
-    "Напиши <code>немає</code> щоб очистити, /cancel — скасувати."
-)
-HEALTH_SAVED = "✅ Збережено: <b>{saved}</b>"
-HEALTH_SAVED_WITH_HINTS = (
-    "✅ Збережено: <b>{saved}</b>\n"
-    "Не розпізнав: <i>{unknown}</i> — спробуй з канонічного списку."
-)
-HEALTH_CLEARED = "🧹 Очищено."
-HEALTH_CANCELLED = "Скасовано."
-HEALTH_INVALID_ALL = "Не розпізнав жодного значення. Спробуй ще раз або /cancel."
+# TIMEZONE_* + HEALTH_* constants migrated to lib/i18n keys
+# (timezone.* / health_view.*) and removed in F-2b Chunk 8 (G1).
+# Callers in api/webhook.py use _t("timezone.foo", profile) etc.
 
 
 def _sex_ua(sex: str, locale: str = "uk") -> str:

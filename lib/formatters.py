@@ -339,19 +339,13 @@ def format_meals_list(
 
 # --- Today progress ---
 
-_WELCOME_VARIANTS = [
-    "Йо, <b>{name}</b>! Я KusWise Bot — твій особистий джин-харчознавець. 📸 фото або 📝 текст — рахую калорії за секунду. 💪",
-    "Привіт, <b>{name}</b>! Три бажання я не виконую, але калорії рахую чесно. Надсилай страву — я перевірю. 🧞",
-    "<b>{name}</b>, вітаю! Я як калькулятор із характером: бачу страву — називаю калорії. 📸 / 📝 старт.",
-    "Йо, <b>{name}</b>! Від сьогодні жоден бутерброд не пройде повз моє око. 👁️ Надсилай їжу.",
-    "<b>{name}</b>, привіт! Я — твій персональний дієтолог, тільки без строгого тону. Фото чи текст?",
-    "Йо, <b>{name}</b>! Їжу — мені, поради — від мене. Чесний обмін. 📸",
-]
+_WELCOME_VARIANT_KEYS = [f"welcome.variant_{i}" for i in range(1, 7)]
 
 
-def welcome_message(first_name: str | None = None) -> str:
+def welcome_message(first_name: str | None = None, locale: str = "en") -> str:
+    from lib.i18n import t
     name = _name_or_default(first_name)
-    return random.choice(_WELCOME_VARIANTS).format(name=name)
+    return t(random.choice(_WELCOME_VARIANT_KEYS), locale=locale, name=name)
 
 
 # --- Onboarding ---
@@ -1072,14 +1066,17 @@ def format_yesterday(
     )
 
 
-def format_history(rows: list[dict], daily_cal_target: int) -> str:
+def format_history(rows: list[dict], daily_cal_target: int, locale: str = "en") -> str:
+    from lib.i18n import t
     if not rows:
-        return (
-            "📅 Історії ще немає.\n"
-            "Надішли перше фото — і ми почнемо писати цю кулінарну сагу. 📖🍳"
-        )
+        return t("history.empty", locale=locale)
 
-    lines = ["📅 <b>Останні 7 днів</b>"]
+    kcal_unit = t("macro.calories_short", locale=locale)
+    p_short   = t("macro.protein_short",  locale=locale)
+    c_short   = t("macro.carbs_short",    locale=locale)
+    f_short   = t("macro.fat_short",      locale=locale)
+
+    lines = [t("history.header", locale=locale)]
     for r in rows:
         cal = r.get("calories", 0)
         p = r.get("protein", 0)
@@ -1096,44 +1093,60 @@ def format_history(rows: list[dict], daily_cal_target: int) -> str:
         if cal == 0:
             marker = ""
         elif cal > daily_cal_target * 1.05:
-            marker = "⚠️ перебір"
+            marker = t("history.marker_over", locale=locale)
         elif cal < daily_cal_target * 0.80:
-            marker = "⚠️ замало"
+            marker = t("history.marker_under", locale=locale)
         else:
-            marker = "✅"
+            marker = t("history.marker_ok", locale=locale)
 
-        lines.append(
-            f"{_ua_date_short(r.get('date', ''))}: {round(cal)} ккал — Б:{p_pct}% В:{c_pct}% Ж:{f_pct}% {marker}"
-        )
+        lines.append(t(
+            "history.row", locale=locale,
+            date=_ua_date_short(r.get("date", "")),
+            cal=round(cal), kcal_unit=kcal_unit,
+            p_short=p_short, p_pct=p_pct,
+            c_short=c_short, c_pct=c_pct,
+            f_short=f_short, f_pct=f_pct,
+            marker=marker,
+        ))
     lines.append("")
-    lines.append("<i>Нагадаю: консистенція важливіша за перфекціонізм. 🌱</i>")
+    lines.append(t("history.footer", locale=locale))
     return "\n".join(lines)
 
 
-def format_day_detail(date: str, meals: list[dict]) -> str:
+def format_day_detail(date: str, meals: list[dict], locale: str = "en") -> str:
+    from lib.i18n import t
+    date_str = _ua_date_short(date)
     if not meals:
-        return f"📅 На {_ua_date_short(date)} нічого не записано. Тиша в холодильнику. 🤫"
+        return t("day_detail.empty", locale=locale, date=date_str)
 
-    lines = [f"📅 <b>Страви за {_ua_date_short(date)}</b>", ""]
+    kcal_unit = t("macro.calories_short", locale=locale)
+    g_unit    = t("macro.gram_short",     locale=locale)
+    p_short   = t("macro.protein_short",  locale=locale)
+    c_short   = t("macro.carbs_short",    locale=locale)
+    f_short   = t("macro.fat_short",      locale=locale)
+
+    lines = [t("day_detail.header", locale=locale, date=date_str), ""]
     total_cal = 0
     for m in meals:
         total_cal += m.get("calories", 0)
         mt_raw = (m.get("meal_type") or "")
-        mt = _MEAL_TYPE_UA.get(mt_raw.lower(), _esc(mt_raw.capitalize()))
+        mt = t(f"meal_type.{mt_raw.lower()}", locale=locale) if mt_raw else _esc(mt_raw.capitalize())
+        if mt == f"meal_type.{mt_raw.lower()}":  # no key → fall back to capitalized raw
+            mt = _esc(mt_raw.capitalize())
         desc = _esc(m.get("description", ""))
-        lines.append(f"🕐 <b>{mt}</b> — {desc}")
-        lines.append(
-            f"   🔥 {round(m.get('calories', 0))} ккал | "
-            f"🥩 {round(m.get('protein_g', 0))}г Б | "
-            f"🍚 {round(m.get('carbs_g', 0))}г В | "
-            f"🧈 {round(m.get('fat_g', 0))}г Ж"
-        )
+        lines.append(t("day_detail.meal_line", locale=locale, meal_type=mt, desc=desc))
+        lines.append(t(
+            "day_detail.macros_line", locale=locale,
+            cal=round(m.get("calories", 0)), kcal_unit=kcal_unit,
+            p=round(m.get("protein_g", 0)), c=round(m.get("carbs_g", 0)), f=round(m.get("fat_g", 0)),
+            g=g_unit, p_short=p_short, c_short=c_short, f_short=f_short,
+        ))
         if m.get("allergen_warnings"):
             names = ", ".join(_esc(a.get("allergen", "?")) for a in m["allergen_warnings"])
-            lines.append(f"   ⚠️ Алергени: {names}")
+            lines.append(t("day_detail.allergens_line", locale=locale, names=names))
         lines.append("")
 
-    lines.append(f"<b>Разом: {round(total_cal)} ккал</b>")
+    lines.append(t("day_detail.total", locale=locale, total=round(total_cal), kcal_unit=kcal_unit))
     return "\n".join(lines)
 
 
@@ -1267,7 +1280,8 @@ MENU_BUTTON_LABELS = {
 
 # --- Water tracker ---
 
-def format_water(total_ml: int, target_ml: int) -> str:
+def format_water(total_ml: int, target_ml: int, locale: str = "en") -> str:
+    from lib.i18n import t
     total_ml = max(0, int(total_ml))
     target_ml = max(1, int(target_ml))
     blocks = 10
@@ -1277,41 +1291,26 @@ def format_water(total_ml: int, target_ml: int) -> str:
     total_l = total_ml / 1000
     target_l = target_ml / 1000
     pct = round(ratio * 100)
-    header = f"💧 <b>Сьогодні: {total_l:.2f} / {target_l:.1f} л</b>"
-    if pct > 100:
-        tail = f"{bar} ({pct}%)"
-    elif pct == 100:
-        tail = f"{bar} — ціль! 🎯"
+    header = t("water.header", locale=locale, total_l=f"{total_l:.2f}", target_l=f"{target_l:.1f}")
+    if pct == 100:
+        tail = t("water.bar_goal_hit", locale=locale, bar=bar)
     else:
-        tail = f"{bar} ({pct}%)"
+        tail = t("water.bar_progress", locale=locale, bar=bar, pct=pct)
     return f"{header}\n{tail}"
 
 
-WATER_FAV_EMPTY = "⭐ Поки порожньо. Зірочка на будь-якій страві додає її сюди."
-WATER_RECENT_EMPTY = "📭 Ще немає записаних страв. Надішли фото або текст."
-WATER_UNDO_EMPTY = "Нічого відкочувати сьогодні."
-WATER_GOAL_PROMPT = "🎯 Обери денну ціль по воді:"
-WATER_GOAL_SAVED = "🎯 Ціль оновлено: {target} мл/день."
-RELOG_DONE = "✅ Записав <b>{dish}</b> в {meal_type}. Скасувати можна протягом 10 хв."
-RELOG_FAILED = "Не вдалося повторити страву. Спробуй ще раз."
-UNDO_EXPIRED = "Минуло більше 10 хв — відкат уже недоступний."
-UNDO_DONE = "Повернув ✅"
-FAV_ADDED = "⭐ У списку улюблених"
-FAV_REMOVED = "Прибрав з улюблених"
-FAV_EMPTY_LIST = (
-    "⭐ Улюблених поки немає.\n"
-    "Запиши будь-яку страву — і тисни зірочку під нею, щоб додати."
-)
-RECENT_EMPTY_LIST = (
-    "📭 Ще немає страв для повтору.\n"
-    "Запиши першу — і вона з'явиться тут."
-)
-
-
-def format_meal_list_entry(m: dict) -> str:
+def format_meal_list_entry(m: dict, locale: str = "en") -> str:
+    from lib.i18n import t
     desc = (m.get("description") or "").strip()
     if len(desc) > 40:
         desc = desc[:38] + "…"
     cal = round(m.get("calories") or 0)
     star = "⭐ " if m.get("is_favorite") else ""
-    return f"{star}{_esc(desc)} · {cal} ккал"
+    return t(
+        "meal_list_entry.line",
+        locale=locale,
+        star=star,
+        desc=_esc(desc),
+        cal=cal,
+        kcal_unit=t("macro.calories_short", locale=locale),
+    )

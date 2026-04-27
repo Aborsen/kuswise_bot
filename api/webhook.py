@@ -153,17 +153,8 @@ from lib.formatters import (
     MENU_BUTTON_LABELS,
     format_water,
     format_meal_list_entry,
-    FAV_EMPTY_LIST,
-    RECENT_EMPTY_LIST,
-    FAV_ADDED,
-    FAV_REMOVED,
-    RELOG_DONE,
-    RELOG_FAILED,
-    UNDO_EXPIRED,
-    UNDO_DONE,
-    WATER_UNDO_EMPTY,
-    WATER_GOAL_PROMPT,
-    WATER_GOAL_SAVED,
+    # FAV_*, RECENT_EMPTY_LIST, RELOG_*, UNDO_*, WATER_* migrated to
+    # lib/i18n keys (F-2b Chunk 4b) — favorite.* / relog.* / undo.* / water.*
     # TARGET_WEIGHT_* migrated to lib/i18n keys (F-2b Phase 3 — target_weight.*)
     # WEEKLY_DELTA_* + GOALS_* migrated to lib/i18n (F-2b Phase 3 — goals.*)
     format_goals,
@@ -612,7 +603,7 @@ def handle_start(
         print("set_chat_menu_button error:", e, flush=True)
 
     if profile_is_complete(profile):
-        send_message(chat_id, welcome_message(first_name), reply_markup=main_menu_keyboard())
+        send_message(chat_id, welcome_message(first_name, locale=i18n_mod.locale_of(profile)), reply_markup=main_menu_keyboard())
         return
 
     # Fresh user or unfinished profile: kick off onboarding.
@@ -2461,7 +2452,7 @@ def handle_command(conn, message: dict, text: str, first_name: str | None, profi
 
     if cmd == "/history":
         rows = get_history(conn, user_id, days=7)
-        send_message(chat_id, format_history(rows, cal_target), reply_markup=main_menu_keyboard())
+        send_message(chat_id, format_history(rows, cal_target, locale=i18n_mod.locale_of(profile)), reply_markup=main_menu_keyboard())
         return
 
     if cmd == "/history_detail":
@@ -2470,7 +2461,7 @@ def handle_command(conn, message: dict, text: str, first_name: str | None, profi
             return
         date = args[0]
         meals = get_meals_for_day(conn, user_id, date)
-        send_message(chat_id, format_day_detail(date, meals))
+        send_message(chat_id, format_day_detail(date, meals, locale=i18n_mod.locale_of(profile)))
         return
 
     if cmd == "/suggest_meal":
@@ -2491,23 +2482,25 @@ def handle_command(conn, message: dict, text: str, first_name: str | None, profi
 
     if cmd == "/fav":
         meals = get_favorites(conn, user_id)
+        locale = i18n_mod.locale_of(profile)
         if not meals:
-            send_message(chat_id, FAV_EMPTY_LIST, reply_markup=main_menu_keyboard())
+            send_message(chat_id, _t("favorite.empty_list", profile), reply_markup=main_menu_keyboard())
             return
-        lines = ["⭐ <b>Улюблені страви</b>", ""] + [f"• {format_meal_list_entry(m)}" for m in meals[:20]]
+        lines = [_t("favorite.title", profile), ""] + [f"• {format_meal_list_entry(m, locale=locale)}" for m in meals[:20]]
         lines.append("")
-        lines.append("👇 Тисни 🔁 щоб записати страву на сьогодні:")
+        lines.append(_t("favorite.relog_hint", profile))
         send_message(chat_id, "\n".join(lines), reply_markup=recent_meals_keyboard(meals, variant="fav"))
         return
 
     if cmd == "/recent":
         meals = get_recent_meals(conn, user_id, limit=10)
+        locale = i18n_mod.locale_of(profile)
         if not meals:
-            send_message(chat_id, RECENT_EMPTY_LIST, reply_markup=main_menu_keyboard())
+            send_message(chat_id, _t("favorite.recent_empty_list", profile), reply_markup=main_menu_keyboard())
             return
-        lines = ["🕘 <b>Останні страви</b>", ""] + [f"• {format_meal_list_entry(m)}" for m in meals]
+        lines = [_t("favorite.recent_title", profile), ""] + [f"• {format_meal_list_entry(m, locale=locale)}" for m in meals]
         lines.append("")
-        lines.append("👇 Тисни 🔁 щоб повторити:")
+        lines.append(_t("favorite.recent_relog_hint", profile))
         send_message(chat_id, "\n".join(lines), reply_markup=recent_meals_keyboard(meals, variant="recent"))
         return
 
@@ -2546,7 +2539,7 @@ def handle_command(conn, message: dict, text: str, first_name: str | None, profi
     if cmd == "/water":
         total = get_water_today(conn, user_id)
         target = get_water_target(conn, user_id)
-        send_message(chat_id, format_water(total, target), reply_markup=water_keyboard())
+        send_message(chat_id, format_water(total, target, locale=i18n_mod.locale_of(profile)), reply_markup=water_keyboard())
         return
 
     send_message(chat_id, _t("errors.unknown_command", profile))
@@ -2595,7 +2588,8 @@ def handle_fav_callback(conn, cb: dict) -> None:
     if not ok:
         answer_callback_query(cb_id, "Страву не знайдено")
         return
-    answer_callback_query(cb_id, FAV_ADDED if target_state else FAV_REMOVED)
+    profile = get_profile(conn, user_id) or {}
+    answer_callback_query(cb_id, _t("favorite.added" if target_state else "favorite.removed", profile))
     if message_id:
         try:
             edit_message_reply_markup(
@@ -2629,14 +2623,17 @@ def handle_relog_callback(conn, cb: dict) -> None:
     new_id = clone_meal_for_today(conn, meal_id, user_id, meal_type)
     if not new_id:
         answer_callback_query(cb_id, "Не вдалося")
-        send_message(chat_id, RELOG_FAILED)
+        send_message(chat_id, _t("relog.failed", profile))
         return
     answer_callback_query(cb_id, "✅ Записав")
+    locale = i18n_mod.locale_of(profile)
+    meal_type_label = i18n_mod.t(f"meal_type.{meal_type}", locale=locale) if meal_type else meal_type
     send_message(
         chat_id,
-        RELOG_DONE.format(
-            dish=_html.escape((src.get("description") or "страву")[:40], quote=False),
-            meal_type=_MEAL_TYPE_UA.get(meal_type, meal_type),
+        _t(
+            "relog.done", profile,
+            dish=_html.escape((src.get("description") or "—")[:40], quote=False),
+            meal_type=meal_type_label,
         ),
         reply_markup=undo_relog_keyboard(new_id),
     )
@@ -2668,8 +2665,9 @@ def handle_undo_callback(conn, cb: dict) -> None:
         if created.tzinfo is None:
             created = created.replace(tzinfo=timezone.utc)
         if datetime.now(timezone.utc) - created > timedelta(minutes=10):
+            profile = get_profile(conn, user_id) or {}
             answer_callback_query(cb_id, "Пізно")
-            send_message(chat_id, UNDO_EXPIRED)
+            send_message(chat_id, _t("undo.expired", profile))
             return
     except Exception:
         pass
@@ -2679,7 +2677,8 @@ def handle_undo_callback(conn, cb: dict) -> None:
         answer_callback_query(cb_id, "Не знайдено")
         return
     recalc_daily_log(conn, user_id, deleted["date"])
-    answer_callback_query(cb_id, UNDO_DONE)
+    profile = get_profile(conn, user_id) or {}
+    answer_callback_query(cb_id, _t("undo.done", profile))
     if message_id:
         try:
             safe_desc = _html.escape(deleted["description"][:40], quote=False)
@@ -2691,9 +2690,10 @@ def handle_undo_callback(conn, cb: dict) -> None:
 # ---------- Water callbacks ----------
 
 def handle_water_quickadd(conn, chat_id: int, user_id: int, amount_ml: int) -> None:
+    profile = get_profile(conn, user_id) or {}
     total = add_water(conn, user_id, amount_ml)
     target = get_water_target(conn, user_id)
-    send_message(chat_id, format_water(total, target), reply_markup=water_keyboard())
+    send_message(chat_id, format_water(total, target, locale=i18n_mod.locale_of(profile)), reply_markup=water_keyboard())
 
 
 def handle_water_callback(conn, cb: dict) -> None:
@@ -2703,6 +2703,7 @@ def handle_water_callback(conn, cb: dict) -> None:
     message = cb.get("message", {})
     chat_id = message.get("chat", {}).get("id", user_id)
     message_id = message.get("message_id")
+    profile = get_profile(conn, user_id) or {}
 
     parts = data.split(":")
     # Forms: water:add:<ml>, water:undo, water:goal, water:goal:set:<ml>, water:back
@@ -2721,28 +2722,28 @@ def handle_water_callback(conn, cb: dict) -> None:
         target = get_water_target(conn, user_id)
         answer_callback_query(cb_id, f"+{ml} мл")
         if message_id:
-            edit_message_text(chat_id, message_id, format_water(total, target), reply_markup=water_keyboard())
+            edit_message_text(chat_id, message_id, format_water(total, target, locale=i18n_mod.locale_of(profile)), reply_markup=water_keyboard())
         else:
-            send_message(chat_id, format_water(total, target), reply_markup=water_keyboard())
+            send_message(chat_id, format_water(total, target, locale=i18n_mod.locale_of(profile)), reply_markup=water_keyboard())
         return
 
     if sub == "undo":
         new_total = remove_last_water_today(conn, user_id)
         if new_total is None:
-            answer_callback_query(cb_id, WATER_UNDO_EMPTY)
+            answer_callback_query(cb_id, _t("water.undo_empty", profile))
             return
         target = get_water_target(conn, user_id)
         answer_callback_query(cb_id, "Відкотив")
         if message_id:
-            edit_message_text(chat_id, message_id, format_water(new_total, target), reply_markup=water_keyboard())
+            edit_message_text(chat_id, message_id, format_water(new_total, target, locale=i18n_mod.locale_of(profile)), reply_markup=water_keyboard())
         return
 
     if sub == "goal" and len(parts) == 2:
         answer_callback_query(cb_id)
         if message_id:
-            edit_message_text(chat_id, message_id, WATER_GOAL_PROMPT, reply_markup=water_goal_keyboard())
+            edit_message_text(chat_id, message_id, _t("water.goal_prompt", profile), reply_markup=water_goal_keyboard())
         else:
-            send_message(chat_id, WATER_GOAL_PROMPT, reply_markup=water_goal_keyboard())
+            send_message(chat_id, _t("water.goal_prompt", profile), reply_markup=water_goal_keyboard())
         return
 
     if sub == "goal" and len(parts) == 4 and parts[2] == "set":
@@ -2752,10 +2753,10 @@ def handle_water_callback(conn, cb: dict) -> None:
             answer_callback_query(cb_id, "Помилка")
             return
         set_water_target(conn, user_id, ml, overridden=True)
-        answer_callback_query(cb_id, WATER_GOAL_SAVED.format(target=ml))
+        answer_callback_query(cb_id, _t("water.goal_saved", profile, target=ml))
         total = get_water_today(conn, user_id)
         if message_id:
-            edit_message_text(chat_id, message_id, format_water(total, ml), reply_markup=water_keyboard())
+            edit_message_text(chat_id, message_id, format_water(total, ml, locale=i18n_mod.locale_of(profile)), reply_markup=water_keyboard())
         return
 
     if sub == "back":
@@ -2763,7 +2764,7 @@ def handle_water_callback(conn, cb: dict) -> None:
         total = get_water_today(conn, user_id)
         target = get_water_target(conn, user_id)
         if message_id:
-            edit_message_text(chat_id, message_id, format_water(total, target), reply_markup=water_keyboard())
+            edit_message_text(chat_id, message_id, format_water(total, target, locale=i18n_mod.locale_of(profile)), reply_markup=water_keyboard())
         return
 
     answer_callback_query(cb_id, "Невідома дія")
@@ -2948,10 +2949,12 @@ def handle_water_target_input(
 
     set_water_target(conn, user_id, ml, overridden=True)
     set_awaiting_input(conn, user_id, None)
+    profile = get_profile(conn, user_id) or {}
+    locale = i18n_mod.locale_of(profile)
     total = get_water_today(conn, user_id)
     send_message(
         chat_id,
-        WATER_GOAL_SAVED.format(target=ml) + "\n\n" + format_water(total, ml),
+        _t("water.goal_saved", profile, target=ml) + "\n\n" + format_water(total, ml, locale=locale),
         reply_markup=water_keyboard(),
     )
 
@@ -3140,7 +3143,7 @@ def handle_profile_edit_callback(conn, cb: dict, profile: dict) -> None:
     # prof:water → show preset picker (reuses the existing water_goal_keyboard).
     if data == "prof:water":
         answer_callback_query(cb_id)
-        send_message(chat_id, WATER_GOAL_PROMPT, reply_markup=water_goal_keyboard())
+        send_message(chat_id, _t("water.goal_prompt", profile), reply_markup=water_goal_keyboard())
         return
 
     # prof:water:custom → prompt for manual ml entry, FSM picks it up.

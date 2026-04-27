@@ -314,5 +314,51 @@
 
   "off.description_template": "{name} ({grams}g)",
   "off.portion_template":     "{grams}g",
-  "off.scanner_source":       "Barcode scanner · {ean}"
+  "off.scanner_source":       "Barcode scanner · {ean}",
+
+  "welcome.variant_1": "Yo <b>{name}</b>! I'm KusWise Bot — your personal nutrition genie. 📸 photo or 📝 text — I count calories in seconds. 💪",
+  "welcome.variant_2": "Hey <b>{name}</b>! I don't grant three wishes, but I count calories honestly. Send a meal — I'll check it. 🧞",
+  "welcome.variant_3": "<b>{name}</b>, welcome! I'm a calculator with personality — I see a meal, I name the calories. 📸 / 📝 to start.",
+  "welcome.variant_4": "Yo <b>{name}</b>! From today, no sandwich slips past my eye. 👁️ Send your food.",
+  "welcome.variant_5": "<b>{name}</b>, hi! I'm your personal nutritionist — minus the strict tone. Photo or text?",
+  "welcome.variant_6": "Yo <b>{name}</b>! Food to me, advice from me. Fair trade. 📸",
+
+  "history.empty":         "📅 No history yet.\nSend your first photo — and we'll start writing this culinary saga. 📖🍳",
+  "history.header":        "📅 <b>Last 7 days</b>",
+  "history.row":           "{date}: {cal} {kcal_unit} — {p_short}:{p_pct}% {c_short}:{c_pct}% {f_short}:{f_pct}% {marker}",
+  "history.marker_over":   "⚠️ over",
+  "history.marker_under":  "⚠️ under",
+  "history.marker_ok":     "✅",
+  "history.footer":        "<i>Reminder: consistency beats perfectionism. 🌱</i>",
+
+  "day_detail.empty":          "📅 Nothing logged for {date}. Silence in the fridge. 🤫",
+  "day_detail.header":         "📅 <b>Meals for {date}</b>",
+  "day_detail.meal_line":      "🕐 <b>{meal_type}</b> — {desc}",
+  "day_detail.macros_line":    "   🔥 {cal} {kcal_unit} | 🥩 {p}{g} {p_short} | 🍚 {c}{g} {c_short} | 🧈 {f}{g} {f_short}",
+  "day_detail.allergens_line": "   ⚠️ Allergens: {names}",
+  "day_detail.total":          "<b>Total: {total} {kcal_unit}</b>",
+
+  "water.header":         "💧 <b>Today: {total_l} / {target_l} L</b>",
+  "water.bar_progress":   "{bar} ({pct}%)",
+  "water.bar_goal_hit":   "{bar} — goal! 🎯",
+  "water.goal_prompt":    "🎯 Pick your daily water goal:",
+  "water.goal_saved":     "🎯 Goal updated: {target} ml/day.",
+  "water.undo_empty":     "Nothing to undo today.",
+
+  "meal_list_entry.line": "{star}{desc} · {cal} {kcal_unit}",
+
+  "relog.done":   "✅ Logged <b>{dish}</b> as {meal_type}. Undo within 10 min.",
+  "relog.failed": "Couldn't repeat the meal. Try again.",
+
+  "undo.expired": "More than 10 min — undo no longer available.",
+  "undo.done":    "Reverted ✅",
+
+  "favorite.added":              "⭐ Added to favorites",
+  "favorite.removed":            "Removed from favorites",
+  "favorite.empty_list":         "⭐ No favorites yet.\nLog any meal — and tap the star under it to add.",
+  "favorite.recent_empty_list":  "📭 No meals to repeat yet.\nLog the first one — it'll show up here.",
+  "favorite.title":              "⭐ <b>Favorite meals</b>",
+  "favorite.relog_hint":         "👇 Tap 🔁 to log this meal today:",
+  "favorite.recent_title":       "🕘 <b>Recent meals</b>",
+  "favorite.recent_relog_hint":  "👇 Tap 🔁 to repeat:"
 }

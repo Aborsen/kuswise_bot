@@ -314,5 +314,51 @@
 
   "off.description_template": "{name} ({grams}г)",
   "off.portion_template":     "{grams}г",
-  "off.scanner_source":       "Сканер штрих-коду · {ean}"
+  "off.scanner_source":       "Сканер штрих-коду · {ean}",
+
+  "welcome.variant_1": "Йо, <b>{name}</b>! Я KusWise Bot — твій особистий джин-харчознавець. 📸 фото або 📝 текст — рахую калорії за секунду. 💪",
+  "welcome.variant_2": "Привіт, <b>{name}</b>! Три бажання я не виконую, але калорії рахую чесно. Надсилай страву — я перевірю. 🧞",
+  "welcome.variant_3": "<b>{name}</b>, вітаю! Я як калькулятор із характером: бачу страву — називаю калорії. 📸 / 📝 старт.",
+  "welcome.variant_4": "Йо, <b>{name}</b>! Від сьогодні жоден бутерброд не пройде повз моє око. 👁️ Надсилай їжу.",
+  "welcome.variant_5": "<b>{name}</b>, привіт! Я — твій персональний дієтолог, тільки без строгого тону. Фото чи текст?",
+  "welcome.variant_6": "Йо, <b>{name}</b>! Їжу — мені, поради — від мене. Чесний обмін. 📸",
+
+  "history.empty":         "📅 Історії ще немає.\nНадішли перше фото — і ми почнемо писати цю кулінарну сагу. 📖🍳",
+  "history.header":        "📅 <b>Останні 7 днів</b>",
+  "history.row":           "{date}: {cal} {kcal_unit} — {p_short}:{p_pct}% {c_short}:{c_pct}% {f_short}:{f_pct}% {marker}",
+  "history.marker_over":   "⚠️ перебір",
+  "history.marker_under":  "⚠️ замало",
+  "history.marker_ok":     "✅",
+  "history.footer":        "<i>Нагадаю: консистенція важливіша за перфекціонізм. 🌱</i>",
+
+  "day_detail.empty":          "📅 На {date} нічого не записано. Тиша в холодильнику. 🤫",
+  "day_detail.header":         "📅 <b>Страви за {date}</b>",
+  "day_detail.meal_line":      "🕐 <b>{meal_type}</b> — {desc}",
+  "day_detail.macros_line":    "   🔥 {cal} {kcal_unit} | 🥩 {p}{g} {p_short} | 🍚 {c}{g} {c_short} | 🧈 {f}{g} {f_short}",
+  "day_detail.allergens_line": "   ⚠️ Алергени: {names}",
+  "day_detail.total":          "<b>Разом: {total} {kcal_unit}</b>",
+
+  "water.header":         "💧 <b>Сьогодні: {total_l} / {target_l} л</b>",
+  "water.bar_progress":   "{bar} ({pct}%)",
+  "water.bar_goal_hit":   "{bar} — ціль! 🎯",
+  "water.goal_prompt":    "🎯 Обери денну ціль по воді:",
+  "water.goal_saved":     "🎯 Ціль оновлено: {target} мл/день.",
+  "water.undo_empty":     "Нічого відкочувати сьогодні.",
+
+  "meal_list_entry.line": "{star}{desc} · {cal} {kcal_unit}",
+
+  "relog.done":   "✅ Записав <b>{dish}</b> в {meal_type}. Скасувати можна протягом 10 хв.",
+  "relog.failed": "Не вдалося повторити страву. Спробуй ще раз.",
+
+  "undo.expired": "Минуло більше 10 хв — відкат уже недоступний.",
+  "undo.done":    "Повернув ✅",
+
+  "favorite.added":              "⭐ У списку улюблених",
+  "favorite.removed":            "Прибрав з улюблених",
+  "favorite.empty_list":         "⭐ Улюблених поки немає.\nЗапиши будь-яку страву — і тисни зірочку під нею, щоб додати.",
+  "favorite.recent_empty_list":  "📭 Ще немає страв для повтору.\nЗапиши першу — і вона з'явиться тут.",
+  "favorite.title":              "⭐ <b>Улюблені страви</b>",
+  "favorite.relog_hint":         "👇 Тисни 🔁 щоб записати страву на сьогодні:",
+  "favorite.recent_title":       "🕘 <b>Останні страви</b>",
+  "favorite.recent_relog_hint":  "👇 Тисни 🔁 щоб повторити:"
 }

@@ -712,6 +712,10 @@
   "health.allergens.celery":     "celery",
   "health.allergens.lupin":      "lupin",
   "health.allergens.mollusks":   "mollusks / oysters",
+  "health.allergens.tomato":     "tomato",
+  "health.allergens.emmental":   "emmental cheese",
+  "health.allergens.rye":        "rye",
+  "health.allergens.rapeseed":   "rapeseed / canola",
 
   "health.conditions.crohns":         "Crohn's disease",
   "health.conditions.ibs":            "IBS (irritable bowel syndrome)",

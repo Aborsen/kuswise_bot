@@ -17,6 +17,11 @@ from typing import Iterable, Optional
 ALLERGEN_IDS: tuple[str, ...] = (
     "peanut", "tree_nut", "dairy", "egg", "soy", "gluten", "fish",
     "shellfish", "sesame", "mustard", "sulphites", "celery", "lupin", "mollusks",
+    # Added 2026-04-28 for Food-bot migration (user 699256397). These are
+    # finer-grained than the EFSA-14 — kept distinct (not collapsed into
+    # `gluten`/`dairy`/etc.) so the AI flags the specific item the user
+    # actually reacts to, not the broader category.
+    "tomato", "emmental", "rye", "rapeseed",
 )
 
 # Canonical condition IDs. Same shape as ALLERGEN_IDS.
@@ -65,6 +70,11 @@ _ALIASES: dict[str, str] = {
     "селера": "celery",  # noqa: i18n
     "люпин": "lupin",  # noqa: i18n
     "мідії": "mollusks", "устриці": "mollusks",  # noqa: i18n
+    # Added 2026-04-28 for Food-bot migration (specific items not in EFSA-14).
+    "помідор": "tomato", "помідори": "tomato", "томат": "tomato", "томати": "tomato", "tomatoes": "tomato",  # noqa: i18n
+    "ементаль": "emmental", "емменталь": "emmental", "emmental cheese": "emmental",  # noqa: i18n
+    "жито": "rye", "житній": "rye", "rye flour": "rye",  # noqa: i18n
+    "ріпак": "rapeseed", "ріпакова олія": "rapeseed", "канола": "rapeseed", "canola": "rapeseed", "canola oil": "rapeseed",  # noqa: i18n
     # Conditions
     "крон": "crohns", "crohn": "crohns", "crohns disease": "crohns", "хвороба крона": "crohns",  # noqa: i18n
     "срк": "ibs", "синдром подразненого кишечника": "ibs",  # noqa: i18n
@@ -212,4 +222,8 @@ def _canon_allergen_to_english(canon_id: str) -> str:
         "celery":     "celery",
         "lupin":      "lupin",
         "mollusks":   "mollusks",
+        "tomato":     "tomato",
+        "emmental":   "emmental cheese",
+        "rye":        "rye",
+        "rapeseed":   "rapeseed / canola oil",
     }.get(canon_id, canon_id.replace("_", " "))

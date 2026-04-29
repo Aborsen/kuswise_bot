@@ -712,6 +712,10 @@
   "health.allergens.celery":     "селера",
   "health.allergens.lupin":      "люпин",
   "health.allergens.mollusks":   "мідії / устриці",
+  "health.allergens.tomato":     "помідор",
+  "health.allergens.emmental":   "сир ементаль",
+  "health.allergens.rye":        "жито",
+  "health.allergens.rapeseed":   "ріпак / канола",
 
   "health.conditions.crohns":         "хвороба Крона",
   "health.conditions.ibs":            "СРК (IBS)",

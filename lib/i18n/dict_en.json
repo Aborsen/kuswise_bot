@@ -510,7 +510,7 @@
   "dash.profile_h2":             "Profile",
   "dash.daily_targets":          "Daily targets",
   "dash.alltime_avg":            "All-time average",
-  "dash.adherence":              "Accuracy (±15 % of goal)",
+  "dash.adherence":              "Avg % of goal",
   "dash.streak_h2":              "Streak",
   "dash.streak_pill_zero":       "🔥 0 days in a row",
   "dash.nav_overview":           "Overview",

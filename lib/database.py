@@ -1376,8 +1376,18 @@ def get_history_range(conn, user_id: int, start_date: str, end_date: str) -> lis
     ]
 
 
-def get_adherence_stats(conn, user_id: int, tolerance: float = 0.15) -> dict:
-    """All-time averages + hit% per macro + current streak, over days with meal_count > 0."""
+def get_adherence_stats(conn, user_id: int) -> dict:
+    """All-time per-macro averages, ``avg_pct`` of goal, and current streak.
+
+    ``avg_pct`` is the average daily total expressed as a percentage of the
+    user's target — sub-100 means undershooting on average, over-100 means
+    overshooting. We deliberately do NOT cap at 100: hiding overshoot would
+    erase the most actionable signal (e.g. a `lose` user pulling 130% on
+    fat). The dashboard caps the visual bar fill but keeps the real value
+    in the numeric label.
+
+    Counted across days with ``meal_count > 0`` (a logged day).
+    """
     from datetime import date as _date, timedelta as _td
     from lib.config import (
         macro_gram_targets,
@@ -1416,8 +1426,8 @@ def get_adherence_stats(conn, user_id: int, tolerance: float = 0.15) -> dict:
             "logged_days": 0,
             "avg_calories": None, "avg_protein_g": None,
             "avg_carbs_g": None, "avg_fat_g": None,
-            "calories_hit_pct": None, "protein_hit_pct": None,
-            "carbs_hit_pct": None, "fat_hit_pct": None,
+            "calories_avg_pct": None, "protein_avg_pct": None,
+            "carbs_avg_pct": None, "fat_avg_pct": None,
             "current_streak": 0,
             "cal_target": cal_target,
             "p_target": p_target, "c_target": c_target, "f_target": f_target,
@@ -1426,12 +1436,11 @@ def get_adherence_stats(conn, user_id: int, tolerance: float = 0.15) -> dict:
     def _avg(col_idx):
         return round(sum((r[col_idx] or 0) for r in logged) / n, 1)
 
-    def _hit_pct(col_idx, target):
+    def _avg_pct(col_idx, target):
         if not target:
-            return 0
-        lo, hi = target * (1 - tolerance), target * (1 + tolerance)
-        hits = sum(1 for r in logged if lo <= (r[col_idx] or 0) <= hi)
-        return round(hits / n * 100)
+            return None
+        avg = sum((r[col_idx] or 0) for r in logged) / n
+        return round(avg / target * 100)
 
     logged_dates = {str(r[0]) for r in logged}
     today_str = _today_str()
@@ -1449,10 +1458,10 @@ def get_adherence_stats(conn, user_id: int, tolerance: float = 0.15) -> dict:
         "avg_protein_g": _avg(2),
         "avg_carbs_g": _avg(3),
         "avg_fat_g": _avg(4),
-        "calories_hit_pct": _hit_pct(1, cal_target),
-        "protein_hit_pct": _hit_pct(2, p_target),
-        "carbs_hit_pct": _hit_pct(3, c_target),
-        "fat_hit_pct": _hit_pct(4, f_target),
+        "calories_avg_pct": _avg_pct(1, cal_target),
+        "protein_avg_pct":  _avg_pct(2, p_target),
+        "carbs_avg_pct":    _avg_pct(3, c_target),
+        "fat_avg_pct":      _avg_pct(4, f_target),
         "current_streak": streak,
         "cal_target": cal_target,
         "p_target": p_target,

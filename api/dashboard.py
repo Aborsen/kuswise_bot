@@ -1773,10 +1773,10 @@ _DASHBOARD_HTML = r"""<!DOCTYPE html>
       adh.innerHTML = '<p class="meal-empty">' + L.adherence_empty + '</p>';
     } else {
       adh.innerHTML =
-        adherenceRow('🔥 ' + L.targets_calories, a.calories_hit_pct) +
-        adherenceRow(L.macro_protein, a.protein_hit_pct) +
-        adherenceRow(L.macro_carbs,   a.carbs_hit_pct) +
-        adherenceRow(L.macro_fat,     a.fat_hit_pct);
+        adherenceRow('🔥 ' + L.targets_calories, a.calories_avg_pct) +
+        adherenceRow(L.macro_protein, a.protein_avg_pct) +
+        adherenceRow(L.macro_carbs,   a.carbs_avg_pct) +
+        adherenceRow(L.macro_fat,     a.fat_avg_pct);
     }
 
     var streakCard = document.getElementById('streakCard');
@@ -1794,11 +1794,21 @@ _DASHBOARD_HTML = r"""<!DOCTYPE html>
   }
 
   function adherenceRow(label, pct) {
+    // pct is the user's average daily total as % of goal.
+    // Color band: closer to 100 = greener. The goal IS 100%, so deviation
+    // in either direction is worse — symmetric around 100, not a 0→100 ramp.
+    //   green (ok):   90-110 (within ±10% of goal)
+    //   amber (warn): 75-90 or 110-125
+    //   red (over):   under 75 or over 125
+    // The bar fill is clamped to 100 so over-target values don't overflow
+    // the bar visually; the numeric label still shows the real percentage.
     var val = pct == null ? 0 : pct;
-    var cls = val >= 60 ? 'ok' : (val >= 30 ? 'warn' : 'over');
+    var dist = Math.abs(val - 100);
+    var cls = dist <= 10 ? 'ok' : (dist <= 25 ? 'warn' : 'over');
+    var barWidth = Math.min(Math.max(val, 0), 100);
     return '<div class="macro"><span class="macro-name">' + esc(label) + '</span>' +
            '<div class="macro-bar"><div class="macro-fill ' + cls +
-             '" style="width:' + val + '%"></div></div>' +
+             '" style="width:' + barWidth + '%"></div></div>' +
            '<b class="macro-val">' + val + ' %</b></div>';
   }
 

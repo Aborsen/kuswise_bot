@@ -510,7 +510,7 @@
   "dash.profile_h2":             "Профіль",
   "dash.daily_targets":          "Цілі на день",
   "dash.alltime_avg":            "Середнє за весь час",
-  "dash.adherence":              "Влучність (±15 % від цілі)",
+  "dash.adherence":              "Середній % від цілі",
   "dash.streak_h2":              "Серія",
   "dash.streak_pill_zero":       "🔥 0 днів поспіль",
   "dash.nav_overview":           "Огляд",

@@ -780,12 +780,25 @@ def delete_meal(conn, meal_id: int, user_id: int) -> Optional[dict]:
 
 
 def recalc_daily_log(conn, user_id: int, date: str) -> None:
-    """Recompute daily_logs totals from SUM of remaining meals. Delete row if no meals left."""
+    """Recompute ``daily_logs`` for ``(user_id, date)`` from the meals table.
+
+    Idempotent UPSERT — when no meals remain on this date, the row is
+    deleted; otherwise it's INSERT-or-UPDATEd to the SUM of remaining
+    meals. The INSERT side matters for the favorites / recent re-log
+    path: ``clone_meal_for_today`` calls this after inserting a cloned
+    meal, and the user may have no fresh-log row yet for that date
+    (a fresh log goes through ``upsert_daily_log_from_meal`` which has
+    its own INSERT). Without the INSERT side here, a string of
+    favorites-relogs without any fresh log silently leaves
+    ``daily_logs`` empty — the dashboard then shows 0 / a stale total
+    even though the meals exist.
+    """
     with conn.cursor() as cur:
         cur.execute(
             """SELECT COALESCE(SUM(calories),0), COALESCE(SUM(protein_g),0),
-                      COALESCE(SUM(carbs_g),0), COALESCE(SUM(fat_g),0),
-                      COALESCE(SUM(fiber_g),0), COALESCE(SUM(sugar_g),0), COUNT(*)
+                      COALESCE(SUM(carbs_g),0),  COALESCE(SUM(fat_g),0),
+                      COALESCE(SUM(fiber_g),0),  COALESCE(SUM(sugar_g),0),
+                      COUNT(*)
                FROM meals WHERE user_id = %s AND date = %s""",
             (user_id, date),
         )
@@ -797,11 +810,24 @@ def recalc_daily_log(conn, user_id: int, date: str) -> None:
             )
         else:
             cur.execute(
-                """UPDATE daily_logs
-                   SET total_calories = %s, total_protein_g = %s, total_carbs_g = %s,
-                       total_fat_g = %s, total_fiber_g = %s, total_sugar_g = %s
-                   WHERE user_id = %s AND date = %s""",
-                (row[0], row[1], row[2], row[3], row[4], row[5], user_id, date),
+                """INSERT INTO daily_logs (
+                       user_id, date,
+                       total_calories, total_protein_g, total_carbs_g,
+                       total_fat_g, total_fiber_g, total_sugar_g,
+                       summary_sent, created_at
+                   ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 0, %s)
+                   ON CONFLICT (user_id, date) DO UPDATE SET
+                       total_calories  = EXCLUDED.total_calories,
+                       total_protein_g = EXCLUDED.total_protein_g,
+                       total_carbs_g   = EXCLUDED.total_carbs_g,
+                       total_fat_g     = EXCLUDED.total_fat_g,
+                       total_fiber_g   = EXCLUDED.total_fiber_g,
+                       total_sugar_g   = EXCLUDED.total_sugar_g""",
+                (
+                    user_id, date,
+                    row[0], row[1], row[2], row[3], row[4], row[5],
+                    _now_iso(),
+                ),
             )
     conn.commit()
 

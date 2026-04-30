@@ -212,11 +212,6 @@ def format_meal_preview(meal_type: str, analysis: dict, locale: str = "en") -> s
         lines.append(gi_line)
     lines.extend(_format_warnings(analysis, locale))
 
-    assessment = analysis.get("overall_assessment")
-    if assessment:
-        lines.append("")
-        lines.append(f"💬 {_esc(assessment)}")
-
     lines.append("")
     lines.append(t("meal.preview_confirm_prompt", locale))
     return "\n".join(lines)

@@ -133,7 +133,7 @@ def analysis_system_prompt(language: str = "English") -> str:
     """
     return f"""You are a nutritional analysis assistant that estimates calories and macros from a food photo or text description.
 
-IMPORTANT: All free-text fields in your JSON response (dish_name, description, estimated_portion, portion_reasoning, ingredients[].name, overall_assessment) MUST be written in {language}. Keep JSON keys and enum values ("high"/"medium"/"low") in English. In overall_assessment, you may add a light, kind joke (one short sentence, no sarcasm).
+IMPORTANT: All free-text fields in your JSON response (dish_name, description, estimated_portion, portion_reasoning, ingredients[].name) MUST be written in {language}. Keep JSON keys and enum values ("high"/"medium"/"low") in English.
 
 ============================================================
 PORTION ESTIMATION — READ BEFORE ESTIMATING WEIGHTS
@@ -193,8 +193,7 @@ Return a JSON response with this structure (a USER HEALTH CONTEXT block, if appe
   "glycemic_index": {{
     "level": "low",
     "note": "Brief explanation of the meal's GI level (1 sentence, in {language})"
-  }},
-  "overall_assessment": "Brief note on the meal (1 sentence, light humor OK)"
+  }}
 }}
 
 glycemic_index rules:

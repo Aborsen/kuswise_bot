@@ -126,6 +126,12 @@ def init_db(conn=None, force: bool = False) -> None:
         cur.execute(
             "ALTER TABLE pending_analyses ADD COLUMN IF NOT EXISTS candidates_json TEXT"
         )
+        # F-meal-edit: when the /meals → ✏️ Edit path stages a pending
+        # analysis, this column carries the meal id we need to delete on
+        # confirm. NULL for fresh logs (the common case).
+        cur.execute(
+            "ALTER TABLE pending_analyses ADD COLUMN IF NOT EXISTS replaces_meal_id BIGINT"
+        )
         cur.execute("""
             CREATE TABLE IF NOT EXISTS chat_sessions (
                 id BIGSERIAL PRIMARY KEY,
@@ -510,11 +516,16 @@ def save_pending_analysis(
     text_description: Optional[str],
     raw_response: str,
     candidates: Optional[list] = None,
+    replaces_meal_id: Optional[int] = None,
 ) -> None:
     """Store an AI analysis for user review. One row per user (replaces previous).
 
     ``candidates`` (F-6) is the optional top_guesses list when the photo is
     ambiguous. NULL = use the standard moderation keyboard.
+
+    ``replaces_meal_id`` is set by the /meals → ✏️ Edit flow so the confirm
+    handler knows which old meal row to delete after the new one is
+    inserted. NULL for fresh logs.
 
     DELETE + INSERT run in a single autocommit=False transaction so concurrent
     callers can never see "deleted but not yet inserted" state.
@@ -528,8 +539,8 @@ def save_pending_analysis(
             cur.execute(
                 """INSERT INTO pending_analyses
                    (user_id, meal_type, analysis_json, photo_file_id, text_description,
-                    raw_response, awaiting_manual, created_at, candidates_json)
-                   VALUES (%s, %s, %s, %s, %s, %s, 0, %s, %s)""",
+                    raw_response, awaiting_manual, created_at, candidates_json, replaces_meal_id)
+                   VALUES (%s, %s, %s, %s, %s, %s, 0, %s, %s, %s)""",
                 (
                     user_id,
                     meal_type,
@@ -539,6 +550,7 @@ def save_pending_analysis(
                     raw_response,
                     _now_iso(),
                     candidates_json,
+                    replaces_meal_id,
                 ),
             )
         conn.commit()
@@ -552,7 +564,8 @@ def get_pending_analysis(conn, user_id: int) -> Optional[dict]:
     with conn.cursor() as cur:
         cur.execute(
             """SELECT id, meal_type, analysis_json, photo_file_id, text_description,
-                      raw_response, awaiting_manual, created_at, candidates_json
+                      raw_response, awaiting_manual, created_at, candidates_json,
+                      replaces_meal_id
                FROM pending_analyses WHERE user_id = %s ORDER BY id DESC LIMIT 1""",
             (user_id,),
         )
@@ -575,6 +588,7 @@ def get_pending_analysis(conn, user_id: int) -> Optional[dict]:
         "awaiting_manual": bool(row[6]),
         "created_at": row[7],
         "candidates": candidates,
+        "replaces_meal_id": row[9],
     }
 
 

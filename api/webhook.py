@@ -616,6 +616,41 @@ def _parse_float(text: str) -> float | None:
         return None
 
 
+def _meal_to_analysis(meal: dict) -> dict:
+    """Synthesize an ``analysis`` dict the AI can patch from a saved meal row.
+
+    Used by the ``/meals`` → ✏️ Edit path so the modification prompt has full
+    context of the existing meal when the user types a delta. Prefer the
+    original raw AI JSON (richer schema) and fall back to a column-derived
+    shape for migrated rows where ``ai_raw_response`` is absent or has a
+    different schema (Iryna's Food-imported meals fall through to the
+    fallback because Food's prompt produced a slimmer JSON).
+    """
+    raw = meal.get("ai_raw_response") or ""
+    if raw:
+        try:
+            parsed = json.loads(raw)
+            if isinstance(parsed, dict) and parsed.get("ingredients"):
+                return parsed
+        except (json.JSONDecodeError, TypeError):
+            pass
+    return {
+        "dish_name":   meal.get("description") or "",
+        "description": meal.get("description") or "",
+        "ingredients": meal.get("ingredients") or [],
+        "nutrition": {
+            "calories":  meal.get("calories")  or 0,
+            "protein_g": meal.get("protein_g") or 0,
+            "carbs_g":   meal.get("carbs_g")   or 0,
+            "fat_g":     meal.get("fat_g")     or 0,
+            "fiber_g":   meal.get("fiber_g")   or 0,
+            "sugar_g":   meal.get("sugar_g")   or 0,
+        },
+        "allergen_flags": meal.get("allergen_warnings") or [],
+        "crohn_flags":    meal.get("crohn_warnings")    or [],
+    }
+
+
 def _finalize_onboarding(conn, chat_id: int, user_id: int, first_name: str | None) -> None:
     """Tail of the onboarding flow: estimate water target, send done message.
 
@@ -1409,6 +1444,18 @@ def handle_moderation_callback(conn, cb: dict, profile: dict) -> None:
         analysis = pending["analysis"]
         meal_id = save_meal(conn, user_id, pending["meal_type"], analysis, pending["photo_file_id"] or "", pending["raw_response"])
         upsert_daily_log_from_meal(conn, user_id, analysis)
+        # /meals → ✏️ Edit replacement: now that the new meal is safely
+        # saved, drop the row we're replacing and recompute that date's
+        # totals. Single recalc on the old date covers both cases —
+        # if old date == today, the recalc subtracts the now-deleted
+        # old meal from today's totals (the upsert above already added
+        # the new one); if old date != today, today's totals are already
+        # correct and only the old date needs subtraction.
+        old_meal_id = pending.get("replaces_meal_id")
+        if old_meal_id:
+            deleted_old = delete_meal(conn, old_meal_id, user_id)
+            if deleted_old:
+                recalc_daily_log(conn, user_id, deleted_old["date"])
         # F-4: bump engagement streak using the user's local "today".
         try:
             update_streak_for_meal(conn, user_id, today_str_user(profile))
@@ -2320,18 +2367,32 @@ def handle_meal_manage_callback(conn, cb: dict) -> None:
     elif data.startswith("meal_edit:"):
         meal_id = int(data.split(":", 1)[1])
         answer_callback_query(cb_id, _t("toast.getting_ready_swap", profile))
-        deleted = delete_meal(conn, meal_id, user_id)
-        if not deleted:
+        meal = get_meal_by_id(conn, meal_id, user_id)
+        if not meal:
             send_message(chat_id, _t("errors.meal_not_found", profile))
             return
-        recalc_daily_log(conn, user_id, deleted["date"])
-        save_pending_analysis(conn, user_id, deleted["meal_type"], {}, None, None, "")
-        set_awaiting_manual(conn, user_id, meal_type=deleted["meal_type"])
+        # Stage the existing meal as a pending analysis WITHOUT deleting it.
+        # The user types a delta ("eggs 150g"); handle_manual_text_input
+        # passes this analysis as `previous_analysis` so the AI patches it
+        # instead of producing a fresh single-ingredient meal. The original
+        # row only gets removed once the user confirms the new analysis —
+        # cancellation mid-edit leaves the meal intact.
+        save_pending_analysis(
+            conn,
+            user_id,
+            meal_type=meal["meal_type"],
+            analysis=_meal_to_analysis(meal),
+            photo_file_id=meal.get("photo_file_id"),
+            text_description=None,
+            raw_response=meal.get("ai_raw_response") or "",
+            replaces_meal_id=meal_id,
+        )
+        set_awaiting_manual(conn, user_id, meal_type=meal["meal_type"])
         send_message(
             chat_id,
             _t(
                 "meals_mgmt.edit_prompt", profile,
-                dish=_html.escape(deleted["description"][:40], quote=False),
+                dish=_html.escape((meal.get("description") or "")[:40], quote=False),
             ),
             reply_markup=cancel_only_keyboard(locale=i18n_mod.locale_of(profile)),
         )

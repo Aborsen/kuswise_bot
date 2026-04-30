@@ -1421,9 +1421,12 @@ def handle_moderation_callback(conn, cb: dict, profile: dict) -> None:
             error("upsert_alias_failed", exc=_alias_exc, user_id=user_id)
         today_log = get_today_log(conn, user_id)
         cal_target = profile.get("daily_calorie_target") or 2000
+        # Pass health_profile so the minimal log message renders allergen /
+        # Crohn warnings only for users who actually have those configured.
+        health_profile = get_health_profile(conn, user_id)
         send_message(
             chat_id,
-            format_meal_logged(pending["meal_type"], analysis, today_log, cal_target, first_name, locale=i18n_mod.locale_of(profile)),
+            format_meal_logged(pending["meal_type"], analysis, today_log, cal_target, first_name, locale=i18n_mod.locale_of(profile), health_profile=health_profile),
             reply_markup=meal_logged_actions_keyboard(meal_id, is_fav=False, locale=i18n_mod.locale_of(profile)),
         )
 
@@ -1670,9 +1673,12 @@ def _save_barcode_meal(
 
     today_log = get_today_log(conn, user_id)
     cal_target = profile.get("daily_calorie_target") or 2000
+    # Pass health_profile so the minimal log message renders allergen /
+    # Crohn warnings only for users who actually have those configured.
+    health_profile = get_health_profile(conn, user_id)
     send_message(
         chat_id,
-        format_meal_logged(pending["meal_type"], analysis, today_log, cal_target, first_name, locale=i18n_mod.locale_of(profile)),
+        format_meal_logged(pending["meal_type"], analysis, today_log, cal_target, first_name, locale=i18n_mod.locale_of(profile), health_profile=health_profile),
         reply_markup=meal_logged_actions_keyboard(meal_id, is_fav=False, locale=i18n_mod.locale_of(profile)),
     )
 

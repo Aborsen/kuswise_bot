@@ -231,44 +231,54 @@ def format_meal_logged(
     daily_cal_target: int,
     first_name: str | None = None,
     locale: str = "en",
+    health_profile: dict | None = None,
 ) -> str:
+    """Minimal post-save confirmation: dish, meal type, day total.
+
+    Allergen + Crohn warnings are gated on the user's stored
+    ``user_health_profile``: only rendered if the user has the matching
+    context configured (allergens list non-empty for allergen warnings;
+    ``"crohns"`` in conditions for crohn warnings). Users with no health
+    profile see only the three core lines — the AI may still emit flags
+    in its JSON but they're suppressed at the display layer.
+
+    Ingredients / nutrition / glycemic / overall_assessment / date /
+    encouragement were dropped 2026-04-30 to reduce message volume.
+    The fields are still produced by the AI and persisted in the
+    ``meals`` table for ``/yesterday``, recap, and audit lookups.
+    """
     from lib.i18n import t
-    from lib.datehelpers import format_date_long
-    nutrition = analysis.get("nutrition", {}) or {}
     dish = _esc(analysis.get("dish_name") or t("meal.default_name", locale))
-    date_display = format_date_long(datetime.now(LOCAL_TZ), locale)
     meal_label = t(f"meal_type.{meal_type.lower()}", locale) if meal_type.lower() in (
         "breakfast", "lunch", "dinner", "snack"
     ) else _esc(meal_type.capitalize())
 
     lines = [
         t("meal.logged_header", locale, dish=dish),
-        t("meal.logged_date_line", locale, meal=meal_label, date=date_display),
+        t("meal.preview_meal_line", locale, meal=meal_label),
     ]
 
-    lines.extend(_format_ingredients(analysis, locale))
-    lines.append("")
-    lines.append(_format_nutrition_line(nutrition, locale))
-    gi_line = _format_glycemic_line(analysis, locale)
-    if gi_line:
-        lines.append(gi_line)
-    lines.extend(_format_warnings(analysis, locale))
+    # Safety warnings — only when the user has actually configured the
+    # corresponding health context. Without this gate the AI's generic
+    # `crohn_flags` field (the schema labels it "noteworthy health
+    # concerns") leaks Crohn-flavoured warnings to users who don't have
+    # the condition.
+    if health_profile:
+        user_allergens = health_profile.get("allergens") or []
+        user_conditions = health_profile.get("conditions") or []
+        scoped = dict(analysis)
+        if not user_allergens:
+            scoped["allergen_flags"] = []
+        if "crohns" not in user_conditions:
+            scoped["crohn_flags"] = []
+        lines.extend(_format_warnings(scoped, locale))
 
-    assessment = analysis.get("overall_assessment")
-    if assessment:
-        lines.append("")
-        lines.append(f"💬 {_esc(assessment)}")
-
-    lines.append("")
     lines.append(t(
         "meal.day_total", locale,
         cal=round(today_log.get("calories", 0)),
         target=daily_cal_target,
         kcal_unit=t("macro.calories_short", locale),
     ))
-
-    if first_name:
-        lines.append(t("meal.encouragement", locale, name=_esc(first_name)))
 
     return "\n".join(lines)
 

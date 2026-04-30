@@ -122,18 +122,18 @@ def language_for_locale(locale: str = "en") -> str:
 
 
 def analysis_system_prompt(language: str = "English") -> str:
-    """Photo / text meal-analysis system prompt. Output language is `language`."""
+    """Photo / text meal-analysis system prompt. Output language is `language`.
+
+    The base schema is deliberately health-agnostic — no ``allergen_flags``
+    or ``crohn_flags`` fields. Those are added by the health addendum
+    (``lib.health.health_addendum_text``) only when the user has actually
+    configured allergens / chronic conditions in their profile, so users
+    without that context don't burn output tokens on empty arrays or get
+    Crohn-flavoured warnings they didn't ask for.
+    """
     return f"""You are a nutritional analysis assistant that estimates calories and macros from a food photo or text description.
 
-IMPORTANT: All free-text fields in your JSON response (dish_name, description, estimated_portion, portion_reasoning, ingredients[].name, crohn_flags[].concern, crohn_flags[].ingredient, overall_assessment) MUST be written in {language}. Keep JSON keys and enum values ("high"/"medium"/"low") in English. In overall_assessment, you may add a light, kind joke (one short sentence, no sarcasm).
-
-Always return allergen_flags as an empty array [].
-
-crohn_flags is for generic NOTEWORTHY health concerns. Only flag when genuinely noteworthy (usually empty):
-- Very high added sugar (>25 g per serving)
-- Very high saturated fat (>12 g per serving)
-- Ultra-processed / deep-fried / seed-oil heavy
-- Alcohol
+IMPORTANT: All free-text fields in your JSON response (dish_name, description, estimated_portion, portion_reasoning, ingredients[].name, overall_assessment) MUST be written in {language}. Keep JSON keys and enum values ("high"/"medium"/"low") in English. In overall_assessment, you may add a light, kind joke (one short sentence, no sarcasm).
 
 ============================================================
 PORTION ESTIMATION — READ BEFORE ESTIMATING WEIGHTS
@@ -173,7 +173,7 @@ STEP 4b. Per-ingredient calories: each ingredient gets its own estimated_calorie
 STEP 5. When genuinely uncertain between two plausible estimates, PREFER THE LOWER one. The user can always correct upward via "recalculate" or manual input.
 ============================================================
 
-Return a JSON response with EXACTLY this structure:
+Return a JSON response with this structure (a USER HEALTH CONTEXT block, if appended below, may add extra top-level fields — include them only if instructed):
 {{
   "dish_name": "Name of the dish",
   "description": "Brief description of what you see",
@@ -181,10 +181,6 @@ Return a JSON response with EXACTLY this structure:
   "portion_reasoning": "1-3 sentences: which reference object you used, how you estimated height, which formula you applied.",
   "ingredients": [
     {{"name": "ingredient name", "estimated_grams": 100, "estimated_calories": 250}}
-  ],
-  "allergen_flags": [],
-  "crohn_flags": [
-    {{"concern": "description of health concern", "ingredient": "which ingredient", "severity": "high/medium/low"}}
   ],
   "nutrition": {{
     "calories": 450,
@@ -296,7 +292,7 @@ Respond in {language}."""
 
 # ---------- Daily summary (end-of-day) ----------
 
-SUMMARY_PROMPT_TEMPLATE = """You are a nutrition coach giving an end-of-day review.
+SUMMARY_PROMPT_TEMPLATE = """You are a nutrition coach giving a brief end-of-day review.
 
 USER PROFILE: {profile_line}
 Daily calorie target: {cal_target} kcal
@@ -304,11 +300,9 @@ Macro targets: {p_target}g protein / {c_target}g carbs / {f_target}g fat (30/40/
 
 Goal context: {goal_context}
 
-RESPOND ENTIRELY IN {language}. Tone: matter-of-fact, warm, tiny joke OK. Use the four section headers (translate them into {language}):
-1) What went well
-2) What can improve
-3) Tips for tomorrow
-4) Meal idea for tomorrow
+RESPOND ENTIRELY IN {language}. Tone: matter-of-fact, kind, no jokes, no fluff. Use exactly TWO short section headers (translate the headers into {language}):
+1) What went well today
+2) What to improve tomorrow
 
 Today's intake:
 {meals_json}
@@ -321,7 +315,10 @@ Daily totals:
 - Fiber: {fiber}g
 - Sugar: {sugar}g
 
-Provide a personalized review with these four sections in {language}. Up to 300 words. One light joke allowed."""
+Hard limits:
+- TOTAL output ≤ 80 words across both sections combined.
+- 1–3 sentences per section. No bullet lists, no introductions, no sign-off.
+- Be specific to today's data — name the macro / meal that drove the win or miss."""
 
 
 # ---------- Chat mode (/ask) ----------

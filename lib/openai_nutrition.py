@@ -64,9 +64,13 @@ def generate_daily_summary(meals: list[dict], totals: dict, profile: dict, langu
         fiber=round(totals.get("fiber", 0)),
         sugar=round(totals.get("sugar", 0)),
     ) + _PROMPT_INJECTION_GUARD
+    # max_tokens=300 caps output at ~225 words — comfortable headroom over
+    # the prompt's 80-word hard limit while preventing run-away generations
+    # if the model ignores the instruction. Was 1000 (fit a 4-section
+    # ~300-word review); cut as part of the 2026-04-30 verbosity reduction.
     resp = _get_client().chat.completions.create(
         model="gpt-4o",
-        max_tokens=1000,
+        max_tokens=300,
         messages=[{"role": "user", "content": prompt}],
     )
     return (resp.choices[0].message.content or "").strip()

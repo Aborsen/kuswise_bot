@@ -166,35 +166,65 @@ def is_clear_keyword(text: str) -> bool:
 
 
 def health_addendum_text(allergens: list[str], conditions: list[str]) -> str:
-    """Build the text appended to the analysis system prompt.
+    """Build the health-aware extension to the analysis system prompt.
 
-    Returns "" when the user has no usable health context — caller skips the
-    append. Unknown allergen / condition ids are dropped silently here so the
-    LLM doesn't see junk; that's also why an input of only-unknown values
-    yields an empty addendum.
+    Returns "" when the user has no usable health context — caller skips
+    the append. Unknown allergen / condition ids are dropped silently so
+    the LLM doesn't see junk; that's also why an input of only-unknown
+    values yields an empty addendum.
+
+    When non-empty, this string both (a) tells the AI the user's specific
+    allergens / conditions and (b) **extends the JSON schema** with
+    ``allergen_flags`` and / or ``crohn_flags`` top-level fields. The base
+    prompt deliberately omits these fields, so users without configured
+    health context get a smaller JSON output (fewer tokens) and don't see
+    Crohn-flavoured warnings they didn't ask for.
     """
     body: list[str] = []
-    if allergens:
-        eng = ", ".join(
-            _canon_allergen_to_english(i) for i in allergens if i in ALLERGENS
+    schema_extra: list[str] = []
+
+    valid_allergens = [i for i in allergens if i in ALLERGENS]
+    relevant_conditions = [c for c in conditions if c in _CONDITION_GUIDANCE]
+
+    if valid_allergens:
+        eng = ", ".join(_canon_allergen_to_english(i) for i in valid_allergens)
+        body.append(
+            f"- USER ALLERGIES / INTOLERANCES: {eng}. "
+            f"If any ingredient overlaps, ALWAYS list it in allergen_flags."
         )
-        if eng:
-            body.append(
-                f"- Avoid (allergies): {eng}. "
-                f"If any ingredient overlaps, ALWAYS list it in allergen_flags."
-            )
-    for cid in conditions:
-        guidance = _CONDITION_GUIDANCE.get(cid)
-        if guidance:
-            body.append(f"- {guidance}")
+        schema_extra.append(
+            '  "allergen_flags": ['
+            '{"allergen": "<id>", "ingredient": "<which ingredient>", '
+            '"confidence": "high|medium|low"}'
+            '],'
+        )
+
+    if relevant_conditions:
+        for cid in relevant_conditions:
+            body.append(f"- {_CONDITION_GUIDANCE[cid]}")
+        body.append(
+            "  Use crohn_flags ONLY for concerns tied to the conditions above. "
+            "Do not flag generic concerns like added sugar or processed food."
+        )
+        schema_extra.append(
+            '  "crohn_flags": ['
+            '{"concern": "...", "ingredient": "...", "severity": "high|medium|low"}'
+            '],'
+        )
+
     if not body:
         return ""
-    return "\n".join([
+
+    out = [
         "============================================================",
-        "USER HEALTH CONTEXT — apply when filling allergen_flags / crohn_flags:",
+        "USER HEALTH CONTEXT — extends the JSON schema:",
         *body,
+        "",
+        "Add these top-level fields to your JSON output (omit if no matches):",
+        *schema_extra,
         "============================================================",
-    ])
+    ]
+    return "\n".join(out)
 
 
 def addendum_for_profile(health: Optional[dict]) -> str:

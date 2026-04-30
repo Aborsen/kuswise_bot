@@ -1523,9 +1523,14 @@ def handle_manual_text_input(conn, message: dict, text: str, pending: dict, prof
         personal_ctx = personalization_mod.aliases_prompt_block(conn, user_id)
     except Exception as _px:
         error("personalization_prompt_failed", exc=_px, user_id=user_id)
+    # Pass the prior analysis so the AI can PATCH it instead of producing a
+    # fresh single-ingredient meal from a delta like "eggs 150g". The
+    # `mod:manual` callback is the only path that reaches this handler with
+    # a populated `pending["analysis"]`, so non-modify flows are unaffected.
     try:
         analysis, raw = analyze_text(
             text,
+            previous_analysis=pending.get("analysis"),
             health_addendum=health_ctx,
             personalization_addendum=personal_ctx,
             language=language_for_locale(i18n_mod.locale_of(profile)),

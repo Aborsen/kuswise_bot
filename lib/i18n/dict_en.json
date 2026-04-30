@@ -206,7 +206,7 @@
   "prompts.text_meal_type":  "📝 Logged your description! Which meal is this?",
   "prompts.analyzing":       "🔍 Analyzing the meal, just a moment…",
   "prompts.recalc":          "🔄 Recalculating more carefully…",
-  "prompts.manual_input":    "✏️ Write what you ate (e.g. «chicken 200g, rice 150g, broccoli 100g»).\nOr send /cancel — I won't be offended. 😉",
+  "prompts.manual_input":    "✏️ Tell me what to change. Update one ingredient (e.g. «eggs 150g») or rewrite the whole meal.\nOr send /cancel — I won't be offended. 😉",
   "prompts.history_usage":   "Usage: /history_detail YYYY-MM-DD (e.g. /history_detail 2026-04-12)",
 
   "errors.photo_download_failed": "Sorry, couldn't download the photo. Try again. 📷",

@@ -1394,19 +1394,31 @@ def _send_analysis_preview(
     photo_file_id: str | None,
     text_description: str | None,
     raw: str,
+    replaces_meal_id: int | None = None,
 ) -> None:
     """F-6: dispatch to alternates picker (when ambiguous) or normal preview.
 
     Single source of truth for "show the user what we got and ask them to
     confirm". Persists pending state in either branch so the moderation /
     pick callbacks can find it.
+
+    ``replaces_meal_id`` carries the /meals → ✏️ Edit replacement target
+    through the AI patch / recalc round-trip. Default None keeps every
+    fresh-meal caller (photo upload, menu OCR pick, alternates pick)
+    behaving as before. Callers that already have a `pending` in scope
+    (handle_manual_text_input, the recalc handler) MUST forward
+    `pending.get("replaces_meal_id")` so the field survives until the
+    user taps ✅ — otherwise the replace-on-confirm logic in mod:accept
+    sees None and the new meal lands as a duplicate next to the old one.
     """
     profile = get_profile(conn, user_id)
     candidates = normalize_candidates(analysis)
     if is_ambiguous(candidates):
         save_pending_analysis(
             conn, user_id, meal_type, analysis,
-            photo_file_id, text_description, raw, candidates=candidates,
+            photo_file_id, text_description, raw,
+            candidates=candidates,
+            replaces_meal_id=replaces_meal_id,
         )
         send_message(
             chat_id,
@@ -1417,6 +1429,7 @@ def _send_analysis_preview(
     save_pending_analysis(
         conn, user_id, meal_type, analysis,
         photo_file_id, text_description, raw,
+        replaces_meal_id=replaces_meal_id,
     )
     send_message(
         chat_id,
@@ -1540,6 +1553,7 @@ def handle_moderation_callback(conn, cb: dict, profile: dict) -> None:
             photo_file_id=pending["photo_file_id"],
             text_description=pending["text_description"],
             raw=raw,
+            replaces_meal_id=pending.get("replaces_meal_id"),
         )
 
     elif action == "manual":
@@ -1607,6 +1621,7 @@ def handle_manual_text_input(conn, message: dict, text: str, pending: dict, prof
         photo_file_id=pending["photo_file_id"],
         text_description=text,
         raw=raw,
+        replaces_meal_id=pending.get("replaces_meal_id"),
     )
 
 

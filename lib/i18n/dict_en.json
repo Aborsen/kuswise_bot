@@ -115,15 +115,17 @@
   "menu.pending_expired": "Menu is no longer active. Scan again via /menu.",
   "menu.processing": "🔎 Reading menu… this can take 5-10 seconds.",
 
-  "plan.intro": "🗓 <b>3-day plan</b>\nI'll build a plan around your calories + health profile. If you want, write what you have at home (e.g. <code>chicken, rice, broccoli, eggs</code>) — I'll factor it in. Or just tap «Without list».\n\n<i>/cancel to abort.</i>",
+  "plan.intro": "🗓 <b>3-day plan</b>\nI'll build a plan around your calories + health profile. If you want, send your pantry list — write it (e.g. <code>chicken, rice, broccoli, eggs</code>), 🎙 say it as a voice message, or 📸 send a photo of your fridge / pantry. Or just tap «Without list».\n\n<i>/cancel to abort.</i>",
   "plan.generating": "🍳 Building your plan… takes 10-20 seconds.",
   "plan.failed": "❌ Couldn't generate the plan. Try again in a minute.",
   "plan.pantry_too_long": "List is too long — keep it under 200 characters.",
   "plan.header_notes": "📝 <i>{notes}</i>\n\n",
   "plan.day_header": "━━━━━━━━━━━━━━━━━━━━━\n📅 <b>{label}</b>",
 
-  "fridge.prompt": "🛒 <b>What's in your fridge?</b>\nList comma-separated — e.g. <code>chicken, rice, broccoli, eggs, tomatoes</code>. I'll suggest a recipe using only those.\n\n<i>/cancel to abort.</i>",
+  "fridge.prompt": "🛒 <b>What's in your fridge?</b>\nThree options:\n• Type a list — e.g. <code>chicken, rice, broccoli, eggs, tomatoes</code>\n• 🎙 Send a voice message saying what you have\n• 📸 Send a photo of your fridge / pantry — I'll read what's there\n\nI'll suggest a recipe using only those ingredients.\n\n<i>/cancel to abort.</i>",
   "fridge.too_long": "List is too long — keep it under 300 characters.",
+  "pantry.photo_extracted": "🛒 From your photo I read: <i>{items}</i>",
+  "pantry.photo_no_food": "👀 I couldn't see any food in that photo. Try another shot of your fridge or pantry — or type the list instead.",
   "fridge.variation_hint": "Suggest a DIFFERENT recipe than the previous one — different protein (if it was chicken — try fish/eggs/tofu), different cooking method, different spices.",
 
   "suggest.thinking": "🧠 Thinking up an idea that fits your day…",

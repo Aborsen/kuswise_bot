@@ -424,3 +424,55 @@ def normalize_menu_dishes(raw: list) -> list[dict]:
         out.append(entry)
     out.sort(key=lambda d: d["confidence"], reverse=True)
     return out
+
+
+# ---------- F-11 extension: pantry photo OCR ----------
+
+def extract_pantry_from_photo(image_bytes: bytes, language: str = "English") -> str:
+    """Return a comma-separated ingredient list visible in a fridge / pantry photo.
+
+    Single GPT-4o vision call. Output language is ``language`` so the string
+    drops directly into ``/suggest_meal``'s pantry slot or ``/plan``'s pantry
+    field without further translation. Returns ``""`` when no recognizable
+    food is detected — caller should treat that as "tell user to retry".
+
+    Output format is intentionally lean (lowercase, comma-separated, no
+    counts / weights / prose) — both to fit the existing pantry-text
+    contract downstream and to keep output tokens minimal.
+    """
+    if not image_bytes:
+        return ""
+
+    client = _get_client()
+    b64 = base64.b64encode(image_bytes).decode("ascii")
+
+    system_prompt = (
+        f"You are a vision assistant. Look at the photo and identify every "
+        f"distinct food ingredient or grocery item visible. Output requirements:\n"
+        f"- Return ONLY a comma-separated list, nothing else.\n"
+        f"- Use lowercase, no weights, no counts, no prose, no markdown.\n"
+        f"- Write each ingredient name in {language}.\n"
+        f"- Deduplicate (don't repeat the same item).\n"
+        f"- If you cannot identify any food / grocery items, return an "
+        f"empty string."
+    )
+
+    resp = client.chat.completions.create(
+        model="gpt-4o",
+        max_tokens=300,
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": [
+                {"type": "text", "text": "List the food items visible in this photo."},
+                {"type": "image_url",
+                 "image_url": {"url": f"data:image/jpeg;base64,{b64}"}},
+            ]},
+        ],
+    )
+    raw = (resp.choices[0].message.content or "").strip()
+    # Defensive cleanup: strip wrapping quotes / fences / leading bullets that
+    # the model occasionally adds despite the instruction.
+    raw = _strip_fences(raw).strip().strip('"\'')
+    if raw.startswith("- "):
+        raw = ", ".join(line.lstrip("- ").strip() for line in raw.splitlines() if line.strip())
+    return raw[:300]  # match handle_fridge_input's existing length cap

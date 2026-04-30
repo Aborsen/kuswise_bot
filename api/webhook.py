@@ -113,6 +113,7 @@ from lib.openai_vision import (
     is_ambiguous,
     candidate_to_analysis,
     analyze_menu,
+    extract_pantry_from_photo,
 )
 from lib.openai_voice import transcribe_voice
 from lib.openai_nutrition import suggest_meal
@@ -388,6 +389,16 @@ def process_update(update: dict) -> None:
         # instead of the standard meal-analysis flow.
         if message.get("photo") and profile and profile.get("awaiting_input_type") == "menu_photo":
             handle_menu_photo(conn, message, profile)
+            return
+
+        # F-11 / F-10 extension: a photo of the fridge / pantry while the
+        # user is in pantry-input mode → OCR the visible food and feed the
+        # extracted list straight into the existing pantry handler.
+        if message.get("photo") and profile and profile.get("awaiting_input_type") == "fridge_ingredients":
+            handle_fridge_photo(conn, message, profile)
+            return
+        if message.get("photo") and profile and profile.get("awaiting_input_type") == "plan_pantry":
+            handle_plan_pantry_photo(conn, message, profile)
             return
 
         if message.get("photo"):
@@ -1233,6 +1244,19 @@ def handle_voice(conn, message: dict) -> None:
 
     safe = _html.escape(transcript, quote=False)
     send_message(chat_id, _t("voice.transcript", profile, text=safe))
+
+    # F-11 / F-10 extension: a voice message during fridge / plan pantry
+    # input is treated as the typed pantry list — same length cap, same
+    # downstream handler. Re-fetch profile in case state changed during
+    # the (potentially seconds-long) Whisper call.
+    fresh_profile = get_profile(conn, user_id) or profile
+    pantry_state = (fresh_profile or {}).get("awaiting_input_type")
+    if pantry_state == "fridge_ingredients":
+        handle_fridge_input(conn, chat_id, user_id, transcript, fresh_profile)
+        return
+    if pantry_state == "plan_pantry":
+        handle_plan_pantry_input(conn, chat_id, user_id, transcript, fresh_profile)
+        return
 
     # If this voice message is a reply to the /ask prompt, treat transcript as a
     # chat question and route to handle_ask instead of the meal-logging flow.
@@ -2186,6 +2210,79 @@ def handle_fridge_input(
         return
     set_awaiting_input(conn, user_id, None)
     _run_suggest_meal(conn, chat_id, user_id, profile, pantry=cleaned, extra_hint="")
+
+
+def _handle_pantry_photo(
+    conn,
+    message: dict,
+    profile: dict,
+    delegate,
+) -> None:
+    """Shared body for fridge / plan pantry photo OCR.
+
+    Quota note: we do NOT call ``_enforce_quota`` here. The downstream
+    delegate (``handle_fridge_input`` → ``_run_suggest_meal``, or
+    ``handle_plan_pantry_input`` → ``_build_and_send_plan``) already runs
+    the appropriate counter. Calling it here would double-tick the daily
+    limit. Cost of an OCR call when the user is over quota is ~$0.01,
+    bounded — they can't actually use the result because the recipe /
+    plan request gets rejected.
+    """
+    chat_id = message["chat"]["id"]
+    user_id = message["from"]["id"]
+    photos = message.get("photo") or []
+    largest = photos[-1] if photos else {}
+    file_id = largest.get("file_id")
+    if not file_id:
+        return
+    file_size = int(largest.get("file_size") or 0)
+    if file_size > MAX_PHOTO_BYTES:
+        send_message(chat_id, _t("errors.photo_too_large", profile))
+        return
+    send_chat_action(chat_id, "typing")
+    try:
+        image_bytes = get_file_bytes(file_id)
+    except Exception as e:
+        print("pantry photo getFile error:", e, flush=True)
+        send_message(chat_id, _t("errors.photo_analysis_failed", profile))
+        return
+    try:
+        pantry = extract_pantry_from_photo(
+            image_bytes,
+            language=language_for_locale(i18n_mod.locale_of(profile)),
+        )
+    except Exception as e:
+        print("pantry photo OCR error:", e, flush=True)
+        send_message(chat_id, _t("errors.photo_analysis_failed", profile))
+        return
+    if not pantry or len(pantry.strip()) < 2:
+        # Clear FSM so the user isn't stuck in pantry-input mode after a
+        # bad photo; main_menu_keyboard surfaces the standard buttons again.
+        set_awaiting_input(conn, user_id, None)
+        send_message(
+            chat_id,
+            _t("pantry.photo_no_food", profile),
+            reply_markup=main_menu_keyboard(locale=i18n_mod.locale_of(profile)),
+        )
+        return
+    # Echo the extracted list so the user has feedback before the recipe /
+    # plan response lands. If they spot an error, /cancel mid-flow has no
+    # effect (delegate already cleared FSM); they re-trigger from menu.
+    send_message(
+        chat_id,
+        _t("pantry.photo_extracted", profile, items=_html.escape(pantry, quote=False)),
+    )
+    delegate(conn, chat_id, user_id, pantry, profile)
+
+
+def handle_fridge_photo(conn, message: dict, profile: dict) -> None:
+    """F-11 extension: photo of the fridge → OCR → /suggest_meal recipe."""
+    _handle_pantry_photo(conn, message, profile, handle_fridge_input)
+
+
+def handle_plan_pantry_photo(conn, message: dict, profile: dict) -> None:
+    """F-10 extension: photo of the pantry → OCR → /plan with that list."""
+    _handle_pantry_photo(conn, message, profile, handle_plan_pantry_input)
 
 
 def handle_suggest_callback(conn, cb: dict, profile: dict) -> None:

@@ -206,9 +206,19 @@ def health_addendum_text(allergens: list[str], conditions: list[str]) -> str:
             "  Use crohn_flags ONLY for concerns tied to the conditions above. "
             "Do not flag generic concerns like added sugar or processed food."
         )
+        body.append(
+            "  CRITICAL LANGUAGE RULE: every `crohn_flags[].concern` and "
+            "`crohn_flags[].ingredient` value MUST be written in UKRAINIAN, "
+            "even if the guidance line above used English keywords. Translate "
+            "before emitting. Examples of correct concern values: «лактоза», "
+            "«кофеїн», «нерозчинна клітковина», «гострі спеції», «FODMAP», "
+            "«доданий цукор», «глютен»."
+        )
         schema_extra.append(
             '  "crohn_flags": ['
-            '{"concern": "...", "ingredient": "...", "severity": "high|medium|low"}'
+            '{"concern": "<коротко українською>", '
+            '"ingredient": "<інгредієнт українською>", '
+            '"severity": "high|medium|low"}'
             '],'
         )
 

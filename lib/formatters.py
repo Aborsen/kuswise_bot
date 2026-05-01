@@ -126,7 +126,15 @@ def _format_warnings(analysis: dict, locale: str = "en") -> list[str]:
         lines.append(t("meal.warnings_allergen_header", locale))
         for a in allergen_flags:
             icon = _CONFIDENCE_ICON.get((a.get("confidence") or "").lower(), "⚠️")
-            allergen_name = _esc(str(a.get("allergen", "?")).capitalize())
+            # `allergen` is a canonical English ID ("egg", "gluten", …);
+            # localise via i18n, falling back to the capitalised id when the
+            # dictionary doesn't have an entry (legacy rows, unknown IDs).
+            allergen_id = str(a.get("allergen") or "").strip().lower()
+            i18n_key = f"health.allergens.{allergen_id}"
+            translated = t(i18n_key, locale) if allergen_id else "?"
+            if translated == i18n_key:
+                translated = allergen_id.capitalize() or "?"
+            allergen_name = _esc(translated)
             confidence = _esc(a.get("confidence", "?"))
             ingredient = _esc(a.get("ingredient",
                                     t("meal.warnings_default_ingredient", locale)))

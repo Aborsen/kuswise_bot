@@ -632,6 +632,8 @@ def build_html(nonce: str = "") -> str:
   .modal-field {{ padding: 8px 12px; background: #0f0f1a; border-radius: 8px; }}
   .modal-field .mf-label {{ color:#888; font-size:0.78em; text-transform:uppercase; letter-spacing:.04em; }}
   .modal-field .mf-val {{ font-size:1em; margin-top:2px; }}
+  .modal-actions {{ display:flex; gap:10px; justify-content:flex-end; margin-top:18px; flex-wrap:wrap; }}
+  .modal-actions .btn-action {{ padding:8px 14px; }}
 
   @media (max-width: 700px) {{
     .cards {{ flex-direction: column; }}
@@ -649,6 +651,10 @@ def build_html(nonce: str = "") -> str:
     <button class="close-btn" id="modalCloseBtn" type="button">✕</button>
     <h3 id="modalTitle">Профіль користувача</h3>
     <div class="modal-grid" id="modalGrid"></div>
+    <div class="modal-actions">
+      <button type="button" class="btn-action" id="modalCloseFooterBtn">Закрити</button>
+      <button type="button" class="btn-action danger" id="modalDeleteBtn" data-uid="">🗑 Видалити користувача</button>
+    </div>
   </div>
 </div>
 
@@ -991,6 +997,9 @@ function showUserModal(row) {{
   document.getElementById('modalGrid').innerHTML = fields.map(([label, val]) =>
     `<div class="modal-field"><div class="mf-label">${{label}}</div><div class="mf-val">${{val ?? '—'}}</div></div>`
   ).join('');
+  // Stamp the modal's delete button with this user's uid for the click handler.
+  const delBtn = document.getElementById('modalDeleteBtn');
+  if (delBtn) delBtn.dataset.uid = String(d.uid);
   document.getElementById('userModal').classList.add('open');
 }}
 
@@ -1005,6 +1014,12 @@ function closeModal(e) {{
 document.getElementById('userModal').addEventListener('click', closeModal);
 document.getElementById('modalCloseBtn').addEventListener('click', function() {{
   document.getElementById('userModal').classList.remove('open');
+}});
+document.getElementById('modalCloseFooterBtn').addEventListener('click', function() {{
+  document.getElementById('userModal').classList.remove('open');
+}});
+document.getElementById('modalDeleteBtn').addEventListener('click', function() {{
+  deleteUser(this);
 }});
 document.querySelectorAll('[data-export-table]').forEach(function(btn) {{
   btn.addEventListener('click', function() {{
@@ -1108,11 +1123,13 @@ async function bulkDeleteMeals() {{
   }}
 }}
 
-/* --- Delete user --- */
+/* --- Delete user (callable from both row trash icon and modal footer) --- */
 async function deleteUser(btn) {{
-  const row = btn.closest('tr');
-  const uid = row.dataset.uid;
-  const uname = row.cells[1]?.textContent.trim() || uid;
+  const uid = btn.dataset.uid || (btn.closest('tr')?.dataset.uid ?? '');
+  if (!uid) {{ alert('Немає user_id'); return; }}
+  const row = document.querySelector(`#tblUsers tbody tr[data-uid="${{uid}}"]`);
+  const uname = row ? (row.cells[1]?.textContent.trim() || uid)
+                    : (USER_DATA[uid]?.uname || uid);
   // Typed-confirm: require the operator to type the user_id back. Defends
   // against accidental misclicks and slows down any future XSS-driven mass-delete.
   const typed = prompt(
@@ -1124,6 +1141,7 @@ async function deleteUser(btn) {{
     alert('Підтвердження не співпало. Видалення скасовано.');
     return;
   }}
+  const origLabel = btn.textContent;
   btn.disabled = true; btn.textContent = '...';
   try {{
     const resp = await fetch(window.location.pathname, {{
@@ -1133,19 +1151,24 @@ async function deleteUser(btn) {{
     }});
     const data = await resp.json();
     if (data.ok) {{
-      row.style.transition = 'opacity 0.3s'; row.style.opacity = '0';
-      setTimeout(() => row.remove(), 300);
+      // Close the modal if it was the trigger.
+      document.getElementById('userModal').classList.remove('open');
+      if (row) {{
+        row.style.transition = 'opacity 0.3s'; row.style.opacity = '0';
+        setTimeout(() => row.remove(), 300);
+      }}
       document.querySelectorAll(`#tblMeals tbody tr[data-uid="${{uid}}"]`).forEach(r => r.remove());
       applyFilters();
       const usersCard = document.querySelector('.card:nth-child(1) .num');
       if (usersCard) usersCard.textContent = Math.max(0, parseInt(usersCard.textContent) - 1);
+      btn.disabled = false; btn.textContent = origLabel;
     }} else {{
       alert('Помилка: ' + (data.error || 'невідома'));
-      btn.disabled = false; btn.textContent = '🗑';
+      btn.disabled = false; btn.textContent = origLabel;
     }}
   }} catch(e) {{
     alert('Мережева помилка: ' + e.message);
-    btn.disabled = false; btn.textContent = '🗑';
+    btn.disabled = false; btn.textContent = origLabel;
   }}
 }}
 </script>

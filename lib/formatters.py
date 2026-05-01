@@ -69,6 +69,33 @@ def _name_or_default(first_name: str | None) -> str:
 _CONFIDENCE_ICON = {"high": "🔴", "medium": "🟠", "low": "🟡"}
 _SEVERITY_ICON = {"high": "🔴", "medium": "🟠", "low": "🟡"}
 
+# Defensive reverse-map: when the LLM ignores the addendum's enum and emits
+# the friendly English label in `allergen_flags[].allergen` instead of the
+# canonical id, normalise back to the id before the i18n lookup. Keeps old
+# DB rows that already store the friendly label rendering correctly too.
+_ALLERGEN_LABEL_TO_ID = {
+    "gluten / wheat": "gluten", "gluten": "gluten", "wheat": "gluten",
+    "dairy / lactose": "dairy", "dairy": "dairy", "lactose": "dairy", "milk": "dairy",
+    "tree nuts": "tree_nut", "tree nut": "tree_nut",
+    "peanuts": "peanut", "peanut": "peanut",
+    "shellfish / crustaceans": "shellfish", "shellfish": "shellfish",
+    "crustaceans": "shellfish",
+    "mollusks": "mollusks", "molluscs": "mollusks",
+    "eggs": "egg", "egg": "egg",
+    "soy": "soy", "soya": "soy",
+    "fish": "fish",
+    "sesame": "sesame",
+    "mustard": "mustard",
+    "sulphites": "sulphites", "sulfites": "sulphites",
+    "celery": "celery",
+    "lupin": "lupin",
+    "tomato": "tomato", "tomatoes": "tomato",
+    "emmental cheese": "emmental", "emmental": "emmental",
+    "rye": "rye",
+    "rapeseed / canola oil": "rapeseed", "rapeseed": "rapeseed",
+    "canola": "rapeseed", "canola oil": "rapeseed",
+}
+
 # UA meal-type labels — used only on the UA locale render path; EN uses the
 # meal_type.* dict keys via t().
 _MEAL_TYPE_UA = {
@@ -129,11 +156,17 @@ def _format_warnings(analysis: dict, locale: str = "en") -> list[str]:
             # `allergen` is a canonical English ID ("egg", "gluten", …);
             # localise via i18n, falling back to the capitalised id when the
             # dictionary doesn't have an entry (legacy rows, unknown IDs).
-            allergen_id = str(a.get("allergen") or "").strip().lower()
+            allergen_raw = str(a.get("allergen") or "").strip().lower()
+            # Defensive: the LLM occasionally emits the friendly English label
+            # ("gluten / wheat") instead of the canonical id ("gluten").
+            # Normalise via the reverse-map before the i18n lookup.
+            allergen_id = _ALLERGEN_LABEL_TO_ID.get(allergen_raw, allergen_raw)
             i18n_key = f"health.allergens.{allergen_id}"
             translated = t(i18n_key, locale) if allergen_id else "?"
             if translated == i18n_key:
-                translated = allergen_id.capitalize() or "?"
+                # No dict entry — last-resort: capitalise whatever we got
+                # so it at least renders cleanly.
+                translated = (allergen_raw or allergen_id).capitalize() or "?"
             allergen_name = _esc(translated)
             confidence = _esc(a.get("confidence", "?"))
             ingredient = _esc(a.get("ingredient",

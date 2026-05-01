@@ -187,14 +187,20 @@ def health_addendum_text(allergens: list[str], conditions: list[str]) -> str:
     relevant_conditions = [c for c in conditions if c in _CONDITION_GUIDANCE]
 
     if valid_allergens:
-        eng = ", ".join(_canon_allergen_to_english(i) for i in valid_allergens)
-        body.append(
-            f"- USER ALLERGIES / INTOLERANCES: {eng}. "
-            f"If any ingredient overlaps, ALWAYS list it in allergen_flags."
+        labeled = ", ".join(
+            f"{_canon_allergen_to_english(i)} (id={i})" for i in valid_allergens
         )
+        body.append(
+            f"- USER ALLERGIES / INTOLERANCES: {labeled}. "
+            "If any ingredient overlaps, ALWAYS list it in allergen_flags. "
+            "The `allergen` field MUST be the lowercase canonical id (the "
+            "value after `id=` above) — e.g. \"gluten\", NOT \"Gluten / wheat\"."
+        )
+        enum_values = " | ".join(valid_allergens)
         schema_extra.append(
             '  "allergen_flags": ['
-            '{"allergen": "<id>", "ingredient": "<which ingredient>", '
+            f'{{"allergen": "<one of: {enum_values}>", '
+            '"ingredient": "<інгредієнт українською>", '
             '"confidence": "high|medium|low"}'
             '],'
         )

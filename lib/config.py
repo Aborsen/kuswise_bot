@@ -25,6 +25,10 @@ DATABASE_URL = _env("DATABASE_URL") or _env("POSTGRES_URL")
 CRON_SECRET = _env("CRON_SECRET")
 ADMIN_USERNAME = _env("ADMIN_USERNAME")
 ADMIN_PASSWORD = _env("ADMIN_PASSWORD")
+# Private channel id (negative integer like "-100…") — used to post a one-line
+# notification when a user finishes onboarding. Loaded as a string and never
+# logged. When unset the notifier is a no-op.
+ADMIN_NOTIFY_CHAT_ID = _env("ADMIN_NOTIFY_CHAT_ID")
 
 # Empty = public (no allowlist). Previously restricted the bot to a single user.
 ALLOWED_USER_IDS: set[int] = set()

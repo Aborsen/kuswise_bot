@@ -475,6 +475,40 @@ def format_recommendation(profile: dict, recommended: int, locale: str = "en") -
     )
 
 
+def format_new_user_notification(
+    profile: dict,
+    username: str | None = None,
+    first_name: str | None = None,
+) -> str:
+    """Admin-channel post for a freshly-onboarded user. English, compact, HTML."""
+    goal_lbl = {
+        "lose":     "🔥 Lose",
+        "maintain": "⚖️ Maintain",
+        "gain":     "💪 Gain",
+    }.get(profile.get("goal") or "", "—")
+    sex_lbl = {"male": "♂", "female": "♀"}.get(profile.get("sex") or "", "—")
+    user_id = profile.get("user_id") or "—"
+    name = first_name or "—"
+    handle = ("@" + username) if username else "—"
+    tw = profile.get("target_weight_kg")
+    wd = profile.get("weekly_delta_kg")
+
+    lines = [
+        "🆕 <b>New user onboarded</b>",
+        f"👤 {_esc(name)} ({_esc(handle)}, id <code>{_esc(user_id)}</code>)",
+        f"🎯 Goal: {goal_lbl}"
+        + (f" → target <b>{_esc(tw)} kg</b>" if tw else ""),
+        f"⚖️ Weight: <b>{_esc(profile.get('weight_kg', '—'))} kg</b> · "
+        f"📏 Height: <b>{_esc(profile.get('height_cm', '—'))} cm</b>",
+        f"🎂 Age: <b>{_esc(profile.get('age', '—'))}</b> · {sex_lbl} · "
+        f"🏋️ Gym: <b>{_esc(profile.get('gym_per_week', '—'))}/week</b>",
+        f"🔥 Calorie target: <b>{_esc(profile.get('daily_calorie_target', '—'))} kcal/day</b>",
+    ]
+    if wd:
+        lines.append(f"📈 Weekly delta: <b>{wd:+.2f} kg/week</b>")
+    return "\n".join(lines)
+
+
 def format_profile(profile: dict, locale: str = "en") -> str:
     from lib.i18n import t
     if not profile:

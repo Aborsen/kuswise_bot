@@ -15,6 +15,7 @@ if _ROOT not in sys.path:
 from lib.config import (
     WEBHOOK_SECRET,
     ALLOWED_USER_IDS,
+    ADMIN_NOTIFY_CHAT_ID,
     calorie_target_from_profile,
     macro_gram_targets_from_profile,
     macro_gram_targets,
@@ -129,6 +130,7 @@ from lib.formatters import (
     format_day_detail,
     format_meal_logged,
     format_meal_preview,
+    format_new_user_notification,
     format_alternates_intro,
     format_aliases,
     # BARCODE_*, MENU_* migrated to lib/i18n keys (F-2b Phase 3).
@@ -681,6 +683,46 @@ def _finalize_onboarding(conn, chat_id: int, user_id: int, first_name: str | Non
         done_text += "\n\n" + _t("onboarding.done_calorie_line", profile, cal=cal)
         done_text += "\n" + _t("onboarding.done_water_line", profile, water=water)
     send_message(chat_id, done_text, reply_markup=main_menu_keyboard(locale=i18n_mod.locale_of(profile)))
+
+    # Best-effort admin-channel notification. Wrapped to never affect the user.
+    try:
+        _notify_admin_new_user(conn, user_id, first_name)
+    except Exception:
+        # Deliberately no detail in the log — the chat id and any underlying
+        # send error must not leak into Vercel logs.
+        print("admin notify dispatch failed", flush=True)
+
+
+def _notify_admin_new_user(conn, user_id: int, first_name: str | None) -> None:
+    """Post a freshly-onboarded user's profile to the configured admin channel.
+
+    No-op when ``ADMIN_NOTIFY_CHAT_ID`` is unset. Never logs the chat id or
+    Telegram error bodies — keeps the destination secret even on failures.
+    """
+    if not ADMIN_NOTIFY_CHAT_ID:
+        return
+    try:
+        chat_id = int(ADMIN_NOTIFY_CHAT_ID)
+    except (TypeError, ValueError):
+        print("admin notify: invalid chat id format", flush=True)
+        return
+    try:
+        profile = get_profile(conn, user_id) or {}
+        username = ""
+        try:
+            with conn.cursor() as cur:
+                cur.execute("SELECT username FROM users WHERE user_id = %s", (user_id,))
+                row = cur.fetchone()
+            username = (row[0] if row else "") or ""
+        except Exception:
+            username = ""
+        text = format_new_user_notification(profile, username, first_name)
+        resp = send_message(chat_id, text)
+        if not (isinstance(resp, dict) and resp.get("ok")):
+            # Generic log only — no chat id, no response body.
+            print("admin notify: telegram returned non-ok", flush=True)
+    except Exception:
+        print("admin notify: send failed", flush=True)
 
 
 def handle_onboarding_text(conn, chat_id: int, user_id: int, first_name: str | None,

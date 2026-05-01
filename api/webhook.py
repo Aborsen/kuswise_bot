@@ -1746,6 +1746,12 @@ def handle_alternates_pick(conn, cb: dict, profile: dict) -> None:
         pending.get("raw_response", ""),
         # Drop candidates so the next "Accept" goes through the normal path.
         candidates=None,
+        # Forward the /meals → ✏️ Edit replacement target. Without this the
+        # F-6 picker resets the field to NULL and `mod:accept` later skips
+        # deleting the old meal — landing the new one as a duplicate next
+        # to the original. (Same shape as the leak fixed in 6c5e4cf for
+        # _send_analysis_preview.)
+        replaces_meal_id=pending.get("replaces_meal_id"),
     )
     send_message(
         chat_id,

@@ -200,7 +200,7 @@ def health_addendum_text(allergens: list[str], conditions: list[str]) -> str:
         schema_extra.append(
             '  "allergen_flags": ['
             f'{{"allergen": "<one of: {enum_values}>", '
-            '"ingredient": "<інгредієнт українською>", '
+            '"ingredient": "<інгредієнт українською>", '  # noqa: i18n
             '"confidence": "high|medium|low"}'
             '],'
         )
@@ -216,14 +216,14 @@ def health_addendum_text(allergens: list[str], conditions: list[str]) -> str:
             "  CRITICAL LANGUAGE RULE: every `crohn_flags[].concern` and "
             "`crohn_flags[].ingredient` value MUST be written in UKRAINIAN, "
             "even if the guidance line above used English keywords. Translate "
-            "before emitting. Examples of correct concern values: «лактоза», "
-            "«кофеїн», «нерозчинна клітковина», «гострі спеції», «FODMAP», "
-            "«доданий цукор», «глютен»."
+            "before emitting. Examples of correct concern values: «лактоза», "  # noqa: i18n
+            "«кофеїн», «нерозчинна клітковина», «гострі спеції», «FODMAP», "  # noqa: i18n
+            "«доданий цукор», «глютен»."  # noqa: i18n
         )
         schema_extra.append(
             '  "crohn_flags": ['
-            '{"concern": "<коротко українською>", '
-            '"ingredient": "<інгредієнт українською>", '
+            '{"concern": "<коротко українською>", '  # noqa: i18n
+            '"ingredient": "<інгредієнт українською>", '  # noqa: i18n
             '"severity": "high|medium|low"}'
             '],'
         )

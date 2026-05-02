@@ -1287,11 +1287,28 @@ def handle_voice(conn, message: dict) -> None:
     safe = _html.escape(transcript, quote=False)
     send_message(chat_id, _t("voice.transcript", profile, text=safe))
 
+    # Re-fetch profile in case state changed during the (potentially
+    # seconds-long) Whisper call.
+    fresh_profile = get_profile(conn, user_id) or profile
+
+    # Meal-edit correction by voice: if the user tapped ✏️ Modify (after
+    # a fresh analysis) or ✏️ Edit on /meals, ``pending_analyses`` carries
+    # ``awaiting_manual=1`` plus the ``previous_analysis`` and (for the
+    # /meals path) ``replaces_meal_id``. The text dispatcher checks this
+    # flag and routes to ``handle_manual_text_input``; the voice handler
+    # used to fall through to the fresh-meal path instead, so voice edits
+    # silently dropped the replacement intent and the AI patch context —
+    # AI saw only the transcript ("eggs 150g") and produced a single-
+    # ingredient meal, then ``mod:accept`` saw no ``replaces_meal_id`` and
+    # left the original in place → duplicate. Mirror the text dispatcher.
+    pending = get_pending_analysis(conn, user_id)
+    if pending and pending.get("awaiting_manual"):
+        handle_manual_text_input(conn, message, transcript, pending, fresh_profile)
+        return
+
     # F-11 / F-10 extension: a voice message during fridge / plan pantry
     # input is treated as the typed pantry list — same length cap, same
-    # downstream handler. Re-fetch profile in case state changed during
-    # the (potentially seconds-long) Whisper call.
-    fresh_profile = get_profile(conn, user_id) or profile
+    # downstream handler.
     pantry_state = (fresh_profile or {}).get("awaiting_input_type")
     if pantry_state == "fridge_ingredients":
         handle_fridge_input(conn, chat_id, user_id, transcript, fresh_profile)

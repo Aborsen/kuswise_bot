@@ -38,6 +38,7 @@ COMMAND_NAMES: tuple[str, ...] = (
     "language",
     "timezone",
     "profile",
+    "quiet",
     "cancel",
     "help",
 )

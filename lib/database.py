@@ -212,6 +212,12 @@ def init_db(conn=None, force: bool = False) -> None:
         cur.execute(
             "ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS weekly_delta_kg DOUBLE PRECISION"
         )
+        cur.execute(
+            "ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS last_nudge_sent_at TEXT"
+        )
+        cur.execute(
+            "ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS nudge_optout INTEGER NOT NULL DEFAULT 0"
+        )
         cur.execute("""
             CREATE TABLE IF NOT EXISTS weight_history (
                 id BIGSERIAL PRIMARY KEY,
@@ -350,6 +356,7 @@ PROFILE_COLUMNS = [
     "onboarding_step", "created_at", "updated_at",
     "awaiting_input_type", "weekly_checkin_sent_at", "target_weight_kg",
     "tz", "lang", "weekly_delta_kg", "lang_confirmed_at",
+    "last_nudge_sent_at", "nudge_optout",
 ]
 
 
@@ -389,6 +396,7 @@ _ALLOWED_PROFILE_FIELDS = {
     "daily_calorie_target", "recommended_calorie_target", "onboarding_step",
     "awaiting_input_type", "weekly_checkin_sent_at", "target_weight_kg",
     "tz", "lang", "weekly_delta_kg", "lang_confirmed_at",
+    "last_nudge_sent_at", "nudge_optout",
 }
 
 
@@ -1303,6 +1311,69 @@ def get_users_due_weekly_checkin(conn, min_days_since_last: int = 6) -> list[int
         )
         rows = cur.fetchall()
     return [r[0] for r in rows]
+
+
+def get_inactive_users(
+    conn,
+    hours: int = 24,
+    cooldown_days: int = 7,
+) -> list[dict]:
+    """Onboarded, opted-in users with no meals in `hours` and no nudge in `cooldown_days`."""
+    cutoff_meal = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
+    cutoff_nudge = (datetime.now(timezone.utc) - timedelta(days=cooldown_days)).isoformat()
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT
+                up.user_id,
+                COALESCE(up.lang, 'en') AS lang,
+                up.last_nudge_sent_at,
+                (SELECT MAX(m.created_at) FROM meals m WHERE m.user_id = up.user_id) AS last_meal_at
+            FROM user_profiles up
+            WHERE up.onboarding_step = 'done'
+              AND up.daily_calorie_target IS NOT NULL
+              AND COALESCE(up.nudge_optout, 0) = 0
+              AND (
+                  (SELECT MAX(m.created_at) FROM meals m WHERE m.user_id = up.user_id) IS NULL
+                  OR (SELECT MAX(m.created_at) FROM meals m WHERE m.user_id = up.user_id) < %s
+              )
+              AND (up.last_nudge_sent_at IS NULL OR up.last_nudge_sent_at < %s)
+            ORDER BY up.user_id
+            """,
+            (cutoff_meal, cutoff_nudge),
+        )
+        rows = cur.fetchall()
+    return [
+        {
+            "user_id": r[0],
+            "lang": r[1],
+            "last_nudge_sent_at": r[2],
+            "last_meal_at": r[3],
+        }
+        for r in rows
+    ]
+
+
+def mark_nudge_sent(conn, user_id: int) -> None:
+    """Stamp `last_nudge_sent_at = now()` so the cooldown window starts."""
+    with conn.cursor() as cur:
+        cur.execute(
+            "UPDATE user_profiles SET last_nudge_sent_at = %s, updated_at = %s "
+            "WHERE user_id = %s",
+            (_now_iso(), _now_iso(), user_id),
+        )
+    conn.commit()
+
+
+def set_nudge_optout(conn, user_id: int, optout: bool) -> None:
+    """Toggle whether the user receives inactivity nudges."""
+    with conn.cursor() as cur:
+        cur.execute(
+            "UPDATE user_profiles SET nudge_optout = %s, updated_at = %s "
+            "WHERE user_id = %s",
+            (1 if optout else 0, _now_iso(), user_id),
+        )
+    conn.commit()
 
 
 # ---------- Usage quota (per-user daily rate limit) ----------

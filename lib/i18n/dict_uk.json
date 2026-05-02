@@ -285,6 +285,7 @@
   "inline_button.open_scanner":      "📷 Відкрити сканер",
   "inline_button.scan_manual_entry": "✏️ Ввести цифрами",
   "inline_button.cancel":            "❌ Скасувати",
+  "inline_button.nudge_off":         "🔕 Не нагадувати",
   "inline_button.open_dashboard":    "📱 Відкрити Dashboard",
 
   "dashboard.open_prompt":    "📱 Натисни кнопку нижче, щоб відкрити Dashboard:",
@@ -636,6 +637,10 @@
   "toast.invalid":               "Невірна відповідь",
   "toast.invalid_short":         "Невірно",
   "toast.unknown_action":        "Невідома дія",
+  "toast.nudge_off":              "🔕 Нагадування вимкнено",
+  "nudge.inactive_24h":           "👋 Давно тебе не бачила! Нагадую залогувати, що сьогодні їв(-ла) — фото, текст або голосове.\n\nНатисни кнопку нижче або /quiet щоб вимкнути нагадування.",
+  "nudge.opted_out":              "🔕 Нагадування вимкнено. /quiet — увімкнути назад.",
+  "nudge.opted_in":               "🔔 Нагадування увімкнено. Нагадаю тільки якщо нічого не логуєш 24+ години.",
   "toast.unknown_option":        "Невідомий варіант",
   "toast.option_unavailable":    "Варіант недоступний",
   "toast.error":                 "Помилка",
@@ -755,6 +760,7 @@
   "cmd.language":     "🌐 Мова інтерфейсу",
   "cmd.timezone":     "🕒 Часовий пояс",
   "cmd.profile":      "⚙️ Профіль (вага, ціль, вода)",
+  "cmd.quiet":        "🔕 Нагадування увімкн./вимкн.",
   "cmd.cancel":       "❌ Скасувати поточну дію",
   "cmd.help":         "ℹ️ Допомога"
 }

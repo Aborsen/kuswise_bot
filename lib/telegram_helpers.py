@@ -181,6 +181,16 @@ def get_file_bytes(file_id: str) -> bytes:
     return resp.content
 
 
+def nudge_optout_keyboard(locale: str = "en") -> dict:
+    """Single button on the inactivity-nudge message — one-tap opt-out."""
+    return {
+        "inline_keyboard": [
+            [{"text": _i18n_t("inline_button.nudge_off", locale=locale),
+              "callback_data": "nudge:off"}],
+        ]
+    }
+
+
 def meal_type_keyboard(locale: str = "en") -> dict:
     return {
         "inline_keyboard": [

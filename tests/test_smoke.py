@@ -1609,3 +1609,100 @@ def test_render_recap_png_returns_pngsignature_bytes():
     assert isinstance(out, bytes)
     assert len(out) > 5000               # any real PNG is well above this
     assert out[:8] == b"\x89PNG\r\n\x1a\n"  # PNG magic bytes
+
+
+# ---------- inactivity nudge helpers (lib.database) ----------
+
+class _NudgeCursor:
+    """SQL-capturing cursor: records every (sql, params) and returns
+    rows when the seeded query matches a SELECT shape.
+    """
+    def __init__(self, conn):
+        self.conn = conn
+    def __enter__(self):
+        return self
+    def __exit__(self, *exc):
+        return False
+    def execute(self, sql, params=None):
+        self.conn.calls.append((sql, params))
+        self._last_sql = sql
+    def fetchall(self):
+        if "SELECT" in self._last_sql and "user_profiles up" in self._last_sql:
+            return self.conn.rows
+        return []
+    def fetchone(self):
+        return None
+
+
+class _NudgeConn:
+    def __init__(self, rows=None):
+        self.calls = []
+        self.commits = 0
+        self.rows = rows or []
+    def cursor(self):
+        return _NudgeCursor(self)
+    def commit(self):
+        self.commits += 1
+
+
+def test_get_inactive_users_filters_and_param_shape():
+    """Query gates onboarded users + opt-in + meal-cutoff + nudge-cutoff,
+    in that order of params."""
+    conn = _NudgeConn(rows=[
+        (101, "en", None, None),
+        (102, "uk", "2026-04-20T10:00:00+00:00", "2026-05-01T08:00:00+00:00"),
+    ])
+    out = db.get_inactive_users(conn, hours=24, cooldown_days=7)
+    assert len(conn.calls) == 1
+    sql, params = conn.calls[0]
+    # Critical filters all present:
+    assert "onboarding_step = 'done'" in sql
+    assert "daily_calorie_target IS NOT NULL" in sql
+    assert "COALESCE(up.nudge_optout, 0) = 0" in sql
+    assert "MAX(m.created_at)" in sql
+    # Two cutoff params, in (meal, nudge) order — both ISO 8601 with 'T'.
+    assert isinstance(params, tuple) and len(params) == 2
+    assert "T" in params[0] and "+00:00" in params[0]
+    assert "T" in params[1] and "+00:00" in params[1]
+    # Row → dict shape.
+    assert out == [
+        {"user_id": 101, "lang": "en", "last_nudge_sent_at": None, "last_meal_at": None},
+        {"user_id": 102, "lang": "uk",
+         "last_nudge_sent_at": "2026-04-20T10:00:00+00:00",
+         "last_meal_at": "2026-05-01T08:00:00+00:00"},
+    ]
+
+
+def test_mark_nudge_sent_updates_with_iso_timestamp():
+    conn = _NudgeConn()
+    db.mark_nudge_sent(conn, user_id=42)
+    assert conn.commits == 1
+    sql, params = conn.calls[0]
+    assert "UPDATE user_profiles" in sql
+    assert "last_nudge_sent_at = %s" in sql
+    assert params[-1] == 42  # WHERE user_id last
+    # First param is an ISO 8601 UTC timestamp.
+    ts = params[0]
+    assert "T" in ts and "+00:00" in ts
+
+
+def test_set_nudge_optout_writes_int_flag():
+    conn = _NudgeConn()
+    db.set_nudge_optout(conn, user_id=42, optout=True)
+    db.set_nudge_optout(conn, user_id=42, optout=False)
+    assert conn.commits == 2
+    # First call: 1 (opt out)
+    _, p1 = conn.calls[0]
+    assert p1[0] == 1 and p1[-1] == 42
+    # Second call: 0 (opt in)
+    _, p2 = conn.calls[1]
+    assert p2[0] == 0 and p2[-1] == 42
+
+
+def test_profile_columns_include_nudge_fields():
+    """Schema bookkeeping: get_profile() will not surface nudge fields
+    unless they're in the column whitelist."""
+    assert "nudge_optout" in db.PROFILE_COLUMNS
+    assert "last_nudge_sent_at" in db.PROFILE_COLUMNS
+    assert "nudge_optout" in db._ALLOWED_PROFILE_FIELDS
+    assert "last_nudge_sent_at" in db._ALLOWED_PROFILE_FIELDS

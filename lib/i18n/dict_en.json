@@ -285,6 +285,7 @@
   "inline_button.open_scanner":      "📷 Open scanner",
   "inline_button.scan_manual_entry": "✏️ Type the digits",
   "inline_button.cancel":            "❌ Cancel",
+  "inline_button.nudge_off":         "🔕 Mute nudges",
   "inline_button.open_dashboard":    "📱 Open Dashboard",
 
   "dashboard.open_prompt":    "📱 Tap the button below to open Dashboard:",
@@ -636,6 +637,10 @@
   "toast.invalid":               "Invalid answer",
   "toast.invalid_short":         "Invalid",
   "toast.unknown_action":        "Unknown action",
+  "toast.nudge_off":              "🔕 Nudges off",
+  "nudge.inactive_24h":           "👋 It's been a while! Quick reminder to log what you ate today — photo, text, or a voice note all work.\n\nTap below or send /quiet to mute these nudges.",
+  "nudge.opted_out":              "🔕 Nudges off. Send /quiet again any time to re-enable.",
+  "nudge.opted_in":               "🔔 Nudges back on. I'll only ping if you go 24+ hours without logging.",
   "toast.unknown_option":        "Unknown option",
   "toast.option_unavailable":    "Option unavailable",
   "toast.error":                 "Error",
@@ -755,6 +760,7 @@
   "cmd.language":     "🌐 Interface language",
   "cmd.timezone":     "🕒 Timezone",
   "cmd.profile":      "⚙️ Profile (weight, goal, water)",
+  "cmd.quiet":        "🔕 Mute / unmute reminders",
   "cmd.cancel":       "❌ Cancel current action",
   "cmd.help":         "ℹ️ Help"
 }

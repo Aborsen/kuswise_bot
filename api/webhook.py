@@ -67,6 +67,7 @@ from lib.database import (
     upsert_water_target_from_profile,
     insert_weight,
     set_awaiting_input,
+    set_nudge_optout,
 )
 from lib.telegram_helpers import (
     send_message,
@@ -106,6 +107,7 @@ from lib.telegram_helpers import (
     health_menu_keyboard,
     language_keyboard,
     lang_confirm_keyboard,
+    nudge_optout_keyboard,
 )
 from lib.openai_vision import (
     analyze_photo,
@@ -1163,6 +1165,23 @@ def handle_language_callback(conn, cb: dict, profile: dict) -> None:
         print("set_chat_menu_button (lang switch) error:", e, flush=True)
 
 
+def handle_nudge_callback(conn, cb: dict, profile: dict) -> None:
+    """One-tap opt-out from the inactivity-nudge inline keyboard."""
+    cb_id = cb["id"]
+    user_id = cb["from"]["id"]
+    message = cb.get("message", {})
+    chat_id = message.get("chat", {}).get("id", user_id)
+    data = cb.get("data", "")
+
+    if data == "nudge:off":
+        set_nudge_optout(conn, user_id, True)
+        answer_callback_query(cb_id, _t("toast.nudge_off", profile))
+        send_message(chat_id, _t("nudge.opted_out", profile))
+        return
+
+    answer_callback_query(cb_id)
+
+
 def handle_health_input(conn, chat_id: int, user_id: int, text: str, kind: str) -> None:
     """Free-text input for /health → set allergens / conditions.
 
@@ -1387,6 +1406,8 @@ def handle_callback(conn, cb: dict) -> None:
         handle_health_callback(conn, cb, profile)
     elif data.startswith("lang:"):
         handle_language_callback(conn, cb, profile)
+    elif data.startswith("nudge:"):
+        handle_nudge_callback(conn, cb, profile)
     elif data == "noop":
         answer_callback_query(cb["id"])
     else:
@@ -2818,6 +2839,16 @@ def handle_command(conn, message: dict, text: str, first_name: str | None, profi
         total = get_water_today(conn, user_id)
         target = get_water_target(conn, user_id)
         send_message(chat_id, format_water(total, target, locale=i18n_mod.locale_of(profile)), reply_markup=water_keyboard(locale=i18n_mod.locale_of(profile)))
+        return
+
+    if cmd == "/quiet":
+        # Clear any in-flight free-text input so /quiet can't strand the user.
+        if (profile or {}).get("awaiting_input_type"):
+            set_awaiting_input(conn, user_id, None)
+        currently_off = bool((profile or {}).get("nudge_optout"))
+        set_nudge_optout(conn, user_id, not currently_off)
+        key = "nudge.opted_in" if currently_off else "nudge.opted_out"
+        send_message(chat_id, _t(key, profile))
         return
 
     send_message(chat_id, _t("errors.unknown_command", profile))

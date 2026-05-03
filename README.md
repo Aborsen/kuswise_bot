@@ -1,6 +1,6 @@
-# KusWise Bot — Ukrainian Calorie Tracker Bot
+# KusWise Bot — Bilingual Telegram Nutrition Coach
 
-A Ukrainian-language Telegram bot that logs meals from **photos, text, or voice** and gives personalized calorie/macro coaching. Deployed on **Vercel** (Python serverless) with **Neon Postgres**. Uses **GPT-4o** for vision + text analysis, **Whisper** for voice transcription, and **GPT-4o-mini** for chat.
+A bilingual (UA / EN) Telegram bot that logs meals from **photos, text, voice, or barcode** and gives personalized calorie / macro / micronutrient coaching with allergen and chronic-condition awareness. Deployed on **Vercel** (Python serverless) with **Neon Postgres**. Uses **GPT-4o** for vision + text analysis, **Whisper** for voice transcription, and **GPT-4o-mini** for chat.
 
 ---
 
@@ -27,9 +27,12 @@ A Ukrainian-language Telegram bot that logs meals from **photos, text, or voice*
 
 ### Mini App dashboard
 - Opens via the bot's chat-menu button. Telegram-signed auth (HMAC-SHA256 on `initData`).
-- Day view: calorie/macro bars, **water progress**, smart daily tips, meal list with allergen/health-note badges.
-- Yesterday view with same layout.
-- 7-day and 30-day aggregates with sortable tables.
+- 3-tab layout (Overview / Meals / Profile) with a 7-day spinner at the top (90-day backward scroll, lazy historical fetch).
+- **Overview**: calorie ring, P/C/F + fiber + sugar progress bars, read-only water display, 30-day calorie bar chart (color-coded vs goal), end-of-day "Coach note" card showing the latest AI summary with its date, share-recap button (sends a PNG recap card to chat).
+- **Meals**: per-day meal list grouped by meal type. Meals carrying allergen / Crohn warnings show a `⚠️` chip — tap to expand the full warning list.
+- **Profile**: anthropometrics, daily targets, all-time averages, adherence %, streak line (`🔥 N · 🏆 best M · ❄️ K freezes`, with proper UA Slavic plurals), goal projection (weeks-to-goal + projected date + on-track/ahead/behind), and a 90-day weight trend chart (raw points + 7-day rolling average; hidden under "log 3+ check-ins" if not enough data).
+- Water and meal logging stay in the bot — the dashboard is read-only by design (only the recap-share action mutates).
+- Bilingual UA / EN, theme-binds to Telegram's current dark/light scheme.
 
 ### Admin panel (`/api/admin_stats`)
 - HTTP Basic Auth: username `ADMIN_USERNAME`, password `ADMIN_PASSWORD` (both set in Vercel env). The previous "any username + CRON_SECRET" path was removed so a leaked cron secret can't unlock the admin UI.
@@ -48,9 +51,11 @@ A Ukrainian-language Telegram bot that logs meals from **photos, text, or voice*
 [🍽 Ідея страви]  [⚙️ Профіль]
 ```
 
-### Automation
-- 🌙 Nightly GPT-4o summary at **20:00 UTC** (Vercel Cron).
-- 🔄 Midnight cleanup cron at **00:00 UTC** (marks stale summaries, prunes pending rows).
+### Automation (4 Vercel Cron jobs)
+- 🌙 **Daily summary** — `0 20 * * *` UTC. Sends the GPT-4o end-of-day coaching message to every user with `summary_sent=0` + meals today; persists to `daily_recommendations`.
+- 🔄 **Midnight cleanup** — `0 0 * * *` UTC. Prunes `usage_quota` (>7 days), `meal_plans` (>90 days), `menu_ocr_results` (>1 hour); resets `freeze_days_remaining` to 3 on the 1st of each month.
+- ⚖️ **Weekly weight check-in** — `0 6 * * 1` UTC (Monday 06:00). DMs onboarded users a weight-prompt; updates `user_profiles.weekly_checkin_sent_at`.
+- 👋 **Inactivity nudge** — `0 17 * * *` UTC. DMs fully-onboarded, opted-in users (`onboarding_step='done'` AND `nudge_optout=0`) who haven't logged a meal in 24h, with a 7-day cooldown. Auto-opt-out on Telegram 400 / 403 (blocked bot / chat gone). Toggleable from chat via `/quiet`.
 
 ---
 
@@ -150,8 +155,10 @@ Telegram ─▶ POST /api/webhook ──▶ process_update
                 ├─▶ lib/openai_chat.py       ── GPT-4o-mini ─▶ /ask replies
                 └─▶ lib/openai_nutrition.py  ── GPT-4o    ───▶ nightly summary, recipes
 
-Vercel Cron ─▶ GET /api/cron_daily_summary   (20:00 UTC)
-Vercel Cron ─▶ GET /api/cron_midnight_reset  (00:00 UTC)
+Vercel Cron ─▶ GET /api/cron_daily_summary         (20:00 UTC daily)
+Vercel Cron ─▶ GET /api/cron_midnight_reset        (00:00 UTC daily)
+Vercel Cron ─▶ GET /api/cron_weekly_weight_checkin (06:00 UTC Mon)
+Vercel Cron ─▶ GET /api/cron_inactivity_nudge      (17:00 UTC daily)
 
 Mini App    ─▶ POST /api/dashboard  (Telegram initData HMAC-signed)
 Admin       ─▶ GET  /api/admin_stats (HTTP Basic Auth / Bearer token)
@@ -166,14 +173,27 @@ Admin       ─▶ GET  /api/admin_stats (HTTP Basic Auth / Bearer token)
 
 ### Database schema
 
+Permanent (long-lived business data):
+
 - `users` — Telegram id + username.
-- `user_profiles` — age, sex, weight, height, gym freq, goal, calorie target, onboarding step.
-- `meals` — description, ingredients (JSON), macros, `is_favorite`, photo file_id.
-- `daily_logs` — per-day aggregates + `summary_sent` flag.
+- `user_profiles` — age, sex, weight, height, gym freq, goal, calorie target, onboarding step, `tz`, `lang`, `target_weight_kg`, `weekly_delta_kg`, `weekly_checkin_sent_at`, `last_nudge_sent_at`, `nudge_optout`.
+- `user_health_profile` — `allergens TEXT[]`, `conditions TEXT[]`, free-text notes; injected into AI prompts.
+- `meals` — description, ingredients (JSON), macros (incl. `fiber_g`, `sugar_g`), `allergen_warnings`, `crohn_warnings`, `is_favorite`, photo file_id, raw AI response.
+- `daily_logs` — per-day aggregates incl. fiber + sugar + `summary_sent` flag.
 - `daily_recommendations` — nightly summary text history.
-- `pending_photos` / `pending_analyses` — transient flow state (10-min TTL).
-- `chat_sessions` — `/ask` history (60-min TTL).
+- `corrections` — audit trail of every manual edit / recalc / candidate pick (used by personalization).
+- `user_food_aliases` — per-user EWMA portion learning (typical grams + macros for each "usual" dish name).
+- `user_streaks` — current + longest streak, `last_log_date`, `freeze_days_remaining` (resets monthly).
+- `weight_history` — every weight check-in (`weight_kg`, `source`, `recorded_at`).
 - `water_logs` / `water_prefs` — water entries + per-user target.
+- `meal_plans` — 3-day plan templates (pruned at 90 days).
+
+Transient (TTL-cleaned):
+
+- `pending_photos` / `pending_analyses` — staging tables for in-flight meal flow (10-min TTL).
+- `chat_sessions` — `/ask` history (60-min TTL).
+- `menu_ocr_results` — cached menu-OCR result while user picks a dish (1-hour TTL).
+- `usage_quota` — daily counter per `(user_id, action)` (pruned at 7 days).
 
 ---
 
@@ -193,25 +213,48 @@ Easier in practice: push to a preview branch, test against the Vercel preview UR
 
 ```
 kuswise_bot/
-├── vercel.json                        # routes + cron schedule
-├── requirements.txt                   # httpx, psycopg[binary], openai, python-dotenv
+├── vercel.json                        # routes + cron schedule (4 cron jobs)
+├── requirements.txt                   # httpx, psycopg, openai, python-dotenv, pillow, qrcode
 ├── api/
 │   ├── webhook.py                     # Telegram updates (commands, callbacks, voice/photo/text)
-│   ├── dashboard.py                   # Telegram Mini App (HTML + initData auth)
+│   ├── dashboard.py                   # Mini App: per-user dashboard (HTML + initData auth)
+│   ├── scan.py                        # Mini App: barcode scanner page
+│   ├── barcode.py                     # POST endpoint for OFF barcode lookups
 │   ├── admin_stats.py                 # HTML admin dashboard with Basic Auth
-│   ├── cron_daily_summary.py          # 20:00 UTC nightly GPT-4o summary
-│   └── cron_midnight_reset.py         # 00:00 UTC cleanup
+│   ├── cron_daily_summary.py          # 20:00 UTC daily GPT-4o end-of-day coaching
+│   ├── cron_midnight_reset.py         # 00:00 UTC daily janitorial cleanup
+│   ├── cron_weekly_weight_checkin.py  # Monday 06:00 UTC weight-prompt
+│   └── cron_inactivity_nudge.py       # 17:00 UTC daily 24h-inactivity nudge
 ├── lib/
 │   ├── config.py                      # env + prompts + LOCAL_TZ (Europe/Kyiv)
-│   ├── database.py                    # schema + CRUD (users, meals, water, favorites, pending)
-│   ├── telegram_helpers.py            # sendMessage, editMessage, sendChatAction, keyboards
-│   ├── openai_vision.py               # GPT-4o photo + text analysis (JSON with GI, portion)
+│   ├── database.py                    # schema + CRUD (every table; idempotent init_db)
+│   ├── telegram_helpers.py            # sendMessage, editMessage, keyboards (incl. nudge_optout)
+│   ├── initdata.py                    # Telegram WebApp initData HMAC verification
+│   ├── i18n/                          # dict_en.json, dict_uk.json + plural rules
+│   ├── bot_commands.py                # COMMAND_NAMES + per-locale rendering
+│   ├── openai_vision.py               # GPT-4o photo / text / menu OCR
 │   ├── openai_voice.py                # Whisper-1 UA transcription
-│   ├── openai_nutrition.py            # summaries + recipes
-│   ├── openai_chat.py                 # /ask chat with history + profile context
-│   └── formatters.py                  # HTML templates, progress bars, menu labels
-└── scripts/
-    └── set_webhook.py                 # registers webhook + commands + Mini App button
+│   ├── openai_nutrition.py            # daily summaries, recipes, meal plans
+│   ├── openai_chat.py                 # /ask multi-turn with profile + day context
+│   ├── health.py                      # F-1 allergens + conditions registry
+│   ├── personalization.py             # F-7 EWMA portion learning
+│   ├── goals.py                       # F-5 weight projection + weekly delta
+│   ├── mealplan.py                    # F-10 3-day plan generator
+│   ├── recap.py                       # F-12 PNG recap card (Pillow + QR)
+│   ├── off.py                         # F-8 Open Food Facts client
+│   ├── rate_limit.py                  # daily per-user quotas
+│   ├── log.py                         # Sentry + structured logging
+│   ├── datehelpers.py                 # Kyiv-local date math + tz validation
+│   └── formatters.py                  # bilingual rendering (today, history, plans, recap)
+├── scripts/
+│   ├── set_webhook.py                 # registers webhook + commands + Mini App button
+│   ├── setup_bot_commands.py          # pushes slash menu across (scope × language) matrix
+│   ├── check_i18n.sh                  # CI gate: no Cyrillic in user-facing Python sources
+│   └── stats.py                       # ad-hoc DB usage reports
+└── tests/
+    ├── test_smoke.py                  # ~165 unit tests; pure-function focus
+    ├── test_i18n_snapshots.py         # UA/EN parity + plural rule + audit-script gate
+    └── conftest.py                    # env-var stubs so tests never touch real DB
 ```
 
 ---
@@ -223,15 +266,26 @@ kuswise_bot/
 | `/start` | Welcome + onboarding (or open menu if already onboarded). |
 | `/today` | Today's progress (calories, macros, bars). |
 | `/yesterday` | Yesterday's summary + meals. |
+| `/history` | Last 7 days at a glance. |
+| `/history_detail YYYY-MM-DD` | Meals for a specific day. |
+| `/streak` | Current + longest streak + freezes remaining. |
+| `/goals` | Weight goal + weekly delta + projection (weeks-to-goal). |
+| `/recap` | Sends the weekly PNG recap card to chat (F-12). |
+| `/scan` | Opens the barcode scanner Mini App (F-8). |
+| `/menu` | OCR a restaurant menu photo into a dish list (F-9). |
+| `/plan` | Generate a 3-day meal plan from your goals + pantry (F-10). |
+| `/suggest_meal` | AI recipe sized to close today's macros gap (F-11). |
 | `/meals` | Today's meals list with delete/edit buttons. |
 | `/fav` | Favorite meals with one-tap re-log. |
 | `/recent` | Last 10 unique meals for quick repeat. |
 | `/water` | Water tracker (bar + quick-add + goal). |
-| `/history` | Last 7 days at a glance. |
-| `/history_detail YYYY-MM-DD` | Meals for a specific day. |
-| `/suggest_meal` | AI recipe sized to close today's gap. |
+| `/aliases` | Your habitual dishes (the bot's learned EWMA portions, F-7). |
 | `/ask` | Chat with the AI about food + training nutrition. |
+| `/health` | Edit allergens + chronic conditions; fed into AI prompts (F-1). |
+| `/language` | Switch interface language (UA / EN). |
+| `/timezone` | Set your local timezone (affects "today" boundary). |
 | `/profile` | View/edit profile. |
+| `/quiet` | Mute / unmute the inactivity nudge. Also clears any in-flight free-text input. |
 | `/cancel` | Abort mid-flow (after tapping ✏️ Ввести вручну). |
 | `/help` | Command list. |
 
@@ -284,8 +338,9 @@ At ~100 daily users with ~3 meals each: roughly $1–3/day OpenAI, rest free.
 ## Not yet implemented
 
 - Shortened 3-question onboarding (current flow needs age/weight/height for Mifflin-St Jeor).
-- Per-user timezone (all time math is Europe/Kyiv).
-- Water reminders (V1 is log-only, no scheduled nudges).
-- Shareable PNG day-recap cards.
-- Confidence-threshold "clarify" buttons on low-confidence photo recognition.
-- Personalized vision prompting from user correction history.
+- Editable meals from the dashboard (today only via `/meals` in chat).
+- Adaptive weekly target updates (MacroFactor-style — recompute `daily_calorie_target` from logged intake + smoothed weight delta). All inputs exist; the loop doesn't yet.
+- Multi-stage nudge sequences ("we miss you" at 7 d, 30 d). The 24h inactivity nudge is one-shot with a 7-day cooldown.
+- Water reminders (the inactivity nudge fires on meals only).
+- In-dashboard `/ask` chat surface (lives only in the bot today).
+- CSV / JSON export of a user's history (admin can already export meals).

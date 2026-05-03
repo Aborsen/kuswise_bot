@@ -570,6 +570,18 @@ def process_update(update: dict) -> None:
             handle_fridge_input(conn, chat_id, user_id, text, profile)
             return
 
+        # Active /ask thread: any plain text continues the conversation.
+        # Slash commands escape (handled by the command dispatcher below).
+        if (
+            user_id
+            and profile
+            and profile.get("awaiting_input_type") == "ask_thread"
+            and text
+            and not text.startswith("/")
+        ):
+            handle_ask(conn, user_id, chat_id, text, profile)
+            return
+
         # AI menu smart intent: user tapped the merged AI button (or ran /ai),
         # then typed a message instead of tapping a chooser button. Classify
         # the text and route to the right handler. Slash commands fall
@@ -629,11 +641,17 @@ def process_update(update: dict) -> None:
             i18n_mod.t("ask.prompt", "uk"),
             i18n_mod.t("ask.prompt", "en"),
         )
-        if (
-            reply_to.get("from", {}).get("is_bot")
-            and reply_to.get("text") in _ask_prompts
+        replying_to_bot = bool(reply_to.get("from", {}).get("is_bot"))
+        replying_to_ask_prompt = replying_to_bot and reply_to.get("text") in _ask_prompts
+        # Continue an in-flight /ask thread: a reply to ANY bot message when
+        # the user has chat_session rows in the rolling 60-min window means
+        # they're still chatting with us, not logging a meal.
+        in_active_thread = (
+            replying_to_bot
             and user_id
-        ):
+            and count_chat_messages(conn, user_id, minutes=60) > 0
+        )
+        if user_id and (replying_to_ask_prompt or in_active_thread):
             handle_ask(conn, user_id, chat_id, text, profile)
             return
 
@@ -1494,6 +1512,11 @@ def handle_voice(conn, message: dict) -> None:
         handle_plan_pantry_input(conn, chat_id, user_id, transcript, fresh_profile)
         return
 
+    # Active /ask thread: a voice message continues the conversation.
+    if pantry_state == "ask_thread" and transcript:
+        handle_ask(conn, user_id, chat_id, transcript, fresh_profile)
+        return
+
     # AI menu smart intent: user tapped the merged AI button (or /ai), then
     # sent voice instead of tapping a chooser button. Classify the
     # transcript and route to the right handler.
@@ -1510,17 +1533,21 @@ def handle_voice(conn, message: dict) -> None:
                               pantry="", extra_hint=transcript)
         return
 
-    # If this voice message is a reply to the /ask prompt, treat transcript as a
-    # chat question and route to handle_ask instead of the meal-logging flow.
+    # If this voice message is a reply to the /ask prompt OR continues an
+    # in-flight /ask thread (reply to any bot message + recent chat_sessions),
+    # treat transcript as a chat question instead of a meal log.
     reply_to = message.get("reply_to_message") or {}
     _ask_prompts = (
         i18n_mod.t("ask.prompt", "uk"),
         i18n_mod.t("ask.prompt", "en"),
     )
-    if (
-        reply_to.get("from", {}).get("is_bot")
-        and reply_to.get("text") in _ask_prompts
-    ):
+    replying_to_bot = bool(reply_to.get("from", {}).get("is_bot"))
+    replying_to_ask_prompt = replying_to_bot and reply_to.get("text") in _ask_prompts
+    in_active_thread = (
+        replying_to_bot
+        and count_chat_messages(conn, user_id, minutes=60) > 0
+    )
+    if replying_to_ask_prompt or in_active_thread:
         profile = get_profile(conn, user_id)
         handle_ask(conn, user_id, chat_id, transcript, profile)
         return
@@ -2799,6 +2826,13 @@ def handle_command(conn, message: dict, text: str, first_name: str | None, profi
 
     cal_target = (profile or {}).get("daily_calorie_target") or 2000
 
+    # Any slash command exits the active /ask thread (handle_ask itself
+    # re-sets the state if the user reopens the thread). Without this,
+    # /today / /water / /profile mid-thread would silently leave the
+    # FSM in 'ask_thread' and the next plain text would re-enter chat.
+    if cmd != "/ask" and (profile or {}).get("awaiting_input_type") == "ask_thread":
+        set_awaiting_input(conn, user_id, None)
+
     if cmd == "/help":
         send_message(chat_id, help_message(i18n_mod.locale_of(profile)), reply_markup=main_menu_keyboard(locale=i18n_mod.locale_of(profile)))
         return
@@ -3055,6 +3089,8 @@ def handle_command(conn, message: dict, text: str, first_name: str | None, profi
 
     if cmd == "/ask_new":
         n = clear_chat_history(conn, user_id)
+        if (profile or {}).get("awaiting_input_type") == "ask_thread":
+            set_awaiting_input(conn, user_id, None)
         key = "ask.thread_cleared" if n > 0 else "ask.thread_already_empty"
         send_message(chat_id, _t(key, profile))
         return
@@ -3327,6 +3363,10 @@ def handle_ask(conn, user_id: int, chat_id: int, question: str, profile: dict) -
 
     append_chat_message(conn, user_id, "user", question)
     append_chat_message(conn, user_id, "assistant", answer)
+    # Mark the thread active so the next plain-text / voice message continues
+    # the conversation instead of falling through to meal logging. Cleared by
+    # /cancel, /ask_new, or any slash command other than /ask.
+    set_awaiting_input(conn, user_id, "ask_thread")
     # Thread indicator: gate at n>=4 (= 2 user-turns + 2 assistant-turns) so the
     # very first reply doesn't get cluttered.
     n = count_chat_messages(conn, user_id, minutes=60)
@@ -3377,6 +3417,7 @@ def handle_ask_photo(conn, message: dict, profile: dict) -> None:
         return
     append_chat_message(conn, user_id, "user", f"[photo] {caption}")
     append_chat_message(conn, user_id, "assistant", answer)
+    set_awaiting_input(conn, user_id, "ask_thread")
     n = count_chat_messages(conn, user_id, minutes=60)
     footer = ("\n\n" + _t("ask.thread_footer", profile, n=n)) if n >= 4 else ""
     send_message(chat_id, answer + footer,

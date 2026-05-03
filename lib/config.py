@@ -377,23 +377,26 @@ Suggest ONE meal that fills the gap. Priorities in order:
 2. Stay within remaining calories
 3. Simple, quick-to-cook ingredients
 
-Format in {language} as:
+Format your response **entirely in {language}** — INCLUDING every section
+header. Do NOT keep the English label words below; translate them all.
+The structure (line order, emojis, the `<...>` placeholders) is fixed;
+the labels in front of each `:` MUST be rendered in {language}:
 
-🍽️ <dish name>
+🍽️ <dish name in {language}>
 
-📝 Why it fits: <1-2 sentences>
+📝 <"Why it fits" in {language}>: <1-2 sentences in {language}>
 
-🥘 Ingredients:
-- <ingredient> (<grams>)
+🥘 <"Ingredients" in {language}>:
+- <ingredient in {language}> (<grams>)
 - ...
 
-👨‍🍳 Steps:
-1. ...
+👨‍🍳 <"Steps" in {language}>:
+1. <step in {language}>
 2. ...
 
-📊 Approximate macros: <kcal> kcal | <P>g P | <C>g C | <F>g F
+📊 <"Approximate macros" in {language}>: <kcal> kcal | <P>g P | <C>g C | <F>g F
 
-🩸 Glycemic index: <low|medium|high> — <1 sentence why>
+🩸 <"Glycemic index" in {language}>: <low|medium|high in {language}> — <1 sentence in {language}>
 
 No fluff. Minimal emojis."""
 

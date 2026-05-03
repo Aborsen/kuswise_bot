@@ -227,7 +227,7 @@
   "ask.thinking": "🧠 Thinking over the answer…",
   "ask.error":    "Something went wrong with the response. Try again in a minute. 🤖",
   "ask.photo_default_question":  "Tell me about this image.",
-  "ask.thread_footer":           "💬 {n} replies in this thread · /ask_new to start fresh",
+  "ask.thread_footer":           "💬 Thread active ({n} msgs) · type to continue · /ask_new to start fresh",
   "ask.thread_cleared":          "💬 Thread cleared. Next /ask starts fresh.",
   "ask.thread_already_empty":    "💬 Thread is already empty.",
   "ai_menu.title":               "🤖 What can I help with? Tap a button or just type.",

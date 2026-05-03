@@ -302,6 +302,7 @@
 
   "inline_button.open_scanner":      "📷 Open scanner",
   "inline_button.scan_manual_entry": "✏️ Type the digits",
+  "inline_button.scan_menu_ocr":     "📋 Scan restaurant menu",
   "inline_button.cancel":            "❌ Cancel",
   "inline_button.nudge_off":         "🔕 Mute nudges",
   "inline_button.open_dashboard":    "📱 Open Dashboard",
@@ -390,6 +391,7 @@
   "btn.suggest":   "🍽️ Meal idea",
   "btn.profile":   "⚙️ Profile",
   "btn.recent":    "🕘 Recent",
+  "btn.scanner":   "📸 Scanner",
   "btn.yesterday": "📆 Yesterday",
   "btn.meals":     "📋 My meals",
   "btn.dashboard": "📱 Dashboard",

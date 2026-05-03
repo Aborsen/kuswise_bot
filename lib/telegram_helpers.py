@@ -339,9 +339,10 @@ def scanner_inline_keyboard(locale: str = "en") -> dict:
     """
     return {
         "inline_keyboard": [
-            [{"text": _i18n_t("inline_button.open_scanner", locale=locale), "web_app": {"url": _scan_url(locale=locale)}}],
+            [{"text": _i18n_t("inline_button.open_scanner",     locale=locale), "web_app": {"url": _scan_url(locale=locale)}}],
             [{"text": _i18n_t("inline_button.scan_manual_entry", locale=locale), "callback_data": "barcode:manual"}],
-            [{"text": _i18n_t("inline_button.cancel", locale=locale),            "callback_data": "barcode:cancel"}],
+            [{"text": _i18n_t("inline_button.scan_menu_ocr",     locale=locale), "callback_data": "barcode:menu_ocr"}],
+            [{"text": _i18n_t("inline_button.cancel",            locale=locale), "callback_data": "barcode:cancel"}],
         ]
     }
 
@@ -398,7 +399,7 @@ def main_menu_keyboard(locale: str = "en") -> dict:
         "keyboard": [
             [{"text": btn_label("ask", locale=locale)},     {"text": btn_label("fav", locale=locale)}],
             [{"text": btn_label("water", locale=locale)},   {"text": btn_label("meals", locale=locale)}],
-            [{"text": btn_label("profile", locale=locale)}, {"text": btn_label("recent", locale=locale)}],
+            [{"text": btn_label("profile", locale=locale)}, {"text": btn_label("scanner", locale=locale)}],
         ],
         "resize_keyboard": True,
         "is_persistent": True,

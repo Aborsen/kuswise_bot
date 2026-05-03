@@ -1840,18 +1840,27 @@ def test_button_text_to_command_routes_ask_button_to_ai_chooser():
     assert button_text_to_command(btn_label("suggest", locale="en")) == "/suggest_meal"
 
 
-def test_main_menu_keyboard_dropped_meal_idea_and_added_recent():
-    """New layout: row 3 is [profile, recent]; suggest button removed."""
+def test_main_menu_keyboard_layout_after_scanner_merge():
+    """Current layout: row 3 is [profile, scanner]; suggest + recent
+    are no longer on the visible keyboard but still dispatch via
+    button_text_to_command for stale keyboards."""
     from lib.telegram_helpers import main_menu_keyboard
-    from lib.formatters import btn_label
+    from lib.formatters import btn_label, button_text_to_command
     kb = main_menu_keyboard(locale="en")
     rows = kb["keyboard"]
     flat = [b["text"] for row in rows for b in row]
-    assert btn_label("recent", locale="en") in flat
-    # Meal-idea button no longer surfaces in the visible keyboard.
+    assert btn_label("scanner", locale="en") in flat
+    assert btn_label("profile", locale="en") in flat
+    # Old buttons no longer on the visible keyboard.
+    assert btn_label("recent", locale="en") not in flat
     assert btn_label("suggest", locale="en") not in flat
     # AI button (rendered as btn.ask label) is still there.
     assert btn_label("ask", locale="en") in flat
+    # Legacy "recent" label still dispatches → stale keyboards keep working.
+    assert button_text_to_command(btn_label("recent", locale="en")) == "/recent"
+    # New "scanner" label maps to /scan (the chooser-bearing command).
+    assert button_text_to_command(btn_label("scanner", locale="en")) == "/scan"
+    assert button_text_to_command(btn_label("scanner", locale="uk")) == "/scan"
 
 
 def test_save_recipe_db_round_trip_shape():

@@ -2092,6 +2092,19 @@ def handle_barcode_callback(conn, cb: dict, profile: dict) -> None:
         send_message(chat_id, _t("barcode.manual_prompt", profile))
         return
 
+    # Scanner-menu merge: route the "📋 Scan restaurant menu" chooser entry
+    # to the existing /menu flow (set state + ask for a photo). Identical
+    # to the body of `/menu` in handle_command.
+    if data == "barcode:menu_ocr":
+        answer_callback_query(cb_id)
+        set_awaiting_input(conn, user_id, "menu_photo")
+        send_message(
+            chat_id,
+            _t("menu.prompt_intro", profile),
+            reply_markup=cancel_only_keyboard(locale=i18n_mod.locale_of(profile)),
+        )
+        return
+
     if data == "barcode:g:custom":
         answer_callback_query(cb_id, _t("toast.waiting_grams", profile))
         set_awaiting_input(conn, user_id, "barcode_grams")

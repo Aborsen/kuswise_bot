@@ -302,6 +302,7 @@
 
   "inline_button.open_scanner":      "📷 Відкрити сканер",
   "inline_button.scan_manual_entry": "✏️ Ввести цифрами",
+  "inline_button.scan_menu_ocr":     "📋 Сканувати меню",
   "inline_button.cancel":            "❌ Скасувати",
   "inline_button.nudge_off":         "🔕 Не нагадувати",
   "inline_button.open_dashboard":    "📱 Відкрити Dashboard",
@@ -390,6 +391,7 @@
   "btn.suggest":   "🍽️ Ідея страви",
   "btn.profile":   "⚙️ Профіль",
   "btn.recent":    "🕘 Останні",
+  "btn.scanner":   "📸 Сканер",
   "btn.yesterday": "📆 Вчора",
   "btn.meals":     "📋 Мої страви",
   "btn.dashboard": "📱 Dashboard",

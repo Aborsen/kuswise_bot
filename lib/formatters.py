@@ -1146,7 +1146,7 @@ def format_day_detail(date: str, meals: list[dict], locale: str = "en") -> str:
 _BTN_NAMES: tuple[str, ...] = (
     "ask", "fav", "water", "today", "suggest", "profile",
     "yesterday", "meals", "dashboard", "scan", "menu_ocr",
-    "recent",
+    "recent", "scanner",
 )
 
 
@@ -1189,12 +1189,15 @@ def button_text_to_command(text: str) -> str | None:
         # AI menu merge: "ask" button (the keyboard "🤖 Ask AI" label)
         # now opens the combined /ai chooser instead of going straight to
         # /ask. /ask remains available as a typed slash command.
+        # Scanner merge: "scanner" button (📸 Scanner) opens /scan, which
+        # surfaces the combined chooser (Mini App / manual / menu OCR / cancel).
+        # "recent" mapping kept so stale keyboards still dispatch.
         name_to_cmd = {
             "ask": "/ai", "fav": "/fav", "meals": "/meals",
             "profile": "/profile", "suggest": "/suggest_meal",
             "scan": "/scan", "menu_ocr": "/menu",
             "today": "/today", "yesterday": "/yesterday",
-            "recent": "/recent",
+            "recent": "/recent", "scanner": "/scan",
         }
         cache = {}
         for name, cmd in name_to_cmd.items():

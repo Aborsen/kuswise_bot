@@ -64,6 +64,9 @@ _SCAN_JS_KEYS = (
     "scan.cam_unavailable",
     "scan.cam_unsupported",
     "scan.cam_other",
+    "scan.scanning_pulse",
+    "scan.capturing",
+    "scan.capture_miss",
 )
 
 
@@ -106,6 +109,7 @@ class handler(BaseHTTPRequestHandler):
             .replace("__LABEL_START_BTN__",    _i18n_t("scan.start_btn",    locale=locale))
             .replace("__LABEL_MANUAL_LINK__",  _i18n_t("scan.manual_link",  locale=locale))
             .replace("__LABEL_CANCEL_BTN__",   _i18n_t("scan.cancel_btn",   locale=locale))
+            .replace("__LABEL_CAPTURE_BTN__",  _i18n_t("scan.capture_btn",  locale=locale))
             .replace("__JS_LABELS__",          _build_js_labels(locale))
         )
         self.send_response(200)
@@ -201,6 +205,7 @@ _SCAN_HTML = r"""<!DOCTYPE html>
   </div>
 
   <footer>
+    <button id="captureBtn" class="btn-primary hidden">__LABEL_CAPTURE_BTN__</button>
     <button id="cancel">__LABEL_CANCEL_BTN__</button>
   </footer>
 </div>
@@ -230,6 +235,7 @@ _SCAN_HTML = r"""<!DOCTYPE html>
     startBtn:   document.getElementById('startBtn'),
     manualLink: document.getElementById('manualLink'),
     cancelBtn:  document.getElementById('cancel'),
+    captureBtn: document.getElementById('captureBtn'),
     reader:     document.getElementById('reader'),
   };
 
@@ -323,6 +329,78 @@ _SCAN_HTML = r"""<!DOCTYPE html>
   // handler so iOS WKWebView treats it as a user-initiated gesture. Don't
   // wrap it in a Promise / setTimeout / requestAnimationFrame — the gesture
   // token gets lost across an async boundary.
+  //
+  // Scanner config (Fix #1–#3, #6 from PLAN_barcode_scanner_fix.md):
+  //  - qrbox: callback that returns 80% × 30% of viewport (capped 220–480 ×
+  //    100–140) so 1-D EAN bars resolve to dozens of pixels instead of a
+  //    handful. Biggest single win for camera scans.
+  //  - fps: 25 (library default) — gives autofocus / auto-exposure room to
+  //    settle between decode attempts.
+  //  - showTorchButtonIfSupported: true — library renders the 🔦 button
+  //    itself when the device exposes torch capability; hidden otherwise.
+  //  - formats: EAN_13 / EAN_8 / UPC_A / UPC_E + Code_128 + ITF for wider
+  //    coverage of store-printed and multipack barcodes.
+  var scanner = null;          // shared across start + capture so we can stop/restart cleanly
+  var capturing = false;       // re-entrancy guard for the shutter button
+  var missCount = 0;           // counter for the live-scan progress pulse (Fix #4)
+
+  function buildFormats() {
+    if (typeof Html5QrcodeSupportedFormats === 'undefined') return undefined;
+    var f = [
+      Html5QrcodeSupportedFormats.EAN_13,
+      Html5QrcodeSupportedFormats.EAN_8,
+      Html5QrcodeSupportedFormats.UPC_A,
+      Html5QrcodeSupportedFormats.UPC_E,
+    ];
+    if (Html5QrcodeSupportedFormats.CODE_128 !== undefined) f.push(Html5QrcodeSupportedFormats.CODE_128);
+    if (Html5QrcodeSupportedFormats.ITF !== undefined)      f.push(Html5QrcodeSupportedFormats.ITF);
+    return f;
+  }
+
+  function buildConfig() {
+    return {
+      fps: 25,
+      qrbox: function (vw, vh) {
+        var w = Math.floor(Math.min(Math.max(vw * 0.80, 220), 480));
+        var h = Math.floor(Math.min(Math.max(vh * 0.30, 100), 140));
+        return { width: w, height: h };
+      },
+      formatsToSupport: buildFormats(),
+      showTorchButtonIfSupported: true,
+    };
+  }
+
+  function onLiveDecodeSuccess(decodedText) {
+    // Stop and clean up so the next decode doesn't fire while we POST.
+    if (scanner) { scanner.stop().catch(function () {}); }
+    var clean = String(decodedText || '').replace(/\D/g, '');
+    if (!/^\d{8,13}$/.test(clean)) {
+      setBanner(L.not_a_barcode, 'err');
+      els.startBtn.disabled = false;
+      return;
+    }
+    postEan(clean);
+  }
+
+  function onLiveDecodeMiss(_decodeErr) {
+    // Fix #4: cheap progress indicator. Throttled to ~1 Hz so we don't
+    // thrash the DOM at fps:25.
+    missCount++;
+    if (missCount % 25 === 0) {
+      setBanner(L.scanning_pulse, '');
+    }
+  }
+
+  function startLive() {
+    if (!scanner) scanner = new Html5Qrcode("reader");
+    return scanner.start(
+      { facingMode: 'environment' },
+      buildConfig(),
+      onLiveDecodeSuccess,
+      onLiveDecodeMiss
+    );
+  }
+
   els.startBtn.addEventListener('click', function () {
     if (typeof Html5Qrcode === 'undefined') {
       setBanner(L.scanner_failed, 'err');
@@ -332,30 +410,9 @@ _SCAN_HTML = r"""<!DOCTYPE html>
     els.startBtn.disabled = true;
     setBanner(L.allow_camera, '');
 
-    var formats = (typeof Html5QrcodeSupportedFormats !== 'undefined') ? [
-      Html5QrcodeSupportedFormats.EAN_13,
-      Html5QrcodeSupportedFormats.EAN_8,
-      Html5QrcodeSupportedFormats.UPC_A,
-      Html5QrcodeSupportedFormats.UPC_E,
-    ] : undefined;
-
-    var scanner = new Html5Qrcode("reader");
-    scanner.start(
-      { facingMode: 'environment' },
-      { fps: 10, qrbox: { width: 240, height: 140 }, formatsToSupport: formats },
-      function (decodedText) {
-        scanner.stop().catch(function () {});
-        var clean = String(decodedText || '').replace(/\D/g, '');
-        if (!/^\d{8,13}$/.test(clean)) {
-          setBanner(L.not_a_barcode, 'err');
-          els.startBtn.disabled = false;
-          return;
-        }
-        postEan(clean);
-      },
-      function (_decodeErr) { /* per-frame decode misses are normal — ignore */ }
-    ).then(function () {
+    startLive().then(function () {
       els.splash.classList.add('hidden');
+      els.captureBtn.classList.remove('hidden');
       setBanner(L.searching_in_frame, '');
     }).catch(function (err) {
       var raw = (err && err.message) || (err && err.name) || String(err);
@@ -372,6 +429,51 @@ _SCAN_HTML = r"""<!DOCTYPE html>
       setBanner(hint, 'err');
       els.startBtn.disabled = false;
       debugAlert('camera error: ' + raw);
+    });
+  });
+
+  // ---------- Shutter: force-decode the current video frame (Fix #5) ----------
+  // The library can't run scanFile() while start() is active on the same
+  // instance, so we stop the live scanner, snapshot the video to a canvas,
+  // run scanFile on the resulting JPEG, and either post the EAN or restart
+  // the live scanner so the user can keep trying.
+  els.captureBtn.addEventListener('click', function () {
+    if (capturing || !scanner) return;
+    capturing = true;
+    setBanner(L.capturing, '');
+
+    scanner.stop().catch(function () {}).then(function () {
+      var video = els.reader && els.reader.querySelector('video');
+      if (!video || !video.videoWidth || !video.videoHeight) {
+        throw new Error('no video frame available');
+      }
+      var canvas = document.createElement('canvas');
+      canvas.width  = video.videoWidth;
+      canvas.height = video.videoHeight;
+      canvas.getContext('2d').drawImage(video, 0, 0);
+      return new Promise(function (resolve, reject) {
+        canvas.toBlob(function (blob) {
+          if (!blob) return reject(new Error('canvas.toBlob returned null'));
+          resolve(new File([blob], 'capture.jpg', { type: 'image/jpeg' }));
+        }, 'image/jpeg', 0.92);
+      });
+    }).then(function (file) {
+      // scanFile returns the decoded text on success or rejects on miss.
+      return scanner.scanFile(file, /* showImage */ false);
+    }).then(function (decodedText) {
+      var clean = String(decodedText || '').replace(/\D/g, '');
+      if (!/^\d{8,13}$/.test(clean)) {
+        setBanner(L.capture_miss, 'err');
+        return startLive().then(function () { setBanner(L.searching_in_frame, ''); });
+      }
+      postEan(clean);
+    }).catch(function (err) {
+      debugAlert('capture error: ' + ((err && err.message) || err));
+      setBanner(L.capture_miss, 'err');
+      // Restart the live scanner so the user can keep trying without re-tapping Start.
+      return startLive().then(function () { setBanner(L.searching_in_frame, ''); }).catch(function () {});
+    }).then(function () {
+      capturing = false;
     });
   });
 

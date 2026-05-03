@@ -505,6 +505,10 @@
   "scan.cam_unavailable":       "Camera unavailable on this device. Type the code manually.",
   "scan.cam_unsupported":       "This browser doesn't support the camera. Type the code manually.",
   "scan.cam_other":             "Camera: {raw}. Try again or type the digits manually.",
+  "scan.scanning_pulse":        "🔎 Scanning… hold the barcode steady inside the frame.",
+  "scan.capturing":             "📷 Capturing — looking for a barcode…",
+  "scan.capture_miss":          "🤔 Didn't recognize a barcode in that shot. Try again or type the digits manually.",
+  "scan.capture_btn":           "📷 Capture",
 
   "dash.bootstrap_loading":      "Loading…",
   "dash.bootstrap_err_title":    "Couldn't open Dashboard",

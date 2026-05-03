@@ -308,6 +308,24 @@ def _load_day_blob(conn, user_id: int, date_str: str) -> dict:
     }
 
 
+def _fiber_sugar_targets(profile: dict, cal_target: int) -> tuple[int, int]:
+    """Per-user daily fiber goal and added-sugar cap.
+
+    Fiber: 14 g per 1000 kcal (USDA Dietary Guidelines for Americans), clamped
+    to 20–45 g. Sex-agnostic on purpose — scales naturally with the user's
+    calorie target so men (typically higher target) end up around 28–38 g and
+    women around 22–28 g.
+
+    Sugar: AHA added-sugar caps — 25 g for females, 36 g for males. Defaults
+    to 36 g (the more lenient bound) when sex is unset, so users don't get
+    falsely flagged as "over" before completing their profile.
+    """
+    fiber = max(20, min(45, round(cal_target * 14 / 1000)))
+    sex = (profile.get("sex") or "").lower()
+    sugar = 25 if sex.startswith("f") else 36
+    return int(fiber), int(sugar)
+
+
 def _build_streak_line(streak: Optional[dict], locale: str) -> Optional[str]:
     """Pre-render the streak line server-side. Returns None to hide the row.
 
@@ -831,11 +849,14 @@ def _render_dashboard(user: dict, nonce: str = "", locale: str = "en") -> str:
         "weekly_delta_kg":  profile.get("weekly_delta_kg"),  # raw user setting (None if unset)
         "goals":            goals_blob,
     }
+    fiber_target, sugar_target = _fiber_sugar_targets(profile, cal_target)
     targets_blob = {
         "calories":  cal_target,
         "protein":   int(macros.get("protein") or 0),
         "carbs":     int(macros.get("carbs") or 0),
         "fat":       int(macros.get("fat") or 0),
+        "fiber_g":   fiber_target,
+        "sugar_g":   sugar_target,
         "water_ml":  water_target,
     }
 
@@ -1686,18 +1707,23 @@ _DASHBOARD_HTML = r"""<!DOCTYPE html>
     setMacro('cFill', 'cVal', c, t.carbs);
     setMacro('fFill', 'fVal', f, t.fat);
 
-    // Fiber: target = 25 g (WHO), bar fills toward 100% (positive macro).
+    // Fiber: server-computed 14 g per 1000 kcal (USDA), clamped 20-45 g.
+    // Bar fills toward 100% — positive macro, classify like protein.
     var fb = log.fiber || 0;
-    setMacro('fbFill', 'fbVal', fb, 25);
-    // Sugar: cap = 25 g, classify_class flips to 'over' once exceeded.
+    var fbTarget = t.fiber_g || 28;
+    setMacro('fbFill', 'fbVal', fb, fbTarget);
+    // Sugar: server-computed AHA cap (25 g female / 36 g male).
+    // Bar fills toward the cap; turns red once exceeded.
     var sg = log.sugar || 0;
+    var sgTarget = t.sugar_g || 36;
     var sgFill = document.getElementById('sgFill');
     var sgVal  = document.getElementById('sgVal');
     if (sgFill && sgVal) {
-      var sgRatio = Math.max(0, Math.min(1.2, sg / 25));
+      var sgRatio = Math.max(0, Math.min(1.2, sg / sgTarget));
       sgFill.style.width = Math.min(100, sgRatio * 100).toFixed(1) + '%';
-      sgFill.className = 'macro-fill ' + (sg > 25 ? 'over' : (sg > 18 ? 'warn' : 'ok'));
-      sgVal.textContent = Math.round(sg) + ' / 25 ' + L.unit_g;
+      var sgPct = (sg / sgTarget) * 100;
+      sgFill.className = 'macro-fill ' + (sgPct > 100 ? 'over' : (sgPct > 75 ? 'warn' : 'ok'));
+      sgVal.textContent = Math.round(sg) + ' / ' + Math.round(sgTarget) + ' ' + L.unit_g;
     }
 
     renderSummary(blob);

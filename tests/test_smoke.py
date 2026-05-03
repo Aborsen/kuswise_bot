@@ -1780,6 +1780,32 @@ def test_dashboard_meal_to_json_includes_warning_arrays():
     assert dash._meal_to_json({})["crohn_warnings"] == []
 
 
+def test_dashboard_fiber_sugar_targets_per_user():
+    """Fiber scales with calorie target (14 g/1000 kcal, clamped 20-45 g);
+    sugar uses AHA caps (25 g female / 36 g male, default 36 g unset)."""
+    from api import dashboard as dash
+
+    # Female on 1800 kcal → fiber 25 (1800*14/1000 = 25.2 → 25), sugar 25.
+    fb, sg = dash._fiber_sugar_targets({"sex": "female"}, 1800)
+    assert fb == 25 and sg == 25
+
+    # Male on 2800 kcal → fiber 39 → clamped to... 39 is < 45 so stays 39, sugar 36.
+    fb, sg = dash._fiber_sugar_targets({"sex": "male"}, 2800)
+    assert fb == 39 and sg == 36
+
+    # Sex unset → defaults to male sugar cap (more lenient).
+    _, sg = dash._fiber_sugar_targets({}, 2000)
+    assert sg == 36
+
+    # Tiny calorie target → fiber clamped at 20 g floor.
+    fb, _ = dash._fiber_sugar_targets({"sex": "female"}, 1000)
+    assert fb == 20
+
+    # Very high calorie target → fiber clamped at 45 g ceiling.
+    fb, _ = dash._fiber_sugar_targets({"sex": "male"}, 4000)
+    assert fb == 45
+
+
 def test_dashboard_build_streak_line_plural_handling():
     """Streak line is pre-rendered server-side with correct UA plurals."""
     from api import dashboard as dash

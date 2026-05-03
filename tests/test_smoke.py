@@ -1780,6 +1780,150 @@ def test_dashboard_meal_to_json_includes_warning_arrays():
     assert dash._meal_to_json({})["crohn_warnings"] == []
 
 
+def test_classify_ai_intent_question_marker():
+    """`?` and English/UA question prefixes route to 'ask'."""
+    from api.webhook import _classify_ai_intent
+    assert _classify_ai_intent("how much protein for cutting?") == "ask"
+    assert _classify_ai_intent("Why is fiber important") == "ask"
+    assert _classify_ai_intent("what should I eat tonight") == "ask"
+    # UA question prefix.
+    assert _classify_ai_intent("як приготувати курку") == "ask"  # noqa: i18n
+    assert _classify_ai_intent("чому фіброз небезпечний") == "ask"  # noqa: i18n
+    # Plain trailing question mark.
+    assert _classify_ai_intent("dinner ideas?") == "ask"
+
+
+def test_classify_ai_intent_comma_list_routes_to_fridge():
+    """Two or more commas in the text → fridge mode."""
+    from api.webhook import _classify_ai_intent
+    assert _classify_ai_intent("chicken, rice, broccoli") == "fridge"
+    assert _classify_ai_intent("eggs, bread, butter, salt") == "fridge"
+    # Single comma is NOT enough — could be a sentence aside.
+    assert _classify_ai_intent("chicken with rice, please") == "suggest"
+
+
+def test_classify_ai_intent_empty_and_default():
+    """Empty / whitespace text and plain sentences default to 'suggest'."""
+    from api.webhook import _classify_ai_intent
+    assert _classify_ai_intent("") == "suggest"
+    assert _classify_ai_intent("   ") == "suggest"
+    assert _classify_ai_intent("low-carb dinner") == "suggest"
+    assert _classify_ai_intent("щось низькокалорійне") == "suggest"  # noqa: i18n
+
+
+def test_ai_menu_keyboard_shape():
+    """4 single-button rows with the 4 expected callback_data values; both locales render."""
+    from lib.telegram_helpers import ai_menu_keyboard
+    for locale in ("en", "uk"):
+        kb = ai_menu_keyboard(locale=locale)
+        rows = kb["inline_keyboard"]
+        assert len(rows) == 4
+        assert [row[0]["callback_data"] for row in rows] == [
+            "ai:ask", "ai:suggest", "ai:fridge", "ai:cancel"
+        ]
+        # Every label resolves through i18n (no raw key strings leaked).
+        for row in rows:
+            assert row[0]["text"]
+            assert not row[0]["text"].startswith("ai_menu.")
+
+
+def test_button_text_to_command_routes_ask_button_to_ai_chooser():
+    """The merged AI button (label = btn.ask in both locales) now maps to /ai,
+    not /ask. /ask still works as a typed slash command."""
+    from lib.formatters import button_text_to_command, btn_label
+    assert button_text_to_command(btn_label("ask", locale="en")) == "/ai"
+    assert button_text_to_command(btn_label("ask", locale="uk")) == "/ai"
+    # New 'recent' button maps to /recent.
+    assert button_text_to_command(btn_label("recent", locale="en")) == "/recent"
+    assert button_text_to_command(btn_label("recent", locale="uk")) == "/recent"
+    # Legacy 'suggest' label still dispatches (stale-keyboard fallback).
+    assert button_text_to_command(btn_label("suggest", locale="en")) == "/suggest_meal"
+
+
+def test_main_menu_keyboard_dropped_meal_idea_and_added_recent():
+    """New layout: row 3 is [profile, recent]; suggest button removed."""
+    from lib.telegram_helpers import main_menu_keyboard
+    from lib.formatters import btn_label
+    kb = main_menu_keyboard(locale="en")
+    rows = kb["keyboard"]
+    flat = [b["text"] for row in rows for b in row]
+    assert btn_label("recent", locale="en") in flat
+    # Meal-idea button no longer surfaces in the visible keyboard.
+    assert btn_label("suggest", locale="en") not in flat
+    # AI button (rendered as btn.ask label) is still there.
+    assert btn_label("ask", locale="en") in flat
+
+
+def test_save_recipe_db_round_trip_shape():
+    """save_recipe captures (user_id, body, pantry, created_at) in that order."""
+    captured = []
+
+    class _Cur:
+        def __init__(self, conn): self.conn = conn
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def execute(self, sql, params=None):
+            captured.append((sql, params))
+        def fetchone(self):
+            return (42,)
+
+    class _Conn:
+        def cursor(self): return _Cur(self)
+        def commit(self): pass
+
+    new_id = db.save_recipe(_Conn(), user_id=7, body="pasta with...", pantry="chicken")
+    assert new_id == 42
+    sql, params = captured[0]
+    assert "INSERT INTO saved_recipes" in sql
+    assert params[0] == 7
+    assert params[1] == "pasta with..."
+    assert params[2] == "chicken"
+    # Timestamp is ISO 8601 UTC.
+    assert "T" in params[3] and "+00:00" in params[3]
+
+
+def test_count_chat_messages_uses_60_minute_window():
+    """count_chat_messages issues a SELECT with a cutoff timestamp ~60 min back."""
+    captured = []
+
+    class _Cur:
+        def __init__(self, conn): self.conn = conn
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def execute(self, sql, params=None):
+            captured.append((sql, params))
+        def fetchone(self):
+            return (3,)
+
+    class _Conn:
+        def cursor(self): return _Cur(self)
+        def commit(self): pass
+
+    n = db.count_chat_messages(_Conn(), user_id=7)
+    assert n == 3
+    sql, params = captured[0]
+    assert "SELECT COUNT(*)" in sql
+    assert "chat_sessions" in sql
+    assert params[0] == 7
+    # cutoff is an ISO 8601 string roughly 60 minutes before now.
+    assert "T" in params[1]
+
+
+def test_clear_chat_history_returns_rowcount():
+    """clear_chat_history returns the DELETE rowcount."""
+    class _Cur:
+        rowcount = 5
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def execute(self, *a): pass
+
+    class _Conn:
+        def cursor(self): return _Cur()
+        def commit(self): pass
+
+    assert db.clear_chat_history(_Conn(), user_id=7) == 5
+
+
 def test_dashboard_fiber_sugar_targets_per_user():
     """Fiber scales with calorie target (14 g/1000 kcal, clamped 20-45 g);
     sugar uses AHA caps (25 g female / 36 g male, default 36 g unset)."""

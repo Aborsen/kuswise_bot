@@ -1146,6 +1146,7 @@ def format_day_detail(date: str, meals: list[dict], locale: str = "en") -> str:
 _BTN_NAMES: tuple[str, ...] = (
     "ask", "fav", "water", "today", "suggest", "profile",
     "yesterday", "meals", "dashboard", "scan", "menu_ocr",
+    "recent",
 )
 
 
@@ -1185,11 +1186,15 @@ def button_text_to_command(text: str) -> str | None:
     # Build reverse map: label → command. Cached at first call.
     cache = button_text_to_command.__dict__.get("_cache")
     if cache is None:
+        # AI menu merge: "ask" button (the keyboard "🤖 Ask AI" label)
+        # now opens the combined /ai chooser instead of going straight to
+        # /ask. /ask remains available as a typed slash command.
         name_to_cmd = {
-            "ask": "/ask", "fav": "/fav", "meals": "/meals",
+            "ask": "/ai", "fav": "/fav", "meals": "/meals",
             "profile": "/profile", "suggest": "/suggest_meal",
             "scan": "/scan", "menu_ocr": "/menu",
             "today": "/today", "yesterday": "/yesterday",
+            "recent": "/recent",
         }
         cache = {}
         for name, cmd in name_to_cmd.items():

@@ -68,6 +68,12 @@ from lib.database import (
     insert_weight,
     set_awaiting_input,
     set_nudge_optout,
+    count_chat_messages,
+    clear_chat_history,
+    save_recipe,
+    list_recipes,
+    get_recipe,
+    delete_recipe,
 )
 from lib.telegram_helpers import (
     send_message,
@@ -108,6 +114,7 @@ from lib.telegram_helpers import (
     language_keyboard,
     lang_confirm_keyboard,
     nudge_optout_keyboard,
+    ai_menu_keyboard,
 )
 from lib.openai_vision import (
     analyze_photo,
@@ -120,7 +127,7 @@ from lib.openai_vision import (
 )
 from lib.openai_voice import transcribe_voice
 from lib.openai_nutrition import suggest_meal
-from lib.openai_chat import ask_chat
+from lib.openai_chat import ask_chat, ask_chat_with_photo
 from lib.log import setup_sentry, http_handler, error
 from lib.formatters import (
     welcome_message,
@@ -251,6 +258,48 @@ def _enforce_quota(conn, chat_id: int, user_id: int, action: str) -> bool:
 
 
 MAX_WEBHOOK_BYTES = 512 * 1024
+
+
+# AI menu smart intent: question prefixes the classifier recognizes.
+# Heuristic only — no model call. Falls through to "suggest" on ambiguity.
+_INTENT_QUESTION_PREFIXES: tuple[str, ...] = (
+    "how ", "why ", "what ", "when ", "where ", "can ", "is ",
+    "should ", "could ", "do ", "does ", "are ", "will ", "would ",
+    "як ",  "чому ", "що ", "коли ", "де ", "чи ", "скільки ",  # noqa: i18n
+    "хочу знати", "розкажи",  # noqa: i18n
+)
+
+
+def _is_reply_to_ask_prompt(message: dict) -> bool:
+    """True if the user is replying to one of our /ask prompts (UA or EN).
+    Used by the photo and voice routers to dispatch to the Q&A handlers
+    instead of the default meal-logging path."""
+    reply_to = message.get("reply_to_message") or {}
+    if not reply_to.get("from", {}).get("is_bot"):
+        return False
+    text = reply_to.get("text") or ""
+    prompts = (
+        i18n_mod.t("ask.prompt", "uk"),
+        i18n_mod.t("ask.prompt", "en"),
+    )
+    return text in prompts
+
+
+def _classify_ai_intent(text: str) -> str:
+    """Return one of: 'ask' / 'fridge' / 'suggest'.
+
+    Used by the AI-menu chooser when the user types or speaks instead of
+    tapping a button. Falls through to 'suggest' on ambiguity — the
+    safest default since /suggest_meal accepts free-form `extra_hint`.
+    """
+    s = (text or "").strip().lower()
+    if not s:
+        return "suggest"
+    if "?" in s or any(s.startswith(p) for p in _INTENT_QUESTION_PREFIXES):
+        return "ask"
+    if s.count(",") >= 2:
+        return "fridge"
+    return "suggest"
 
 
 setup_sentry("webhook")
@@ -405,6 +454,12 @@ def process_update(update: dict) -> None:
             handle_plan_pantry_photo(conn, message, profile)
             return
 
+        # Photo replied to /ask prompt: vision-aware Q&A instead of meal log.
+        # Caption (if any) is the question; missing caption uses default.
+        if message.get("photo") and _is_reply_to_ask_prompt(message):
+            handle_ask_photo(conn, message, profile)
+            return
+
         if message.get("photo"):
             handle_photo(conn, message)
             return
@@ -513,6 +568,29 @@ def process_update(update: dict) -> None:
             and text.lower().strip() != "/cancel"
         ):
             handle_fridge_input(conn, chat_id, user_id, text, profile)
+            return
+
+        # AI menu smart intent: user tapped the merged AI button (or ran /ai),
+        # then typed a message instead of tapping a chooser button. Classify
+        # the text and route to the right handler. Slash commands fall
+        # through to the command dispatcher below.
+        if (
+            user_id
+            and profile
+            and profile.get("awaiting_input_type") == "ai_menu"
+            and text
+            and not text.startswith("/")
+        ):
+            set_awaiting_input(conn, user_id, None)
+            intent = _classify_ai_intent(text)
+            if intent == "ask":
+                handle_ask(conn, user_id, chat_id, text, profile)
+            elif intent == "fridge":
+                _run_suggest_meal(conn, chat_id, user_id, profile,
+                                  pantry=text, extra_hint="")
+            else:  # 'suggest'
+                _run_suggest_meal(conn, chat_id, user_id, profile,
+                                  pantry="", extra_hint=text)
             return
 
         # Free-text IANA timezone from /timezone → Other zone.
@@ -1182,6 +1260,86 @@ def handle_nudge_callback(conn, cb: dict, profile: dict) -> None:
     answer_callback_query(cb_id)
 
 
+def handle_ai_menu_callback(conn, cb: dict, profile: dict) -> None:
+    """Combined-AI-helper chooser. Routes to existing /ask, /suggest_meal,
+    or fridge-mode handlers — no new flows underneath."""
+    cb_id = cb["id"]
+    user_id = cb["from"]["id"]
+    message = cb.get("message", {})
+    chat_id = message.get("chat", {}).get("id", user_id)
+    data = cb.get("data", "")
+
+    # Always clear the transient ai_menu FSM state so the smart-intent
+    # text/voice classifier doesn't fire on the user's next message
+    # after they've explicitly picked a branch.
+    if (profile or {}).get("awaiting_input_type") == "ai_menu":
+        set_awaiting_input(conn, user_id, None)
+
+    if data == "ai:cancel":
+        answer_callback_query(cb_id, _t("toast.cancelled", profile))
+        return
+
+    if data == "ai:ask":
+        answer_callback_query(cb_id)
+        send_message(
+            chat_id,
+            _t("ask.prompt", profile),
+            reply_markup={"force_reply": True, "selective": True},
+        )
+        return
+
+    if data == "ai:suggest":
+        answer_callback_query(cb_id)
+        _run_suggest_meal(conn, chat_id, user_id, profile, pantry="", extra_hint="")
+        return
+
+    if data == "ai:fridge":
+        answer_callback_query(cb_id, _t("toast.waiting_pantry", profile))
+        set_awaiting_input(conn, user_id, "fridge_ingredients")
+        send_message(chat_id, _t("fridge.prompt", profile))
+        return
+
+    answer_callback_query(cb_id)
+
+
+def handle_recipes_callback(conn, cb: dict, profile: dict) -> None:
+    """Saved-recipes browser callbacks: rec:show:<id> and rec:del:<id>."""
+    cb_id = cb["id"]
+    user_id = cb["from"]["id"]
+    message = cb.get("message", {})
+    chat_id = message.get("chat", {}).get("id", user_id)
+    data = cb.get("data", "")
+
+    if data.startswith("rec:show:"):
+        try:
+            rec_id = int(data.split(":", 2)[2])
+        except (ValueError, IndexError):
+            answer_callback_query(cb_id, _t("toast.unknown_action", profile))
+            return
+        rec = get_recipe(conn, user_id, rec_id)
+        if not rec:
+            answer_callback_query(cb_id, _t("toast.unknown_action", profile))
+            return
+        answer_callback_query(cb_id)
+        send_message(chat_id, rec["body"])
+        return
+
+    if data.startswith("rec:del:"):
+        try:
+            rec_id = int(data.split(":", 2)[2])
+        except (ValueError, IndexError):
+            answer_callback_query(cb_id, _t("toast.unknown_action", profile))
+            return
+        ok = delete_recipe(conn, user_id, rec_id)
+        if ok:
+            answer_callback_query(cb_id, _t("toast.cleared", profile))
+        else:
+            answer_callback_query(cb_id, _t("toast.unknown_action", profile))
+        return
+
+    answer_callback_query(cb_id)
+
+
 def handle_health_input(conn, chat_id: int, user_id: int, text: str, kind: str) -> None:
     """Free-text input for /health → set allergens / conditions.
 
@@ -1336,6 +1494,22 @@ def handle_voice(conn, message: dict) -> None:
         handle_plan_pantry_input(conn, chat_id, user_id, transcript, fresh_profile)
         return
 
+    # AI menu smart intent: user tapped the merged AI button (or /ai), then
+    # sent voice instead of tapping a chooser button. Classify the
+    # transcript and route to the right handler.
+    if pantry_state == "ai_menu" and transcript:
+        set_awaiting_input(conn, user_id, None)
+        intent = _classify_ai_intent(transcript)
+        if intent == "ask":
+            handle_ask(conn, user_id, chat_id, transcript, fresh_profile)
+        elif intent == "fridge":
+            _run_suggest_meal(conn, chat_id, user_id, fresh_profile,
+                              pantry=transcript, extra_hint="")
+        else:  # 'suggest'
+            _run_suggest_meal(conn, chat_id, user_id, fresh_profile,
+                              pantry="", extra_hint=transcript)
+        return
+
     # If this voice message is a reply to the /ask prompt, treat transcript as a
     # chat question and route to handle_ask instead of the meal-logging flow.
     reply_to = message.get("reply_to_message") or {}
@@ -1408,6 +1582,10 @@ def handle_callback(conn, cb: dict) -> None:
         handle_language_callback(conn, cb, profile)
     elif data.startswith("nudge:"):
         handle_nudge_callback(conn, cb, profile)
+    elif data.startswith("ai:"):
+        handle_ai_menu_callback(conn, cb, profile)
+    elif data.startswith("rec:"):
+        handle_recipes_callback(conn, cb, profile)
     elif data == "noop":
         answer_callback_query(cb["id"])
     else:
@@ -2396,6 +2574,19 @@ def handle_suggest_callback(conn, cb: dict, profile: dict) -> None:
                           pantry="", extra_hint=_t("fridge.variation_hint", profile))
         return
 
+    if data == "suggest:save":
+        body = (message or {}).get("text") or ""
+        if not body.strip():
+            answer_callback_query(cb_id, _t("toast.something_wrong", profile))
+            return
+        try:
+            save_recipe(conn, user_id, body, pantry="")
+            answer_callback_query(cb_id, _t("toast.recipe_saved", profile))
+        except Exception as e:
+            error("save_recipe_failed", exc=e, user_id=user_id)
+            answer_callback_query(cb_id, _t("toast.something_wrong", profile))
+        return
+
     answer_callback_query(cb_id, _t("toast.unknown_action", profile))
 
 
@@ -2851,6 +3042,46 @@ def handle_command(conn, message: dict, text: str, first_name: str | None, profi
         send_message(chat_id, _t(key, profile))
         return
 
+    if cmd == "/ai":
+        # Combined AI helper. Sets transient FSM state so the smart-intent
+        # text/voice classifier can fire if the user types instead of tapping.
+        set_awaiting_input(conn, user_id, "ai_menu")
+        send_message(
+            chat_id,
+            _t("ai_menu.title", profile),
+            reply_markup=ai_menu_keyboard(locale=i18n_mod.locale_of(profile)),
+        )
+        return
+
+    if cmd == "/ask_new":
+        n = clear_chat_history(conn, user_id)
+        key = "ask.thread_cleared" if n > 0 else "ask.thread_already_empty"
+        send_message(chat_id, _t(key, profile))
+        return
+
+    if cmd == "/recipes":
+        rows = list_recipes(conn, user_id, limit=20)
+        locale = i18n_mod.locale_of(profile)
+        if not rows:
+            send_message(chat_id, _t("recipes.empty", profile))
+            return
+        header = _t("recipes.header", profile, n=len(rows))
+        lines = [header]
+        kb_rows: list[list[dict]] = []
+        for i, r in enumerate(rows, 1):
+            when = (r["created_at"] or "")[:10]  # YYYY-MM-DD
+            first_line = (r["body"] or "").strip().splitlines()[0] if r["body"] else ""
+            preview = first_line[:80]
+            lines.append(f"{i}. <i>{_html.escape(when, quote=False)}</i> — {_html.escape(preview, quote=False)}")
+            kb_rows.append([
+                {"text": _t("recipes.show_full_n", profile, n=i),
+                 "callback_data": f"rec:show:{r['id']}"},
+                {"text": i18n_mod.t("inline_button.delete_n", locale=locale, n=i),
+                 "callback_data": f"rec:del:{r['id']}"},
+            ])
+        send_message(chat_id, "\n".join(lines), reply_markup={"inline_keyboard": kb_rows})
+        return
+
     send_message(chat_id, _t("errors.unknown_command", profile))
 
 
@@ -3096,7 +3327,60 @@ def handle_ask(conn, user_id: int, chat_id: int, question: str, profile: dict) -
 
     append_chat_message(conn, user_id, "user", question)
     append_chat_message(conn, user_id, "assistant", answer)
-    send_message(chat_id, answer, reply_markup=main_menu_keyboard(locale=i18n_mod.locale_of(profile)))
+    # Thread indicator: gate at n>=4 (= 2 user-turns + 2 assistant-turns) so the
+    # very first reply doesn't get cluttered.
+    n = count_chat_messages(conn, user_id, minutes=60)
+    footer = ("\n\n" + _t("ask.thread_footer", profile, n=n)) if n >= 4 else ""
+    send_message(chat_id, answer + footer,
+                 reply_markup=main_menu_keyboard(locale=i18n_mod.locale_of(profile)))
+
+
+def handle_ask_photo(conn, message: dict, profile: dict) -> None:
+    """Vision-aware /ask: photo replied to ask.prompt → vision Q&A.
+    Caption (if any) is the question; missing caption uses the default
+    `ask.photo_default_question` i18n key."""
+    chat_id = message["chat"]["id"]
+    user_id = message["from"]["id"]
+    if not _enforce_quota(conn, chat_id, user_id, "ask"):
+        return
+    photos = message.get("photo") or []
+    largest = photos[-1] if photos else {}
+    file_id = largest.get("file_id")
+    if not file_id:
+        return
+    file_size = int(largest.get("file_size") or 0)
+    if file_size > MAX_PHOTO_BYTES:
+        send_message(chat_id, _t("errors.photo_too_large", profile))
+        return
+    caption = (message.get("caption") or "").strip() \
+        or _t("ask.photo_default_question", profile)
+    send_message(chat_id, _t("ask.thinking", profile))
+    try:
+        image_bytes = get_file_bytes(file_id)
+    except Exception as e:
+        error("ask_photo_getfile_failed", exc=e, user_id=user_id)
+        send_message(chat_id, _t("ask.error", profile),
+                     reply_markup=main_menu_keyboard(locale=i18n_mod.locale_of(profile)))
+        return
+    try:
+        today_log = get_today_log(conn, user_id)
+        today_meals = get_meals_for_day(conn, user_id, today_log["date"])
+        history = get_chat_history(conn, user_id, limit=10, minutes=60)
+        answer = ask_chat_with_photo(
+            image_bytes, caption, history, today_log, today_meals, profile,
+            language=language_for_locale(i18n_mod.locale_of(profile)),
+        )
+    except Exception as e:
+        error("ask_photo_failed", exc=e, user_id=user_id)
+        send_message(chat_id, _t("ask.error", profile),
+                     reply_markup=main_menu_keyboard(locale=i18n_mod.locale_of(profile)))
+        return
+    append_chat_message(conn, user_id, "user", f"[photo] {caption}")
+    append_chat_message(conn, user_id, "assistant", answer)
+    n = count_chat_messages(conn, user_id, minutes=60)
+    footer = ("\n\n" + _t("ask.thread_footer", profile, n=n)) if n >= 4 else ""
+    send_message(chat_id, answer + footer,
+                 reply_markup=main_menu_keyboard(locale=i18n_mod.locale_of(profile)))
 
 
 # ---------- Weight / goal edit ----------

@@ -237,15 +237,29 @@ def cancel_only_keyboard(locale: str = "en") -> dict:
 def suggest_followup_keyboard(locale: str = "en") -> dict:
     """F-11: shown under each /suggest_meal result.
 
-    Lets the user re-run with their own ingredients ("fridge mode") or
-    request a variation. We avoid a generic "swap X→Y" parsing step
-    (would require post-processing the model's output) — a "different
-    version" hint goes a long way for free.
+    Lets the user re-run with their own ingredients ("fridge mode"),
+    request a variation, or ⭐ save the recipe to their personal library
+    (browsable via /recipes).
     """
     return {
         "inline_keyboard": [
             [{"text": _i18n_t("suggest.from_my_pantry",   locale=locale), "callback_data": "suggest:fridge"}],
             [{"text": _i18n_t("suggest.different_version", locale=locale), "callback_data": "suggest:variation"}],
+            [{"text": _i18n_t("suggest.save_recipe",      locale=locale), "callback_data": "suggest:save"}],
+        ]
+    }
+
+
+def ai_menu_keyboard(locale: str = "en") -> dict:
+    """Combined AI-helper chooser. Opened by tapping the merged
+    Ask-AI reply button or by typing /ai. Each branch routes to an
+    existing handler; no new flows."""
+    return {
+        "inline_keyboard": [
+            [{"text": _i18n_t("ai_menu.choice_ask",     locale=locale), "callback_data": "ai:ask"}],
+            [{"text": _i18n_t("ai_menu.choice_suggest", locale=locale), "callback_data": "ai:suggest"}],
+            [{"text": _i18n_t("ai_menu.choice_fridge",  locale=locale), "callback_data": "ai:fridge"}],
+            [{"text": _i18n_t("ai_menu.choice_cancel",  locale=locale), "callback_data": "ai:cancel"}],
         ]
     }
 
@@ -384,7 +398,7 @@ def main_menu_keyboard(locale: str = "en") -> dict:
         "keyboard": [
             [{"text": btn_label("ask", locale=locale)},     {"text": btn_label("fav", locale=locale)}],
             [{"text": btn_label("water", locale=locale)},   {"text": btn_label("meals", locale=locale)}],
-            [{"text": btn_label("suggest", locale=locale)}, {"text": btn_label("profile", locale=locale)}],
+            [{"text": btn_label("profile", locale=locale)}, {"text": btn_label("recent", locale=locale)}],
         ],
         "resize_keyboard": True,
         "is_persistent": True,

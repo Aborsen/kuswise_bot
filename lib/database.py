@@ -963,6 +963,20 @@ def save_recommendation(conn, user_id: int, date: str, text: str) -> None:
     conn.commit()
 
 
+def get_latest_recommendation(conn, user_id: int) -> Optional[dict]:
+    """Most recent end-of-day coach note for the user, or None."""
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT date, recommendation FROM daily_recommendations "
+            "WHERE user_id = %s ORDER BY date DESC LIMIT 1",
+            (user_id,),
+        )
+        row = cur.fetchone()
+    if not row:
+        return None
+    return {"date": row[0], "recommendation": row[1]}
+
+
 def mark_summary_sent(conn, user_id: int, date: str) -> None:
     with conn.cursor() as cur:
         cur.execute(

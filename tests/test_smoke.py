@@ -1706,3 +1706,109 @@ def test_profile_columns_include_nudge_fields():
     assert "last_nudge_sent_at" in db.PROFILE_COLUMNS
     assert "nudge_optout" in db._ALLOWED_PROFILE_FIELDS
     assert "last_nudge_sent_at" in db._ALLOWED_PROFILE_FIELDS
+
+
+# ---------- dashboard sprint 1 helpers ----------
+
+def test_get_latest_recommendation_select_shape():
+    """Helper issues a single SELECT with user_id param and unwraps the row."""
+    captured = []
+
+    class _Cur:
+        def __init__(self, row): self._row = row
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def execute(self, sql, params): captured.append((sql, params))
+        def fetchone(self): return self._row
+
+    class _Conn:
+        def __init__(self, row): self.row = row
+        def cursor(self): return _Cur(self.row)
+        def commit(self): pass
+
+    # Row present.
+    conn = _Conn(("2026-04-30", "eat more protein"))
+    out = db.get_latest_recommendation(conn, user_id=42)
+    assert out == {"date": "2026-04-30", "recommendation": "eat more protein"}
+    assert captured[0][1] == (42,)
+    assert "ORDER BY date DESC LIMIT 1" in captured[0][0]
+
+    # No row → None.
+    conn2 = _Conn(None)
+    assert db.get_latest_recommendation(conn2, user_id=42) is None
+
+
+def test_dashboard_normalize_log_includes_fiber_sugar():
+    """REV #9: _normalize_log must read renamed 'fiber'/'sugar' keys.
+
+    The DB columns are total_fiber_g / total_sugar_g but get_log_for_date
+    renames them on its return dict. If _normalize_log read the column
+    names, the bars would render permanently empty.
+    """
+    from api import dashboard as dash
+    log = {
+        "date": "2026-05-02",
+        "calories": 1800, "protein": 120, "carbs": 200, "fat": 60,
+        "fiber": 18, "sugar": 22, "meal_count": 3,
+    }
+    out = dash._normalize_log(log)
+    assert out["fiber"] == 18
+    assert out["sugar"] == 22
+    # And the contract still holds for everything else.
+    assert out["calories"] == 1800
+    assert out["meal_count"] == 3
+
+
+def test_dashboard_meal_to_json_includes_warning_arrays():
+    """_meal_to_json must surface allergen_warnings + crohn_warnings as lists.
+
+    By the time meal dicts reach _meal_to_json, get_meals_for_day has
+    already json.loads'd the warning columns, so they're Python lists.
+    """
+    from api import dashboard as dash
+    m = {
+        "id": 7, "meal_type": "lunch", "description": "salad",
+        "calories": 300, "protein_g": 20, "carbs_g": 15, "fat_g": 12,
+        "allergen_warnings": ["peanut"],
+        "crohn_warnings": ["high-fiber"],
+    }
+    out = dash._meal_to_json(m)
+    assert out["allergen_warnings"] == ["peanut"]
+    assert out["crohn_warnings"] == ["high-fiber"]
+    # Empty / missing → empty list (defensive).
+    assert dash._meal_to_json({})["allergen_warnings"] == []
+    assert dash._meal_to_json({})["crohn_warnings"] == []
+
+
+def test_dashboard_build_streak_line_plural_handling():
+    """Streak line is pre-rendered server-side with correct UA plurals."""
+    from api import dashboard as dash
+    # No streak data → None (row hidden).
+    assert dash._build_streak_line(None, "en") is None
+    assert dash._build_streak_line({"current_streak": 0, "longest_streak": 0,
+                                    "freeze_days_remaining": 0}, "en") is None
+
+    # English: 1 day, no best, no freezes.
+    out = dash._build_streak_line(
+        {"current_streak": 1, "longest_streak": 1, "freeze_days_remaining": 0},
+        "en"
+    )
+    assert "1 day" in out and "freeze" not in out
+
+    # English: 5 days, best 12, 2 freezes.
+    out = dash._build_streak_line(
+        {"current_streak": 5, "longest_streak": 12, "freeze_days_remaining": 2},
+        "en"
+    )
+    assert "5 days" in out
+    assert "12 days" in out
+    assert "2 freezes" in out
+
+    # Ukrainian: 5 must use "днів" (many), 2 → "дні" (few), 21 → "день" (singular).
+    out_uk = dash._build_streak_line(
+        {"current_streak": 5, "longest_streak": 12, "freeze_days_remaining": 2},
+        "uk"
+    )
+    assert "5" in out_uk
+    # 12 hits the 11-14 exception → "many" form ("днів" not "дні")
+    assert "12" in out_uk

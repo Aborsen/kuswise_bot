@@ -19,6 +19,7 @@ import traceback
 import urllib.parse
 from datetime import datetime, timedelta, date as _date
 from http.server import BaseHTTPRequestHandler
+from typing import Optional
 
 _THIS = os.path.dirname(os.path.abspath(__file__))
 _ROOT = os.path.dirname(_THIS)
@@ -45,9 +46,13 @@ from lib.database import (
     get_adherence_stats,
     add_water,
     remove_last_water_today,
+    get_streak,
+    get_weight_history,
+    get_latest_recommendation,
 )
 from lib.log import setup_sentry, http_handler, error
 from lib.i18n import t as _i18n_t
+from lib.i18n.plurals import pluralize
 
 
 # F-2b Chunk 7: keys whose values get serialized into the dashboard JS so the
@@ -92,6 +97,8 @@ _DASHBOARD_JS_KEYS = (
     "dash.streak_singular", "dash.streak_few", "dash.streak_many",
     "dash.unit_kcal", "dash.unit_g", "dash.unit_kg", "dash.unit_l",
     "dash.unit_cm",
+    "dash.coach_title_with_date", "dash.warn_chip", "dash.warn_detail_label",
+    "dash.cal_bars_axis", "dash.weight_chart_empty",
 )
 
 
@@ -256,18 +263,28 @@ def _is_valid_date_in_range(date_str: str) -> bool:
 
 
 def _normalize_log(log_dict: dict) -> dict:
-    """Coerce the log dict from get_log_for_date() into JSON-safe numbers."""
+    """Coerce the log dict from get_log_for_date() into JSON-safe numbers.
+
+    REV #9: get_log_for_date renames the DB columns total_fiber_g / total_sugar_g
+    to fiber / sugar on the dict, so we read those keys here. Adding total_*
+    column names to .get() would silently coalesce to 0 for everyone.
+    """
     return {
         "date": str(log_dict.get("date") or ""),
         "calories": round(log_dict.get("calories") or 0),
         "protein": round(log_dict.get("protein") or 0),
         "carbs": round(log_dict.get("carbs") or 0),
         "fat": round(log_dict.get("fat") or 0),
+        "fiber": round(log_dict.get("fiber") or 0),
+        "sugar": round(log_dict.get("sugar") or 0),
         "meal_count": int(log_dict.get("meal_count") or 0),
     }
 
 
 def _meal_to_json(m: dict) -> dict:
+    # allergen_warnings / crohn_warnings are stored as TEXT containing JSON
+    # arrays; get_meals_for_day already json.loads them so by the time they
+    # reach this helper they are Python lists.
     return {
         "id": m.get("id"),
         "meal_type": m.get("meal_type") or "",
@@ -276,6 +293,8 @@ def _meal_to_json(m: dict) -> dict:
         "protein_g": round(m.get("protein_g") or 0),
         "carbs_g": round(m.get("carbs_g") or 0),
         "fat_g": round(m.get("fat_g") or 0),
+        "allergen_warnings": list(m.get("allergen_warnings") or []),
+        "crohn_warnings": list(m.get("crohn_warnings") or []),
     }
 
 
@@ -291,9 +310,49 @@ def _load_day_blob(conn, user_id: int, date_str: str) -> dict:
     }
 
 
+# Allowed water-add amounts (ml). Validated server-side; arbitrary values rejected.
+_WATER_ADD_ALLOWED = (150, 250, 500, 750)
+_WATER_ADD_ACTIONS = tuple(f"water_add:{n}" for n in _WATER_ADD_ALLOWED)
+
+
+def _build_streak_line(streak: Optional[dict], locale: str) -> Optional[str]:
+    """Pre-render the streak line server-side. Returns None to hide the row.
+
+    Plurals are rendered server-side (Slavic 1/few/many) — JS has no plural
+    helper, so we ship the finished string in `data.streak_line`.
+    """
+    if not streak:
+        return None
+    cur_n = int(streak.get("current_streak") or 0)
+    best_n = int(streak.get("longest_streak") or 0)
+    fr_n = int(streak.get("freeze_days_remaining") or 0)
+    if cur_n < 1 and best_n < 1:
+        return None
+
+    day_s = _i18n_t("dash.day_w_singular", locale=locale)
+    day_f = _i18n_t("dash.day_w_few", locale=locale)
+    day_m = _i18n_t("dash.day_w_many", locale=locale)
+    fr_s = _i18n_t("dash.freeze_w_singular", locale=locale)
+    fr_f = _i18n_t("dash.freeze_w_few", locale=locale)
+    fr_m = _i18n_t("dash.freeze_w_many", locale=locale)
+    best_label = _i18n_t("dash.streak_best_label", locale=locale)
+
+    cur_w = pluralize(cur_n, locale, day_s, day_f, day_m)
+    best_w = pluralize(best_n, locale, day_s, day_f, day_m)
+    fr_w = pluralize(fr_n, locale, fr_s, fr_f, fr_m)
+
+    parts = [f"🔥 {cur_n} {cur_w}"]
+    if best_n > cur_n:
+        parts.append(f"🏆 {best_label} {best_n} {best_w}")
+    if fr_n > 0:
+        parts.append(f"❄️ {fr_n} {fr_w}")
+    return " · ".join(parts)
+
+
 def _dispatch_action(conn, user_id: int, action: str) -> None:
-    if action == "water_add:250":
-        add_water(conn, user_id, 250)
+    if action in _WATER_ADD_ACTIONS:
+        amount = int(action.split(":", 1)[1])
+        add_water(conn, user_id, amount)
     elif action == "water_undo":
         remove_last_water_today(conn, user_id)
 
@@ -439,7 +498,7 @@ class handler(BaseHTTPRequestHandler):
             return
 
         # Mutating actions: dispatch then re-render the full dashboard
-        if action in ("water_add:250", "water_undo"):
+        if action in _WATER_ADD_ACTIONS or action == "water_undo":
             conn = get_conn()
             try:
                 _dispatch_action(conn, user_id, action)
@@ -680,6 +739,15 @@ def _render_dashboard(user: dict, nonce: str = "", locale: str = "en") -> str:
         history_30_rows = get_history(conn, user_id, days=PRELOAD_DAYS)
         water_target = int(get_water_target(conn, user_id) or 2000)
         adherence = get_adherence_stats(conn, user_id)
+        # REV #2: fetch weight history INSIDE the try block. The previous
+        # implementation called get_weight_history after conn.close() and
+        # the broad except below silently swallowed the resulting error,
+        # leaving goals projection (weeks-to-goal, projected date, status)
+        # permanently empty for every user. One fetch, reused for both
+        # goals_blob math and the new top-level weight_history field.
+        weight_history_rows = get_weight_history(conn, user_id, limit=90)
+        streak_row = get_streak(conn, user_id)
+        latest_rec = get_latest_recommendation(conn, user_id)
     finally:
         try:
             conn.close()
@@ -714,12 +782,13 @@ def _render_dashboard(user: dict, nonce: str = "", locale: str = "en") -> str:
 
     target_weight_kg = profile.get("target_weight_kg")
     # F-5: pull goals projection + actual progress so the dashboard can render
-    # weeks-to-goal, projected date, and on-track classification.
+    # weeks-to-goal, projected date, and on-track classification. REV #10: the
+    # try/except still wraps the math (NaN, division-by-zero) — just no longer
+    # also masking a closed-conn fetch error.
     try:
         from lib import goals as _goals
-        from lib.database import get_weight_history as _gw
         _proj = _goals.projection_for_profile(profile)
-        _hist = _gw(conn, user_id, limit=20)
+        _hist = weight_history_rows[:20]  # what goals.py needs
         _actual = _goals.actual_weekly_delta(_hist, window_weeks=4)
         _status = (
             _goals.classify_actual_vs_target(_actual, _proj.weekly_delta_kg)
@@ -742,6 +811,22 @@ def _render_dashboard(user: dict, nonce: str = "", locale: str = "en") -> str:
             "actual_weekly_delta": None,
             "status":              None,
         }
+
+    # Top-level weight_history for the chart on the Profile tab. Reuses the
+    # same fetch as goals_blob — one DB hit, two consumers.
+    weight_history = []
+    for r in weight_history_rows:
+        try:
+            recorded = r.get("recorded_at")
+            if hasattr(recorded, "isoformat"):
+                recorded = recorded.isoformat()
+            weight_history.append({
+                "recorded_at": recorded,
+                "weight_kg": float(r.get("weight_kg") or 0),
+            })
+        except Exception:
+            continue
+    streak_line = _build_streak_line(streak_row, locale)
     profile_blob = {
         "age":              profile.get("age"),
         "sex":              profile.get("sex") or "",
@@ -772,6 +857,9 @@ def _render_dashboard(user: dict, nonce: str = "", locale: str = "en") -> str:
         "today_blob":        today_blob,
         "history":           history_map,
         "adherence":         adherence,
+        "weight_history":    weight_history,
+        "streak_line":       streak_line,
+        "latest_recommendation": latest_rec,
         "goal_ua":           _goal_label(goal, locale=locale),
         "sex_ua":            _sex_label(profile.get("sex"), locale=locale),
         "bot_url":           f"https://t.me/{TELEGRAM_BOT_USERNAME}" if TELEGRAM_BOT_USERNAME else "",
@@ -793,6 +881,11 @@ def _render_dashboard(user: dict, nonce: str = "", locale: str = "en") -> str:
         "MACRO_PROTEIN":      _i18n_t("dash.macro_protein",      locale=locale),
         "MACRO_CARBS":        _i18n_t("dash.macro_carbs",        locale=locale),
         "MACRO_FAT":          _i18n_t("dash.macro_fat",          locale=locale),
+        "MACRO_FIBER":        _i18n_t("dash.macro_fiber",        locale=locale),
+        "MACRO_SUGAR":        _i18n_t("dash.macro_sugar",        locale=locale),
+        "COACH_TITLE":        _i18n_t("dash.coach_title",        locale=locale),
+        "CAL_BARS_TITLE":     _i18n_t("dash.cal_bars_title",     locale=locale),
+        "WEIGHT_CHART_TITLE": _i18n_t("dash.weight_chart_title", locale=locale),
         "SUMMARY":            _i18n_t("dash.summary",            locale=locale),
         "SHARE_H2":           _i18n_t("dash.share_h2",           locale=locale),
         "SHARE_BLURB":        _i18n_t("dash.share_blurb",        locale=locale),
@@ -948,6 +1041,57 @@ _DASHBOARD_HTML = r"""<!DOCTYPE html>
     height: 100%; background: linear-gradient(90deg, #3b82f6, #60a5fa);
     border-radius: 3px; width: 0%;
   }
+  .water-buttons {
+    display: flex; flex-wrap: wrap; gap: 6px;
+    justify-content: center; margin-top: 10px;
+  }
+  .water-buttons button {
+    flex: 0 0 auto; min-width: 48px;
+    padding: 6px 10px; border-radius: 8px;
+    font-size: 0.85em; font-weight: 600;
+    border: 1px solid var(--separator);
+    background: var(--bg-secondary); color: var(--text);
+    cursor: pointer;
+  }
+  .water-buttons button:active { transform: scale(0.96); }
+  .water-buttons .water-undo {
+    color: var(--hint);
+  }
+  .coach-card summary {
+    cursor: pointer; font-weight: 600; font-size: 0.95em;
+    color: var(--text); list-style: none;
+  }
+  .coach-card summary::-webkit-details-marker { display: none; }
+  .coach-card summary::after {
+    content: '▾'; float: right; color: var(--hint); font-size: 0.85em;
+  }
+  .coach-card[open] summary::after { content: '▴'; }
+  .coach-card .coach-body {
+    margin: 8px 0 0; color: var(--text); font-size: 0.9em; line-height: 1.4;
+    white-space: pre-wrap;
+  }
+  .warn-chip {
+    display: inline-block; margin-left: 6px; padding: 1px 6px;
+    border-radius: 4px; font-size: 0.75em; font-weight: 600;
+    background: rgba(255, 187, 51, 0.15); color: var(--warn);
+    cursor: pointer; user-select: none;
+  }
+  .warn-detail {
+    margin-top: 4px; padding: 6px 8px; border-radius: 6px;
+    background: var(--bg-secondary); font-size: 0.8em; color: var(--hint);
+    line-height: 1.4;
+  }
+  .cal-bars { width: 100%; height: 80px; display: block; }
+  .cal-bars rect { rx: 1.5; }
+  .cal-bars rect.ok    { fill: var(--ok); }
+  .cal-bars rect.warn  { fill: var(--warn); }
+  .cal-bars rect.over  { fill: var(--over); }
+  .cal-bars rect.empty { fill: var(--track); opacity: 0.5; }
+  .weight-chart { width: 100%; height: 120px; display: block; }
+  .weight-chart .raw { fill: none; stroke: var(--accent); stroke-width: 1; opacity: 0.4; }
+  .weight-chart .avg { fill: none; stroke: var(--accent); stroke-width: 2; }
+  .weight-chart .dot { fill: var(--accent); }
+  .weight-empty { color: var(--hint); font-size: 0.9em; text-align: center; padding: 18px 8px; }
 
   .ring-wrap {
     position: relative; width: 140px; height: 140px;
@@ -1105,6 +1249,14 @@ _DASHBOARD_HTML = r"""<!DOCTYPE html>
         <div class="value" id="waterValue">__LABEL_WATER_UNITS__</div>
         <div class="unit" id="waterPct">0 %</div>
         <div class="mini-bar"><div class="mini-fill" id="waterBar"></div></div>
+        <form method="POST" action="" class="water-buttons" id="waterForm">
+          <input type="hidden" name="initData" id="waterInitData" value="">
+          <button type="submit" name="action" value="water_add:150">+150</button>
+          <button type="submit" name="action" value="water_add:250">+250</button>
+          <button type="submit" name="action" value="water_add:500">+500</button>
+          <button type="submit" name="action" value="water_add:750">+750</button>
+          <button type="submit" name="action" value="water_undo" class="water-undo">↶</button>
+        </form>
       </div>
       <div class="ring-wrap">
         <svg class="ring-svg" width="140" height="140" viewBox="0 0 140 140">
@@ -1128,6 +1280,11 @@ _DASHBOARD_HTML = r"""<!DOCTYPE html>
       </div>
     </div>
 
+    <details class="card coach-card" id="coachCard" hidden>
+      <summary id="coachTitle">__LABEL_COACH_TITLE__</summary>
+      <p class="coach-body" id="coachBody">—</p>
+    </details>
+
     <div class="card">
       <h2>__LABEL_MACRO_H2__</h2>
       <div class="macro">
@@ -1145,6 +1302,21 @@ _DASHBOARD_HTML = r"""<!DOCTYPE html>
         <div class="macro-bar"><div id="fFill" class="macro-fill"></div></div>
         <b class="macro-val" id="fVal">—</b>
       </div>
+      <div class="macro">
+        <span class="macro-name">__LABEL_MACRO_FIBER__</span>
+        <div class="macro-bar"><div id="fbFill" class="macro-fill"></div></div>
+        <b class="macro-val" id="fbVal">—</b>
+      </div>
+      <div class="macro">
+        <span class="macro-name">__LABEL_MACRO_SUGAR__</span>
+        <div class="macro-bar"><div id="sgFill" class="macro-fill"></div></div>
+        <b class="macro-val" id="sgVal">—</b>
+      </div>
+    </div>
+
+    <div class="card cal-bars-card">
+      <h2>__LABEL_CAL_BARS_TITLE__</h2>
+      <svg class="cal-bars" id="calBarsSvg" viewBox="0 0 300 80" preserveAspectRatio="none"></svg>
     </div>
 
     <div class="card summary-card">
@@ -1201,6 +1373,12 @@ _DASHBOARD_HTML = r"""<!DOCTYPE html>
     <div class="card" id="streakCard" hidden>
       <h2>__LABEL_STREAK_H2__</h2>
       <span class="streak-pill" id="streakValue">__LABEL_STREAK_PILL_ZERO__</span>
+    </div>
+
+    <div class="card" id="weightChartCard">
+      <h2>__LABEL_WEIGHT_CHART_TITLE__</h2>
+      <svg class="weight-chart" id="weightChartSvg" viewBox="0 0 300 120" preserveAspectRatio="none"></svg>
+      <p class="weight-empty" id="weightChartEmpty" hidden>—</p>
     </div>
   </section>
 </main>
@@ -1375,6 +1553,38 @@ _DASHBOARD_HTML = r"""<!DOCTYPE html>
   });
 
   // --- Share-week button (overview tab) ---
+  // Hydrate the water-quick-add form so its POST carries the initData
+  // signature. Form action is the current URL so the response replaces
+  // the page, same pattern as the bootstrap form.
+  (function(){
+    var wf = document.getElementById('waterForm');
+    var wi = document.getElementById('waterInitData');
+    if (wf && wi) {
+      wf.action = window.location.pathname + window.location.search;
+      wi.value = (TG && TG.initData) || '';
+    }
+  })();
+
+  // Coach note (latest end-of-day summary). Hidden when no row exists.
+  (function(){
+    var card = document.getElementById('coachCard');
+    var rec  = DATA.latest_recommendation;
+    if (!card) return;
+    if (!rec || !rec.recommendation) {
+      card.hidden = true;
+      return;
+    }
+    card.hidden = false;
+    var titleEl = document.getElementById('coachTitle');
+    var bodyEl  = document.getElementById('coachBody');
+    if (titleEl) {
+      titleEl.textContent = fmt(L.coach_title_with_date, {
+        date: formatLongDate(rec.date)
+      });
+    }
+    if (bodyEl) bodyEl.textContent = rec.recommendation;
+  })();
+
   // Posts action=request_recap → server generates the PNG via the same
   // build_user_recap path /recap uses, sends it to the user's chat, and
   // we just close the Mini App so they see it land.
@@ -1519,7 +1729,64 @@ _DASHBOARD_HTML = r"""<!DOCTYPE html>
     setMacro('cFill', 'cVal', c, t.carbs);
     setMacro('fFill', 'fVal', f, t.fat);
 
+    // Fiber: target = 25 g (WHO), bar fills toward 100% (positive macro).
+    var fb = log.fiber || 0;
+    setMacro('fbFill', 'fbVal', fb, 25);
+    // Sugar: cap = 25 g, classify_class flips to 'over' once exceeded.
+    var sg = log.sugar || 0;
+    var sgFill = document.getElementById('sgFill');
+    var sgVal  = document.getElementById('sgVal');
+    if (sgFill && sgVal) {
+      var sgRatio = Math.max(0, Math.min(1.2, sg / 25));
+      sgFill.style.width = Math.min(100, sgRatio * 100).toFixed(1) + '%';
+      sgFill.className = 'macro-fill ' + (sg > 25 ? 'over' : (sg > 18 ? 'warn' : 'ok'));
+      sgVal.textContent = Math.round(sg) + ' / 25 ' + L.unit_g;
+    }
+
     renderSummary(blob);
+    renderCalBars();
+  }
+
+  function renderCalBars() {
+    var svg = document.getElementById('calBarsSvg');
+    if (!svg) return;
+    var aggregates = DATA.history || {};
+    var todayISO = DATA.today;
+    var target = (DATA.targets && DATA.targets.calories) || 2000;
+    // Enumerate the last 30 dates (sparse-dict iteration pitfall — REV #4).
+    var days = [];
+    var d = fromISO(todayISO);
+    for (var i = 0; i < 30; i++) {
+      var iso = toISO(d);
+      var row = aggregates[iso] || {has_meals: false, calories: 0};
+      days.push({iso: iso, has_meals: !!row.has_meals, cal: row.calories || 0});
+      d = addDays(d, -1);
+    }
+    days.reverse();
+    var w = 300, h = 80, gap = 1.5;
+    var barW = (w - gap * (days.length - 1)) / days.length;
+    var rects = '';
+    for (var j = 0; j < days.length; j++) {
+      var day = days[j];
+      var cls;
+      if (!day.has_meals) cls = 'empty';
+      else {
+        var pct = target > 0 ? (day.cal / target) * 100 : 0;
+        if (pct >= 130 || pct < 70) cls = 'over';
+        else if (pct >= 90 && pct <= 110) cls = 'ok';
+        else cls = 'warn';
+      }
+      var bh = day.has_meals
+        ? Math.max(2, Math.min(h, (day.cal / Math.max(target * 1.3, 1)) * h))
+        : 2;
+      var x = j * (barW + gap);
+      var y = h - bh;
+      rects += '<rect class="' + cls + '" x="' + x.toFixed(2) +
+               '" y="' + y.toFixed(2) +
+               '" width="' + barW.toFixed(2) +
+               '" height="' + bh.toFixed(2) + '"></rect>';
+    }
+    svg.innerHTML = rects;
   }
 
   function renderSummary(blob) {
@@ -1623,33 +1890,46 @@ _DASHBOARD_HTML = r"""<!DOCTYPE html>
     });
 
     var html = '';
+    function mealRowHTML(m) {
+      var pct = calTarget > 0 ? Math.round((m.calories / calTarget) * 100) : 0;
+      var warns = (m.allergen_warnings || []).concat(m.crohn_warnings || []);
+      var chip = '';
+      var detail = '';
+      if (warns.length) {
+        chip = '<span class="warn-chip" data-mealid="' + esc(m.id) + '">' +
+               fmt(L.warn_chip, {n: warns.length}) + '</span>';
+        detail = '<div class="warn-detail" id="warn-' + esc(m.id) + '" hidden>' +
+                 '<b>' + esc(L.warn_detail_label) + ':</b> ' +
+                 warns.map(esc).join(', ') + '</div>';
+      }
+      return '<div class="meal-row">' +
+             '<div class="meal-desc">' + esc(m.description) + chip + '</div>' +
+             '<div class="meal-kcal">' + Math.round(m.calories) + ' ' + L.unit_kcal + '</div>' +
+             '<div class="meal-pct">' + pct + ' %</div>' +
+             '</div>' + detail;
+    }
     MEAL_TYPE_ORDER.forEach(function(t){
       var arr = grouped[t];
       if (arr.length === 0) return;
       html += '<div class="meal-group"><h3>' + MEAL_TYPE_LABELS[t] + '</h3>';
-      arr.forEach(function(m){
-        var pct = calTarget > 0 ? Math.round((m.calories / calTarget) * 100) : 0;
-        html += '<div class="meal-row">' +
-                '<div class="meal-desc">' + esc(m.description) + '</div>' +
-                '<div class="meal-kcal">' + Math.round(m.calories) + ' ' + L.unit_kcal + '</div>' +
-                '<div class="meal-pct">' + pct + ' %</div>' +
-                '</div>';
-      });
+      arr.forEach(function(m){ html += mealRowHTML(m); });
       html += '</div>';
     });
     if (unknown.length) {
       html += '<div class="meal-group"><h3>' + L.meal_other + '</h3>';
-      unknown.forEach(function(m){
-        var pct = calTarget > 0 ? Math.round((m.calories / calTarget) * 100) : 0;
-        html += '<div class="meal-row">' +
-                '<div class="meal-desc">' + esc(m.description) + '</div>' +
-                '<div class="meal-kcal">' + Math.round(m.calories) + ' ' + L.unit_kcal + '</div>' +
-                '<div class="meal-pct">' + pct + ' %</div>' +
-                '</div>';
-      });
+      unknown.forEach(function(m){ html += mealRowHTML(m); });
       html += '</div>';
     }
     list.innerHTML = html;
+    // Toggle warn-detail when its chip is tapped.
+    list.querySelectorAll('.warn-chip').forEach(function(chip){
+      chip.addEventListener('click', function(e){
+        e.stopPropagation();
+        var id = chip.getAttribute('data-mealid');
+        var det = document.getElementById('warn-' + id);
+        if (det) det.hidden = !det.hidden;
+      });
+    });
   }
 
   function esc(s) {
@@ -1780,17 +2060,65 @@ _DASHBOARD_HTML = r"""<!DOCTYPE html>
     }
 
     var streakCard = document.getElementById('streakCard');
-    if (a.current_streak && a.current_streak >= 2) {
-      var n = a.current_streak;
-      var streakKey;
-      if (n === 1) streakKey = L.streak_singular;
-      else if (n >= 2 && n <= 4) streakKey = L.streak_few;
-      else streakKey = L.streak_many;
+    var line = DATA.streak_line;
+    if (line) {
       streakCard.hidden = false;
-      document.getElementById('streakValue').textContent = '🔥 ' + fmt(streakKey, {n: n});
+      document.getElementById('streakValue').textContent = line;
     } else {
       streakCard.hidden = true;
     }
+
+    renderWeightChart();
+  }
+
+  function renderWeightChart() {
+    var svg = document.getElementById('weightChartSvg');
+    var empty = document.getElementById('weightChartEmpty');
+    if (!svg || !empty) return;
+    var hist = (DATA.weight_history || []).slice();
+    if (hist.length < 3) {
+      svg.innerHTML = '';
+      svg.style.display = 'none';
+      empty.textContent = L.weight_chart_empty;
+      empty.hidden = false;
+      return;
+    }
+    svg.style.display = '';
+    empty.hidden = true;
+
+    // Sort oldest-first by recorded_at (ISO string compare works).
+    hist.sort(function(a, b){
+      return String(a.recorded_at) < String(b.recorded_at) ? -1 : 1;
+    });
+
+    var w = 300, h = 120, pad = 6;
+    var weights = hist.map(function(r){ return r.weight_kg; });
+    var minW = Math.min.apply(null, weights);
+    var maxW = Math.max.apply(null, weights);
+    if (maxW - minW < 0.5) { minW -= 0.5; maxW += 0.5; }
+    var n = hist.length;
+    function xAt(i)    { return pad + (i / Math.max(n - 1, 1)) * (w - 2 * pad); }
+    function yAt(kg)   { return pad + (1 - (kg - minW) / (maxW - minW)) * (h - 2 * pad); }
+
+    // Raw line
+    var rawPts = hist.map(function(r, i){ return xAt(i).toFixed(1) + ',' + yAt(r.weight_kg).toFixed(1); }).join(' ');
+    // 7-point trailing rolling average
+    var avgPts = [];
+    for (var i = 0; i < n; i++) {
+      var lo = Math.max(0, i - 6);
+      var sum = 0, count = 0;
+      for (var j = lo; j <= i; j++) { sum += weights[j]; count++; }
+      avgPts.push(xAt(i).toFixed(1) + ',' + yAt(sum / count).toFixed(1));
+    }
+    var dots = hist.map(function(r, i){
+      return '<circle class="dot" cx="' + xAt(i).toFixed(1) +
+             '" cy="' + yAt(r.weight_kg).toFixed(1) +
+             '" r="1.5"></circle>';
+    }).join('');
+    svg.innerHTML =
+      '<polyline class="raw" points="' + rawPts + '"></polyline>' +
+      '<polyline class="avg" points="' + avgPts.join(' ') + '"></polyline>' +
+      dots;
   }
 
   function adherenceRow(label, pct) {

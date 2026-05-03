@@ -44,8 +44,6 @@ from lib.database import (
     get_water_target,
     get_history,
     get_adherence_stats,
-    add_water,
-    remove_last_water_today,
     get_streak,
     get_weight_history,
     get_latest_recommendation,
@@ -310,11 +308,6 @@ def _load_day_blob(conn, user_id: int, date_str: str) -> dict:
     }
 
 
-# Allowed water-add amounts (ml). Validated server-side; arbitrary values rejected.
-_WATER_ADD_ALLOWED = (150, 250, 500, 750)
-_WATER_ADD_ACTIONS = tuple(f"water_add:{n}" for n in _WATER_ADD_ALLOWED)
-
-
 def _build_streak_line(streak: Optional[dict], locale: str) -> Optional[str]:
     """Pre-render the streak line server-side. Returns None to hide the row.
 
@@ -350,11 +343,10 @@ def _build_streak_line(streak: Optional[dict], locale: str) -> Optional[str]:
 
 
 def _dispatch_action(conn, user_id: int, action: str) -> None:
-    if action in _WATER_ADD_ACTIONS:
-        amount = int(action.split(":", 1)[1])
-        add_water(conn, user_id, amount)
-    elif action == "water_undo":
-        remove_last_water_today(conn, user_id)
+    # No mutating actions from the dashboard right now — water logging
+    # lives in the bot only. Kept as a stub so the POST handler can call
+    # it harmlessly and we have a single place to wire future actions.
+    return
 
 
 class handler(BaseHTTPRequestHandler):
@@ -497,8 +489,9 @@ class handler(BaseHTTPRequestHandler):
             self._send_json(200, blob)
             return
 
-        # Mutating actions: dispatch then re-render the full dashboard
-        if action in _WATER_ADD_ACTIONS or action == "water_undo":
+        # No mutating actions from the dashboard right now (water logging
+        # is bot-only). Empty tuple keeps the dispatch path future-proof.
+        if action in ():
             conn = get_conn()
             try:
                 _dispatch_action(conn, user_id, action)
@@ -1041,22 +1034,6 @@ _DASHBOARD_HTML = r"""<!DOCTYPE html>
     height: 100%; background: linear-gradient(90deg, #3b82f6, #60a5fa);
     border-radius: 3px; width: 0%;
   }
-  .water-buttons {
-    display: flex; flex-wrap: wrap; gap: 6px;
-    justify-content: center; margin-top: 10px;
-  }
-  .water-buttons button {
-    flex: 0 0 auto; min-width: 48px;
-    padding: 6px 10px; border-radius: 8px;
-    font-size: 0.85em; font-weight: 600;
-    border: 1px solid var(--separator);
-    background: var(--bg-secondary); color: var(--text);
-    cursor: pointer;
-  }
-  .water-buttons button:active { transform: scale(0.96); }
-  .water-buttons .water-undo {
-    color: var(--hint);
-  }
   .coach-card summary {
     cursor: pointer; font-weight: 600; font-size: 0.95em;
     color: var(--text); list-style: none;
@@ -1249,14 +1226,6 @@ _DASHBOARD_HTML = r"""<!DOCTYPE html>
         <div class="value" id="waterValue">__LABEL_WATER_UNITS__</div>
         <div class="unit" id="waterPct">0 %</div>
         <div class="mini-bar"><div class="mini-fill" id="waterBar"></div></div>
-        <form method="POST" action="" class="water-buttons" id="waterForm">
-          <input type="hidden" name="initData" id="waterInitData" value="">
-          <button type="submit" name="action" value="water_add:150">+150</button>
-          <button type="submit" name="action" value="water_add:250">+250</button>
-          <button type="submit" name="action" value="water_add:500">+500</button>
-          <button type="submit" name="action" value="water_add:750">+750</button>
-          <button type="submit" name="action" value="water_undo" class="water-undo">↶</button>
-        </form>
       </div>
       <div class="ring-wrap">
         <svg class="ring-svg" width="140" height="140" viewBox="0 0 140 140">
@@ -1553,18 +1522,6 @@ _DASHBOARD_HTML = r"""<!DOCTYPE html>
   });
 
   // --- Share-week button (overview tab) ---
-  // Hydrate the water-quick-add form so its POST carries the initData
-  // signature. Form action is the current URL so the response replaces
-  // the page, same pattern as the bootstrap form.
-  (function(){
-    var wf = document.getElementById('waterForm');
-    var wi = document.getElementById('waterInitData');
-    if (wf && wi) {
-      wf.action = window.location.pathname + window.location.search;
-      wi.value = (TG && TG.initData) || '';
-    }
-  })();
-
   // Coach note (latest end-of-day summary). Hidden when no row exists.
   (function(){
     var card = document.getElementById('coachCard');

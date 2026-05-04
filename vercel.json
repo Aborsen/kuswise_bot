@@ -16,10 +16,6 @@
     {
       "path": "/api/cron_weekly_weight_checkin",
       "schedule": "0 6 * * 1"
-    },
-    {
-      "path": "/api/cron_inactivity_nudge",
-      "schedule": "0 17 * * *"
     }
   ]
 }

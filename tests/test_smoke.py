@@ -1611,7 +1611,7 @@ def test_render_recap_png_returns_pngsignature_bytes():
     assert out[:8] == b"\x89PNG\r\n\x1a\n"  # PNG magic bytes
 
 
-# ---------- inactivity nudge helpers (lib.database) ----------
+# ---------- nudge helpers (lib.database) ----------
 
 class _NudgeCursor:
     """SQL-capturing cursor: records every (sql, params) and returns
@@ -1631,6 +1631,8 @@ class _NudgeCursor:
             return self.conn.rows
         return []
     def fetchone(self):
+        if "COUNT(*)" in (self._last_sql or ""):
+            return self.conn.rows[0] if self.conn.rows else None
         return None
 
 
@@ -1645,45 +1647,43 @@ class _NudgeConn:
         self.commits += 1
 
 
-def test_get_inactive_users_filters_and_param_shape():
-    """Query gates onboarded users + opt-in + meal-cutoff + nudge-cutoff,
-    in that order of params."""
-    conn = _NudgeConn(rows=[
-        (101, "en", None, None),
-        (102, "uk", "2026-04-20T10:00:00+00:00", "2026-05-01T08:00:00+00:00"),
-    ])
-    out = db.get_inactive_users(conn, hours=24, cooldown_days=7)
+def test_get_zero_day_active_users_filters_and_shape():
+    """Query gates onboarded + opt-in + no-meal-today + ≥1-meal-in-7-days,
+    and returns a list of {user_id, lang} dicts."""
+    conn = _NudgeConn(rows=[(201, "en"), (202, "uk")])
+    out = db.get_zero_day_active_users(conn)
     assert len(conn.calls) == 1
     sql, params = conn.calls[0]
     # Critical filters all present:
     assert "onboarding_step = 'done'" in sql
     assert "daily_calorie_target IS NOT NULL" in sql
     assert "COALESCE(up.nudge_optout, 0) = 0" in sql
-    assert "MAX(m.created_at)" in sql
-    # Two cutoff params, in (meal, nudge) order — both ISO 8601 with 'T'.
+    assert "NOT EXISTS" in sql                # no meal today
+    assert "EXISTS" in sql                    # ≥1 meal in 7d
+    # Two params: today (date string) + 7-day cutoff (ISO 8601 with T/offset).
     assert isinstance(params, tuple) and len(params) == 2
-    assert "T" in params[0] and "+00:00" in params[0]
+    assert "-" in params[0]                   # YYYY-MM-DD
     assert "T" in params[1] and "+00:00" in params[1]
     # Row → dict shape.
     assert out == [
-        {"user_id": 101, "lang": "en", "last_nudge_sent_at": None, "last_meal_at": None},
-        {"user_id": 102, "lang": "uk",
-         "last_nudge_sent_at": "2026-04-20T10:00:00+00:00",
-         "last_meal_at": "2026-05-01T08:00:00+00:00"},
+        {"user_id": 201, "lang": "en"},
+        {"user_id": 202, "lang": "uk"},
     ]
 
 
-def test_mark_nudge_sent_updates_with_iso_timestamp():
-    conn = _NudgeConn()
-    db.mark_nudge_sent(conn, user_id=42)
-    assert conn.commits == 1
+def test_count_dormant_users_returns_int():
+    """Dormancy counter — single COUNT(*) query, returns the number."""
+    conn = _NudgeConn(rows=[(7,)])
+    n = db.count_dormant_users(conn)
+    assert n == 7
+    assert len(conn.calls) == 1
     sql, params = conn.calls[0]
-    assert "UPDATE user_profiles" in sql
-    assert "last_nudge_sent_at = %s" in sql
-    assert params[-1] == 42  # WHERE user_id last
-    # First param is an ISO 8601 UTC timestamp.
-    ts = params[0]
-    assert "T" in ts and "+00:00" in ts
+    assert "COUNT(*)" in sql
+    assert "onboarding_step = 'done'" in sql
+    assert "COALESCE(up.nudge_optout, 0) = 0" in sql
+    assert "NOT EXISTS" in sql                # no meal in 7d
+    assert isinstance(params, tuple) and len(params) == 1
+    assert "T" in params[0] and "+00:00" in params[0]
 
 
 def test_set_nudge_optout_writes_int_flag():

@@ -1422,56 +1422,64 @@ def get_users_due_weekly_checkin(conn, min_days_since_last: int = 6) -> list[int
     return [r[0] for r in rows]
 
 
-def get_inactive_users(
-    conn,
-    hours: int = 24,
-    cooldown_days: int = 7,
-) -> list[dict]:
-    """Onboarded, opted-in users with no meals in `hours` and no nudge in `cooldown_days`."""
-    cutoff_meal = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
-    cutoff_nudge = (datetime.now(timezone.utc) - timedelta(days=cooldown_days)).isoformat()
+def get_zero_day_active_users(conn) -> list[dict]:
+    """Onboarded, opted-in users with no meal today but ≥1 meal in the last 7 days.
+
+    Used by the consolidated daily-summary cron to send a static "you didn't
+    log today" nudge — without an AI call. Users with zero meals in the last
+    7 days are deliberately excluded (dormancy cutoff).
+    """
+    today = _today_str()
+    cutoff_7d = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
     with conn.cursor() as cur:
         cur.execute(
             """
             SELECT
                 up.user_id,
-                COALESCE(up.lang, 'en') AS lang,
-                up.last_nudge_sent_at,
-                (SELECT MAX(m.created_at) FROM meals m WHERE m.user_id = up.user_id) AS last_meal_at
+                COALESCE(up.lang, 'en') AS lang
             FROM user_profiles up
             WHERE up.onboarding_step = 'done'
               AND up.daily_calorie_target IS NOT NULL
               AND COALESCE(up.nudge_optout, 0) = 0
-              AND (
-                  (SELECT MAX(m.created_at) FROM meals m WHERE m.user_id = up.user_id) IS NULL
-                  OR (SELECT MAX(m.created_at) FROM meals m WHERE m.user_id = up.user_id) < %s
+              AND NOT EXISTS (
+                  SELECT 1 FROM meals m
+                  WHERE m.user_id = up.user_id AND m.date = %s
               )
-              AND (up.last_nudge_sent_at IS NULL OR up.last_nudge_sent_at < %s)
+              AND EXISTS (
+                  SELECT 1 FROM meals m
+                  WHERE m.user_id = up.user_id AND m.created_at >= %s
+              )
             ORDER BY up.user_id
             """,
-            (cutoff_meal, cutoff_nudge),
+            (today, cutoff_7d),
         )
         rows = cur.fetchall()
-    return [
-        {
-            "user_id": r[0],
-            "lang": r[1],
-            "last_nudge_sent_at": r[2],
-            "last_meal_at": r[3],
-        }
-        for r in rows
-    ]
+    return [{"user_id": r[0], "lang": r[1]} for r in rows]
 
 
-def mark_nudge_sent(conn, user_id: int) -> None:
-    """Stamp `last_nudge_sent_at = now()` so the cooldown window starts."""
+def count_dormant_users(conn) -> int:
+    """Onboarded, opted-in users with zero meals in the last 7 days.
+
+    Observability counter for the consolidated daily-summary cron: how many
+    users we deliberately skipped because of the 7-day dormancy cutoff.
+    """
+    cutoff_7d = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
     with conn.cursor() as cur:
         cur.execute(
-            "UPDATE user_profiles SET last_nudge_sent_at = %s, updated_at = %s "
-            "WHERE user_id = %s",
-            (_now_iso(), _now_iso(), user_id),
+            """
+            SELECT COUNT(*) FROM user_profiles up
+            WHERE up.onboarding_step = 'done'
+              AND up.daily_calorie_target IS NOT NULL
+              AND COALESCE(up.nudge_optout, 0) = 0
+              AND NOT EXISTS (
+                  SELECT 1 FROM meals m
+                  WHERE m.user_id = up.user_id AND m.created_at >= %s
+              )
+            """,
+            (cutoff_7d,),
         )
-    conn.commit()
+        row = cur.fetchone()
+    return int(row[0]) if row else 0
 
 
 def set_nudge_optout(conn, user_id: int, optout: bool) -> None:

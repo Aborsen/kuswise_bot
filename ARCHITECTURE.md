@@ -349,7 +349,7 @@ Each "F-N" tag corresponds to a feature pillar referenced throughout the codebas
 | F-10 | 3-day meal plan with pantry | `/plan`, `plan_pantry` state | `lib/mealplan.py`, `meal_plans` |
 | F-11 | Single-meal recipe suggestion | `/suggest_meal`, `fridge_ingredients` state | `lib/openai_nutrition.py:suggest_meal`, `extract_pantry_from_photo` |
 | F-12 | Weekly recap PNG card | `/recap` (chat) + share-recap button (Mini App) | `lib/recap.py` (PIL + QR) |
-| F-13 | 24h inactivity nudge + `/quiet` opt-out | daily 17:00 UTC cron, inline 🔕 button on the nudge | `api/cron_inactivity_nudge.py`, `user_profiles.nudge_optout` / `last_nudge_sent_at`, `lib/database.py:get_inactive_users / mark_nudge_sent / set_nudge_optout` |
+| F-13 | Zero-day nudge + `/quiet` opt-out | piggybacks on the 20:00 UTC `cron_daily_summary` — branch (2) sends a static `nudge.zero_today` message to opt-in users active in the last 7 days who didn't log today; dormant 7d+ are skipped | `api/cron_daily_summary.py`, `user_profiles.nudge_optout`, `lib/database.py:get_zero_day_active_users / count_dormant_users / set_nudge_optout` |
 |  — | `/ask` (free-form Q&A) | `/ask` | `lib/openai_chat.py`, `chat_sessions` |
 |  — | Water tracking | bot only — `/water` (quick-add buttons) and reply-keyboard `+250мл`. Dashboard shows a read-only display. | `water_logs`, `water_prefs` |
 
@@ -493,12 +493,13 @@ Configured in `kuswise_bot/vercel.json`:
 
 | Path | Cron | Purpose |
 |---|---|---|
-| `/api/cron_daily_summary` | `0 20 * * *` (20:00 UTC daily) | For each user with `summary_sent=0` + meals today, generate an end-of-day coaching message via OpenAI (`SUMMARY_PROMPT_TEMPLATE`) and DM it. Persists in `daily_recommendations`. Marks `summary_sent=1`. |
+| `/api/cron_daily_summary` | `0 20 * * *` (20:00 UTC daily) | Three branches per onboarded, opt-in user. Branch (1): meals today → OpenAI end-of-day coaching message (`SUMMARY_PROMPT_TEMPLATE`), persisted in `daily_recommendations`, marks `summary_sent=1`. Branch (2): zero today + ≥1 meal in last 7 days → static `nudge.zero_today` message with inline 🔕 opt-out button (no AI call). Branch (3): dormant 7+ days → skipped silently (counted via `count_dormant_users`). On Telegram `error_code in (400, 403)` for either branch, auto-opts the user out (sets `nudge_optout=1`) to stop retrying blocked / gone chats. Per-send 40 ms pacing. `/quiet` toggles the same flag. |
 | `/api/cron_midnight_reset` | `0 0 * * *` (00:00 UTC daily) | Prunes `usage_quota` (>7 days), `meal_plans` (>90 days), `menu_ocr_results` (>1 hour). Bumps `user_streaks.freeze_days_remaining` back to 3 on the 1st of each month. |
 | `/api/cron_weekly_weight_checkin` | `0 6 * * 1` (Monday 06:00 UTC) | DMs onboarded users a weight-entry prompt. Updates `user_profiles.weekly_checkin_sent_at`. |
-| `/api/cron_inactivity_nudge` | `0 17 * * *` (17:00 UTC daily) | DMs fully-onboarded, opted-in users (`onboarding_step='done'` AND `daily_calorie_target IS NOT NULL` AND `COALESCE(nudge_optout, 0) = 0`) with no meals in the last 24 h, respecting a 7-day cooldown via `last_nudge_sent_at`. Auto-opts the user out (sets `nudge_optout=1`) on Telegram `error_code in (400, 403)` to prevent infinite retries against blocked / gone chats. The message carries an inline 🔕 button (`callback_data=nudge:off`) and the user can also toggle via `/quiet`. |
 
-All four verify `CRON_SECRET` and fail-closed when it's unset.
+All three verify `CRON_SECRET` and fail-closed when it's unset.
+
+> `user_profiles.last_nudge_sent_at` is retained as a deprecated column — no longer written, no longer read. Safe to drop in a future cleanup migration.
 
 ---
 
@@ -551,10 +552,9 @@ All scripts read from `.env` / `.env.local` via `python-dotenv` and fail loudly 
 | `scan.py` | Mini App: barcode scanner page. |
 | `barcode.py` | POST endpoint for barcode lookups (Open Food Facts). |
 | `admin_stats.py` | Internal admin dashboard (HTTP Basic Auth). |
-| `cron_daily_summary.py` | End-of-day coaching summary cron. |
+| `cron_daily_summary.py` | End-of-day cron. Three branches: AI coaching summary for users with meals today, static zero-day nudge for users active in the last 7 days who didn't log today, silent skip for dormant users. Auto-opt-out on Telegram 400/403. |
 | `cron_midnight_reset.py` | Daily janitorial cron (quota / plan / cache cleanup). |
 | `cron_weekly_weight_checkin.py` | Weekly weight-prompt cron. |
-| `cron_inactivity_nudge.py` | 24h-inactivity re-engagement cron with 7-day cooldown + auto-opt-out on blocked-bot. |
 
 ### `lib/` (shared modules)
 

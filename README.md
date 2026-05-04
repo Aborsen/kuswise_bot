@@ -158,7 +158,6 @@ Telegram ─▶ POST /api/webhook ──▶ process_update
 Vercel Cron ─▶ GET /api/cron_daily_summary         (20:00 UTC daily)
 Vercel Cron ─▶ GET /api/cron_midnight_reset        (00:00 UTC daily)
 Vercel Cron ─▶ GET /api/cron_weekly_weight_checkin (06:00 UTC Mon)
-Vercel Cron ─▶ GET /api/cron_inactivity_nudge      (17:00 UTC daily)
 
 Mini App    ─▶ POST /api/dashboard  (Telegram initData HMAC-signed)
 Admin       ─▶ GET  /api/admin_stats (HTTP Basic Auth / Bearer token)
@@ -213,7 +212,7 @@ Easier in practice: push to a preview branch, test against the Vercel preview UR
 
 ```
 kuswise_bot/
-├── vercel.json                        # routes + cron schedule (4 cron jobs)
+├── vercel.json                        # routes + cron schedule (3 cron jobs)
 ├── requirements.txt                   # httpx, psycopg, openai, python-dotenv, pillow, qrcode
 ├── api/
 │   ├── webhook.py                     # Telegram updates (commands, callbacks, voice/photo/text)
@@ -221,10 +220,9 @@ kuswise_bot/
 │   ├── scan.py                        # Mini App: barcode scanner page
 │   ├── barcode.py                     # POST endpoint for OFF barcode lookups
 │   ├── admin_stats.py                 # HTML admin dashboard with Basic Auth
-│   ├── cron_daily_summary.py          # 20:00 UTC daily GPT-4o end-of-day coaching
+│   ├── cron_daily_summary.py          # 20:00 UTC daily — AI summary OR static zero-day nudge OR skip dormant
 │   ├── cron_midnight_reset.py         # 00:00 UTC daily janitorial cleanup
-│   ├── cron_weekly_weight_checkin.py  # Monday 06:00 UTC weight-prompt
-│   └── cron_inactivity_nudge.py       # 17:00 UTC daily 24h-inactivity nudge
+│   └── cron_weekly_weight_checkin.py  # Monday 06:00 UTC weight-prompt
 ├── lib/
 │   ├── config.py                      # env + prompts + LOCAL_TZ (Europe/Kyiv)
 │   ├── database.py                    # schema + CRUD (every table; idempotent init_db)

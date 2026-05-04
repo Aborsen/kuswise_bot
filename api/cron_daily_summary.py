@@ -1,9 +1,19 @@
-"""Vercel Cron endpoint — runs daily at 22:00 UTC to send end-of-day summaries."""
+"""Vercel Cron endpoint — runs daily at 20:00 UTC.
+
+Three branches per opt-in, onboarded user:
+  (1) meals today           → existing GPT-4o end-of-day summary
+  (2) zero today, active 7d → static `nudge.zero_today` message (no AI call)
+  (3) zero today, dormant 7d → skipped (counted but not messaged)
+
+Replaces the now-deleted `cron_inactivity_nudge`. Carries over its safety
+behavior: when Telegram returns 400/403 we auto-flip `nudge_optout=1` so we
+don't keep blasting blocked or vanished chats.
+"""
 import hmac
 import json
 import os
 import sys
-import traceback
+import time
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler
 
@@ -12,25 +22,30 @@ _ROOT = os.path.dirname(_THIS)
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
-from lib.config import CRON_SECRET
+from lib.config import CRON_SECRET, language_for_locale
 from lib.database import (
     get_conn,
     init_db,
     get_users_needing_summary,
+    get_zero_day_active_users,
+    count_dormant_users,
     get_today_log,
     get_meals_for_day,
     save_recommendation,
     mark_summary_sent,
+    set_nudge_optout,
     get_profile,
     profile_is_complete,
 )
-from lib.telegram_helpers import send_message
-from lib.config import language_for_locale
+from lib.telegram_helpers import send_message, nudge_optout_keyboard
 from lib.openai_nutrition import generate_daily_summary
 from lib import i18n as i18n_mod
 from lib.log import setup_sentry, http_handler, error
 
 setup_sentry("cron_daily_summary")
+
+# Telegram global rate cap is 30 msg/sec; 40ms keeps us comfortably under.
+_SEND_DELAY_S = 0.04
 
 
 def _authorized(headers) -> bool:
@@ -51,7 +66,7 @@ class handler(BaseHTTPRequestHandler):
             self.end_headers()
             return
 
-        result = {"ok": True, "sent": 0, "errors": []}
+        result = {"ok": True, "sent_summary": 0, "sent_zero_day": 0, "errors": []}
         try:
             result = run_daily_summary()
         except Exception as exc:
@@ -64,28 +79,78 @@ class handler(BaseHTTPRequestHandler):
         self.wfile.write(json.dumps(result).encode())
 
 
+def _send_with_autoptout(conn, user_id: int, text: str, reply_markup=None) -> str:
+    """Send a Telegram message and auto-opt-out on 400/403.
+
+    Returns "sent", "blocked" (auto-opted-out), or "failed".
+    """
+    resp = send_message(user_id, text, reply_markup=reply_markup) if reply_markup is not None \
+        else send_message(user_id, text)
+    if isinstance(resp, dict) and resp.get("ok") is False:
+        if resp.get("error_code") in (400, 403):
+            set_nudge_optout(conn, user_id, True)
+            return "blocked"
+        return "failed"
+    return "sent"
+
+
 def run_daily_summary() -> dict:
     conn = get_conn()
-    sent = 0
-    errors = []
+    sent_summary = 0
+    sent_zero_day = 0
+    skipped_blocked = 0
+    errors: list[dict] = []
     try:
         init_db(conn)
-        targets = get_users_needing_summary(conn)
-        for user_id, date in targets:
+
+        # Branch (1): users with meals today — full AI summary path.
+        for user_id, date in get_users_needing_summary(conn):
             try:
                 profile = get_profile(conn, user_id)
                 if not profile_is_complete(profile):
                     continue
                 log = get_today_log(conn, user_id)
                 meals = get_meals_for_day(conn, user_id, date)
-                text = generate_daily_summary(meals, log, profile, language=language_for_locale(i18n_mod.locale_of(profile)))
-                send_message(user_id, text)
+                text = generate_daily_summary(
+                    meals, log, profile,
+                    language=language_for_locale(i18n_mod.locale_of(profile)),
+                )
+                outcome = _send_with_autoptout(conn, user_id, text)
+                if outcome == "blocked":
+                    skipped_blocked += 1
+                    continue
                 save_recommendation(conn, user_id, date, text)
                 mark_summary_sent(conn, user_id, date)
-                sent += 1
+                sent_summary += 1
+                time.sleep(_SEND_DELAY_S)
             except Exception as e:
-                errors.append({"user_id": user_id, "error": str(e)})
+                errors.append({"user_id": user_id, "branch": "summary", "error": str(e)})
                 error("summary_user_failed", exc=e, user_id=user_id)
+
+        # Branch (2): zero meals today but active in last 7 days — static nudge.
+        for u in get_zero_day_active_users(conn):
+            uid = u["user_id"]
+            try:
+                profile = get_profile(conn, uid)
+                if not profile:
+                    continue
+                lang = i18n_mod.locale_of(profile)
+                text = i18n_mod.t("nudge.zero_today", locale=lang)
+                outcome = _send_with_autoptout(
+                    conn, uid, text, reply_markup=nudge_optout_keyboard(locale=lang),
+                )
+                if outcome == "blocked":
+                    skipped_blocked += 1
+                    continue
+                if outcome == "sent":
+                    sent_zero_day += 1
+                time.sleep(_SEND_DELAY_S)
+            except Exception as e:
+                errors.append({"user_id": uid, "branch": "zero_day", "error": str(e)})
+                error("zero_day_user_failed", exc=e, user_id=uid)
+
+        # Branch (3): dormant users — counted only, no message.
+        skipped_dormant = count_dormant_users(conn)
     finally:
         try:
             conn.close()
@@ -94,7 +159,10 @@ def run_daily_summary() -> dict:
 
     return {
         "ok": True,
-        "sent": sent,
+        "sent_summary": sent_summary,
+        "sent_zero_day": sent_zero_day,
+        "skipped_dormant": skipped_dormant,
+        "skipped_blocked": skipped_blocked,
         "errors": errors,
         "ran_at": datetime.now(timezone.utc).isoformat(),
     }

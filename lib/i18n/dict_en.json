@@ -681,6 +681,7 @@
   "toast.unknown_action":        "Unknown action",
   "toast.nudge_off":              "🔕 Nudges off",
   "nudge.zero_today":             "🍽️ Quiet plate today — nothing logged. Intermittent fasting is having a moment, but if today wasn't on purpose, snap a quick photo or jot down what you ate.\n\n(If you're mid 24-hour fast — respect 🙌. Tap below or send /quiet to mute these.)",
+  "nudge.come_back":              "👋 Haven't seen any meals from you in a while. Don't overthink it — snap a photo of your next coffee or sandwich and I'll handle the rest.\n\n(Tap below or send /quiet to mute these.)",
   "nudge.opted_out":              "🔕 Nudges off. Send /quiet again any time to re-enable.",
   "nudge.opted_in":               "🔔 Nudges back on. I'll only ping on days you don't log.",
   "toast.unknown_option":        "Unknown option",

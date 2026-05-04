@@ -1647,43 +1647,60 @@ class _NudgeConn:
         self.commits += 1
 
 
-def test_get_zero_day_active_users_filters_and_shape():
-    """Query gates onboarded + opt-in + no-meal-today + ≥1-meal-in-7-days,
-    and returns a list of {user_id, lang} dicts."""
-    conn = _NudgeConn(rows=[(201, "en"), (202, "uk")])
-    out = db.get_zero_day_active_users(conn)
+def test_get_users_to_nudge_filters_and_tier_shape():
+    """Tiered nudge query: returns {user_id, lang, tier} for each onboarded
+    opt-in user with zero meals today, where stale users are gated by a
+    3-day cooldown via `last_nudge_sent_at`."""
+    conn = _NudgeConn(rows=[
+        (301, "en", "recent"),
+        (302, "uk", "stale"),
+    ])
+    out = db.get_users_to_nudge(conn)
     assert len(conn.calls) == 1
     sql, params = conn.calls[0]
-    # Critical filters all present:
+    # Tier classification + critical filters:
+    assert "CASE" in sql and "'recent'" in sql and "'stale'" in sql
     assert "onboarding_step = 'done'" in sql
     assert "daily_calorie_target IS NOT NULL" in sql
     assert "COALESCE(up.nudge_optout, 0) = 0" in sql
-    assert "NOT EXISTS" in sql                # no meal today
-    assert "EXISTS" in sql                    # ≥1 meal in 7d
-    # Two params: today (date string) + 7-day cutoff (ISO 8601 with T/offset).
-    assert isinstance(params, tuple) and len(params) == 2
-    assert "-" in params[0]                   # YYYY-MM-DD
-    assert "T" in params[1] and "+00:00" in params[1]
-    # Row → dict shape.
+    assert "NOT EXISTS" in sql                          # no meal today
+    assert "m.created_at IS NOT NULL" in sql            # NULL guard
+    assert "last_nudge_sent_at IS NULL" in sql          # cooldown bypass for first-time
+    # Four params: cutoff_7d (tier), today, cutoff_7d (recent gate), cutoff_cd.
+    assert isinstance(params, tuple) and len(params) == 4
+    assert "T" in params[0] and "+00:00" in params[0]   # 7d cutoff (ISO)
+    assert "-" in params[1]                             # today (YYYY-MM-DD)
+    assert params[2] == params[0]                       # 7d cutoff repeated
+    assert "T" in params[3] and "+00:00" in params[3]   # 3d cooldown cutoff
+    # Cooldown cutoff is more recent than (i.e., string-greater-than) the 7d cutoff.
+    assert params[3] > params[0]
+    # Row → dict shape with tier.
     assert out == [
-        {"user_id": 201, "lang": "en"},
-        {"user_id": 202, "lang": "uk"},
+        {"user_id": 301, "lang": "en", "tier": "recent"},
+        {"user_id": 302, "lang": "uk", "tier": "stale"},
     ]
 
 
-def test_count_dormant_users_returns_int():
-    """Dormancy counter — single COUNT(*) query, returns the number."""
-    conn = _NudgeConn(rows=[(7,)])
-    n = db.count_dormant_users(conn)
-    assert n == 7
-    assert len(conn.calls) == 1
+def test_get_users_to_nudge_custom_cooldown_passed_to_sql():
+    """Custom cooldown changes the 4th param's offset from now."""
+    conn = _NudgeConn(rows=[])
+    db.get_users_to_nudge(conn, stale_cooldown_days=7)
+    _, params = conn.calls[0]
+    # Cooldown cutoff (params[3]) for 7-day cooldown matches the 7-day window
+    # used for tier classification (params[0]) within a few seconds.
+    assert params[3][:13] == params[0][:13]   # same hour, give or take
+
+
+def test_mark_nudge_sent_updates_with_iso_timestamp():
+    conn = _NudgeConn()
+    db.mark_nudge_sent(conn, user_id=42)
+    assert conn.commits == 1
     sql, params = conn.calls[0]
-    assert "COUNT(*)" in sql
-    assert "onboarding_step = 'done'" in sql
-    assert "COALESCE(up.nudge_optout, 0) = 0" in sql
-    assert "NOT EXISTS" in sql                # no meal in 7d
-    assert isinstance(params, tuple) and len(params) == 1
-    assert "T" in params[0] and "+00:00" in params[0]
+    assert "UPDATE user_profiles" in sql
+    assert "last_nudge_sent_at = %s" in sql
+    assert params[-1] == 42  # WHERE user_id last
+    ts = params[0]
+    assert "T" in ts and "+00:00" in ts
 
 
 def test_set_nudge_optout_writes_int_flag():

@@ -1,13 +1,15 @@
 """Vercel Cron endpoint — runs daily at 20:00 UTC.
 
-Three branches per opt-in, onboarded user:
-  (1) meals today           → existing GPT-4o end-of-day summary
-  (2) zero today, active 7d → static `nudge.zero_today` message (no AI call)
-  (3) zero today, dormant 7d → skipped (counted but not messaged)
+Per opt-in, onboarded user:
+  (1) meals today          → GPT-4o end-of-day summary (`summary_sent=1` flag)
+  (2) zero today, recent   → static `nudge.zero_today` (active in last 7 days)
+  (2) zero today, stale    → static `nudge.come_back`  (no meals 7+ days OR
+                             never logged), gated by 3-day `last_nudge_sent_at`
+                             cooldown to avoid spam
 
-Replaces the now-deleted `cron_inactivity_nudge`. Carries over its safety
-behavior: when Telegram returns 400/403 we auto-flip `nudge_optout=1` so we
-don't keep blasting blocked or vanished chats.
+Carries over the deleted `cron_inactivity_nudge`'s safety behavior: when
+Telegram returns 400/403 we auto-flip `nudge_optout=1` so we don't keep
+blasting blocked or vanished chats.
 """
 import hmac
 import json
@@ -27,8 +29,8 @@ from lib.database import (
     get_conn,
     init_db,
     get_users_needing_summary,
-    get_zero_day_active_users,
-    count_dormant_users,
+    get_users_to_nudge,
+    mark_nudge_sent,
     get_today_log,
     get_meals_for_day,
     save_recommendation,
@@ -66,7 +68,7 @@ class handler(BaseHTTPRequestHandler):
             self.end_headers()
             return
 
-        result = {"ok": True, "sent_summary": 0, "sent_zero_day": 0, "errors": []}
+        result = {"ok": True, "sent_summary": 0, "sent_recent": 0, "sent_stale": 0, "errors": []}
         try:
             result = run_daily_summary()
         except Exception as exc:
@@ -97,7 +99,8 @@ def _send_with_autoptout(conn, user_id: int, text: str, reply_markup=None) -> st
 def run_daily_summary() -> dict:
     conn = get_conn()
     sent_summary = 0
-    sent_zero_day = 0
+    sent_recent = 0
+    sent_stale = 0
     skipped_blocked = 0
     errors: list[dict] = []
     try:
@@ -127,15 +130,17 @@ def run_daily_summary() -> dict:
                 errors.append({"user_id": user_id, "branch": "summary", "error": str(e)})
                 error("summary_user_failed", exc=e, user_id=user_id)
 
-        # Branch (2): zero meals today but active in last 7 days — static nudge.
-        for u in get_zero_day_active_users(conn):
+        # Branch (2): zero today — tier-aware nudge (recent daily, stale every 3d).
+        for u in get_users_to_nudge(conn):
             uid = u["user_id"]
+            tier = u["tier"]
             try:
                 profile = get_profile(conn, uid)
                 if not profile:
                     continue
                 lang = i18n_mod.locale_of(profile)
-                text = i18n_mod.t("nudge.zero_today", locale=lang)
+                key = "nudge.zero_today" if tier == "recent" else "nudge.come_back"
+                text = i18n_mod.t(key, locale=lang)
                 outcome = _send_with_autoptout(
                     conn, uid, text, reply_markup=nudge_optout_keyboard(locale=lang),
                 )
@@ -143,14 +148,15 @@ def run_daily_summary() -> dict:
                     skipped_blocked += 1
                     continue
                 if outcome == "sent":
-                    sent_zero_day += 1
+                    if tier == "stale":
+                        mark_nudge_sent(conn, uid)
+                        sent_stale += 1
+                    else:
+                        sent_recent += 1
                 time.sleep(_SEND_DELAY_S)
             except Exception as e:
-                errors.append({"user_id": uid, "branch": "zero_day", "error": str(e)})
-                error("zero_day_user_failed", exc=e, user_id=uid)
-
-        # Branch (3): dormant users — counted only, no message.
-        skipped_dormant = count_dormant_users(conn)
+                errors.append({"user_id": uid, "branch": f"nudge_{tier}", "error": str(e)})
+                error("nudge_user_failed", exc=e, user_id=uid)
     finally:
         try:
             conn.close()
@@ -160,8 +166,8 @@ def run_daily_summary() -> dict:
     return {
         "ok": True,
         "sent_summary": sent_summary,
-        "sent_zero_day": sent_zero_day,
-        "skipped_dormant": skipped_dormant,
+        "sent_recent": sent_recent,
+        "sent_stale": sent_stale,
         "skipped_blocked": skipped_blocked,
         "errors": errors,
         "ran_at": datetime.now(timezone.utc).isoformat(),

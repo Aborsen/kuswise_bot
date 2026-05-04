@@ -1422,21 +1422,34 @@ def get_users_due_weekly_checkin(conn, min_days_since_last: int = 6) -> list[int
     return [r[0] for r in rows]
 
 
-def get_zero_day_active_users(conn) -> list[dict]:
-    """Onboarded, opted-in users with no meal today but ≥1 meal in the last 7 days.
+def get_users_to_nudge(conn, stale_cooldown_days: int = 3) -> list[dict]:
+    """Onboarded, opted-in users with zero meals today, classified into two tiers.
 
-    Used by the consolidated daily-summary cron to send a static "you didn't
-    log today" nudge — without an AI call. Users with zero meals in the last
-    7 days are deliberately excluded (dormancy cutoff).
+    `tier='recent'`: ≥1 meal in the last 7 days. Daily cadence — no cooldown.
+    `tier='stale'`:  no meals in 7+ days (or never logged). Cooldown via
+        `last_nudge_sent_at`: only return stale users whose last nudge is older
+        than `stale_cooldown_days` (or who have never been nudged).
+
+    Returns a list of `{user_id, lang, tier}` dicts.
     """
     today = _today_str()
     cutoff_7d = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
+    cutoff_cd = (datetime.now(timezone.utc) - timedelta(days=stale_cooldown_days)).isoformat()
     with conn.cursor() as cur:
         cur.execute(
             """
             SELECT
                 up.user_id,
-                COALESCE(up.lang, 'en') AS lang
+                COALESCE(up.lang, 'en') AS lang,
+                CASE
+                    WHEN EXISTS (
+                        SELECT 1 FROM meals m
+                        WHERE m.user_id = up.user_id
+                          AND m.created_at IS NOT NULL
+                          AND m.created_at >= %s
+                    ) THEN 'recent'
+                    ELSE 'stale'
+                END AS tier
             FROM user_profiles up
             WHERE up.onboarding_step = 'done'
               AND up.daily_calorie_target IS NOT NULL
@@ -1445,41 +1458,33 @@ def get_zero_day_active_users(conn) -> list[dict]:
                   SELECT 1 FROM meals m
                   WHERE m.user_id = up.user_id AND m.date = %s
               )
-              AND EXISTS (
-                  SELECT 1 FROM meals m
-                  WHERE m.user_id = up.user_id AND m.created_at >= %s
+              AND (
+                  EXISTS (
+                      SELECT 1 FROM meals m
+                      WHERE m.user_id = up.user_id
+                        AND m.created_at IS NOT NULL
+                        AND m.created_at >= %s
+                  )
+                  OR up.last_nudge_sent_at IS NULL
+                  OR up.last_nudge_sent_at < %s
               )
             ORDER BY up.user_id
             """,
-            (today, cutoff_7d),
+            (cutoff_7d, today, cutoff_7d, cutoff_cd),
         )
         rows = cur.fetchall()
-    return [{"user_id": r[0], "lang": r[1]} for r in rows]
+    return [{"user_id": r[0], "lang": r[1], "tier": r[2]} for r in rows]
 
 
-def count_dormant_users(conn) -> int:
-    """Onboarded, opted-in users with zero meals in the last 7 days.
-
-    Observability counter for the consolidated daily-summary cron: how many
-    users we deliberately skipped because of the 7-day dormancy cutoff.
-    """
-    cutoff_7d = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
+def mark_nudge_sent(conn, user_id: int) -> None:
+    """Stamp `last_nudge_sent_at = now()` to start the stale-tier cooldown."""
     with conn.cursor() as cur:
         cur.execute(
-            """
-            SELECT COUNT(*) FROM user_profiles up
-            WHERE up.onboarding_step = 'done'
-              AND up.daily_calorie_target IS NOT NULL
-              AND COALESCE(up.nudge_optout, 0) = 0
-              AND NOT EXISTS (
-                  SELECT 1 FROM meals m
-                  WHERE m.user_id = up.user_id AND m.created_at >= %s
-              )
-            """,
-            (cutoff_7d,),
+            "UPDATE user_profiles SET last_nudge_sent_at = %s, updated_at = %s "
+            "WHERE user_id = %s",
+            (_now_iso(), _now_iso(), user_id),
         )
-        row = cur.fetchone()
-    return int(row[0]) if row else 0
+    conn.commit()
 
 
 def set_nudge_optout(conn, user_id: int, optout: bool) -> None:

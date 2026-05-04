@@ -220,7 +220,7 @@ kuswise_bot/
 │   ├── scan.py                        # Mini App: barcode scanner page
 │   ├── barcode.py                     # POST endpoint for OFF barcode lookups
 │   ├── admin_stats.py                 # HTML admin dashboard with Basic Auth
-│   ├── cron_daily_summary.py          # 20:00 UTC daily — AI summary OR static zero-day nudge OR skip dormant
+│   ├── cron_daily_summary.py          # 20:00 UTC daily — AI summary, daily zero-day nudge, or every-3-days come-back nudge
 │   ├── cron_midnight_reset.py         # 00:00 UTC daily janitorial cleanup
 │   └── cron_weekly_weight_checkin.py  # Monday 06:00 UTC weight-prompt
 ├── lib/

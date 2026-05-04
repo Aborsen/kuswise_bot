@@ -1030,19 +1030,31 @@ def get_history(conn, user_id: int, days: int = 7) -> list[dict]:
 
 # ---------- Summaries / recommendations ----------
 
-def get_users_needing_summary(conn) -> list[tuple[int, str]]:
-    today = _today_str()
+def get_users_needing_summary(conn, summary_hour: int = 22) -> list[tuple[int, str]]:
+    """Users due an end-of-day AI summary right now.
+
+    Per-user timing: a user is in the cohort when their local clock falls
+    inside the `summary_hour` (default 22) AND today's `daily_logs` row is
+    not yet marked sent AND there's at least one meal logged for that
+    user-local day.
+
+    Designed for the hourly `cron_daily_summary` — each user matches for
+    exactly one UTC hour per day (their local 22:00).
+    """
     with conn.cursor() as cur:
         cur.execute(
             """SELECT DISTINCT dl.user_id, dl.date
                FROM daily_logs dl
-               WHERE dl.date = %s AND dl.summary_sent = 0
-                 AND EXISTS (SELECT 1 FROM meals m WHERE m.user_id = dl.user_id AND m.date = dl.date)
+               JOIN user_profiles up ON up.user_id = dl.user_id
+               WHERE up.onboarding_step = 'done'
+                 AND EXTRACT(HOUR FROM (NOW() AT TIME ZONE up.tz))::int = %s
+                 AND dl.date = TO_CHAR(NOW() AT TIME ZONE up.tz, 'YYYY-MM-DD')
+                 AND dl.summary_sent = 0
                  AND EXISTS (
-                   SELECT 1 FROM user_profiles up
-                   WHERE up.user_id = dl.user_id AND up.onboarding_step = 'done'
+                     SELECT 1 FROM meals m
+                     WHERE m.user_id = dl.user_id AND m.date = dl.date
                  )""",
-            (today,),
+            (summary_hour,),
         )
         rows = cur.fetchall()
     return [(r[0], r[1]) for r in rows]
@@ -1422,17 +1434,20 @@ def get_users_due_weekly_checkin(conn, min_days_since_last: int = 6) -> list[int
     return [r[0] for r in rows]
 
 
-def get_users_to_nudge(conn) -> list[dict]:
-    """Onboarded, opted-in users with zero meals today.
+def get_users_to_nudge(conn, summary_hour: int = 22) -> list[dict]:
+    """Onboarded, opted-in users due a daily zero-meal nudge right now.
 
-    Daily cadence with no cooldown — never-loggers, lapsed users, and dormant
-    users all get one warm reminder per day. The only gates are explicit
-    `/quiet` (`nudge_optout=1`) and the auto-opt-out triggered by TG 400/403
-    in the cron.
+    Per-user timing: a user is in the cohort when their local clock is in
+    the `summary_hour` (default 22) AND they have zero meals on their local
+    `today` AND `last_nudge_sent_at` is older than the start of that local
+    day (one nudge per user-local calendar day, max).
+
+    Designed for the hourly `cron_daily_summary` — each user matches for
+    exactly one UTC hour per day (their local 22:00). The dedup gate
+    prevents repeat sends if the cron retries / fires twice in the hour.
 
     Returns a list of `{user_id, lang}` dicts.
     """
-    today = _today_str()
     with conn.cursor() as cur:
         cur.execute(
             """
@@ -1441,12 +1456,20 @@ def get_users_to_nudge(conn) -> list[dict]:
             WHERE up.onboarding_step = 'done'
               AND up.daily_calorie_target IS NOT NULL
               AND COALESCE(up.nudge_optout, 0) = 0
+              AND EXTRACT(HOUR FROM (NOW() AT TIME ZONE up.tz))::int = %s
               AND NOT EXISTS (
-                  SELECT 1 FROM meals m WHERE m.user_id = up.user_id AND m.date = %s
+                  SELECT 1 FROM meals m
+                  WHERE m.user_id = up.user_id
+                    AND m.date = TO_CHAR(NOW() AT TIME ZONE up.tz, 'YYYY-MM-DD')
+              )
+              AND (
+                  up.last_nudge_sent_at IS NULL
+                  OR (up.last_nudge_sent_at::timestamptz AT TIME ZONE up.tz)::date
+                     < (NOW() AT TIME ZONE up.tz)::date
               )
             ORDER BY up.user_id
             """,
-            (today,),
+            (summary_hour,),
         )
         rows = cur.fetchall()
     return [{"user_id": r[0], "lang": r[1]} for r in rows]

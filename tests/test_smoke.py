@@ -1648,8 +1648,9 @@ class _NudgeConn:
 
 
 def test_get_users_to_nudge_filters_and_shape():
-    """Unified nudge query: returns {user_id, lang} for every onboarded
-    opt-in user with zero meals today. No tier, no cooldown."""
+    """Hourly per-user-tz nudge query: returns {user_id, lang} for every
+    onboarded opt-in user whose local clock is in the summary hour and who
+    hasn't already been nudged today (in their tz)."""
     conn = _NudgeConn(rows=[
         (301, "en"),
         (302, "uk"),
@@ -1662,18 +1663,30 @@ def test_get_users_to_nudge_filters_and_shape():
     assert "daily_calorie_target IS NOT NULL" in sql
     assert "COALESCE(up.nudge_optout, 0) = 0" in sql
     assert "NOT EXISTS" in sql                          # no meal today
-    # Unified path drops tier classification and cooldown gating:
+    # No tier classification:
     assert "CASE" not in sql
     assert "'recent'" not in sql and "'stale'" not in sql
-    assert "last_nudge_sent_at" not in sql
-    # Single param: today's YYYY-MM-DD.
+    # Per-user-tz timing + dedup:
+    assert "EXTRACT(HOUR FROM (NOW() AT TIME ZONE up.tz))" in sql
+    assert "TO_CHAR(NOW() AT TIME ZONE up.tz, 'YYYY-MM-DD')" in sql
+    assert "up.last_nudge_sent_at IS NULL" in sql
+    assert "up.last_nudge_sent_at::timestamptz AT TIME ZONE up.tz" in sql
+    # Single param: the summary hour (default 22).
     assert isinstance(params, tuple) and len(params) == 1
-    assert "-" in params[0]
+    assert params[0] == 22
     # Row → dict shape (no tier).
     assert out == [
         {"user_id": 301, "lang": "en"},
         {"user_id": 302, "lang": "uk"},
     ]
+
+
+def test_get_users_to_nudge_custom_hour_passed_to_sql():
+    """`summary_hour` keyword propagates to the SQL parameter."""
+    conn = _NudgeConn(rows=[])
+    db.get_users_to_nudge(conn, summary_hour=18)
+    _, params = conn.calls[0]
+    assert params == (18,)
 
 
 def test_mark_nudge_sent_updates_with_iso_timestamp():

@@ -1,11 +1,16 @@
-"""Vercel Cron endpoint — runs daily at 20:00 UTC.
+"""Vercel Cron endpoint — runs hourly at :00 UTC.
 
-Per opt-in, onboarded user:
-  (1) meals today  → GPT-4o end-of-day summary (`summary_sent=1` flag)
-  (2) zero today   → one warm `nudge.daily_zero` reminder, daily, no cooldown.
-                     Covers recent-lapsed, long-dormant, and never-loggers
-                     uniformly. Only gates are explicit `/quiet` and the
-                     auto-opt-out below.
+Each invocation processes only users whose local clock is in the 22:00
+hour right now. With users spread across timezones, every UTC hour fires
+the corresponding cohort; users in `Europe/Kyiv` (the default tz) match
+the 19:00 UTC fire (summer) / 20:00 UTC fire (winter).
+
+Per cohort user:
+  (1) meals on user-local today → GPT-4o end-of-day summary, gated by
+                                   `daily_logs.summary_sent`
+  (2) zero meals on user-local   → one warm `nudge.daily_zero`, gated by
+      today                      `last_nudge_sent_at` so each user gets at
+                                   most one nudge per local day
 
 Carries over the deleted `cron_inactivity_nudge`'s safety behavior: when
 Telegram returns 400/403 we auto-flip `nudge_optout=1` so we don't keep
@@ -30,6 +35,7 @@ from lib.database import (
     init_db,
     get_users_needing_summary,
     get_users_to_nudge,
+    mark_nudge_sent,
     get_today_log,
     get_meals_for_day,
     save_recommendation,
@@ -144,6 +150,7 @@ def run_daily_summary() -> dict:
                     skipped_blocked += 1
                     continue
                 if outcome == "sent":
+                    mark_nudge_sent(conn, uid)
                     sent_nudge += 1
                 time.sleep(_SEND_DELAY_S)
             except Exception as e:

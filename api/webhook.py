@@ -489,6 +489,17 @@ def process_update(update: dict) -> None:
                 handle_command(conn, message, mapped, first_name, profile)
                 return
 
+        # F4: meal-edit / manual-correction takes priority over every
+        # awaiting_input_type branch below, mirroring the order
+        # `handle_voice` has used since day one. Without this, a stuck
+        # 'weight' state from the weekly cron silently steers meal-edit
+        # text into the weight handler ("not a number" error).
+        if user_id:
+            _pending_for_text = get_pending_analysis(conn, user_id)
+            if _pending_for_text and _pending_for_text["awaiting_manual"]:
+                handle_manual_text_input(conn, message, text, _pending_for_text, profile)
+                return
+
         # Weight check-in / manual weight edit takes priority over everything
         # except the /cancel escape hatch (handled further down).
         if (
@@ -629,6 +640,10 @@ def process_update(update: dict) -> None:
                 if pending and pending["awaiting_manual"]:
                     pop_pending_analysis(conn, user_id)
                     pop_pending_entry(conn, user_id)
+                    # F2: /cancel is the universal escape hatch — also clear
+                    # any lingering awaiting_input_type so the next typed
+                    # message routes to the default meal-logging path.
+                    set_awaiting_input(conn, user_id, None)
                     send_message(chat_id, _t("meals_mgmt.cancelled", profile), reply_markup=main_menu_keyboard(locale=i18n_mod.locale_of(profile)))
                     return
             handle_command(conn, message, text, first_name, profile)
@@ -655,12 +670,10 @@ def process_update(update: dict) -> None:
             handle_ask(conn, user_id, chat_id, text, profile)
             return
 
-        if user_id:
-            pending = get_pending_analysis(conn, user_id)
-            if pending and pending["awaiting_manual"]:
-                handle_manual_text_input(conn, message, text, pending, profile)
-                return
-
+        # F4: the awaiting_manual route is now handled above (top of the
+        # text dispatcher), mirroring `handle_voice`'s precedence. If we
+        # reach here, no FSM state matched — fall through to default
+        # meal-logging text entry.
         handle_text_entry(conn, message, text)
     finally:
         try:
@@ -1878,6 +1891,10 @@ def handle_moderation_callback(conn, cb: dict, profile: dict) -> None:
         answer_callback_query(cb_id, _t("toast.cancelled", profile))
         pop_pending_analysis(conn, user_id)
         pop_pending_entry(conn, user_id)
+        # F3: Cancel is the universal escape — also clear any lingering
+        # awaiting_input_type (weight, fridge_ingredients, ai_menu, etc.)
+        # so the next typed message lands on the default meal-logging path.
+        set_awaiting_input(conn, user_id, None)
         send_message(chat_id, _t("meals_mgmt.cancelled", profile), reply_markup=main_menu_keyboard(locale=i18n_mod.locale_of(profile)))
 
 
@@ -2817,6 +2834,10 @@ def handle_meal_manage_callback(conn, cb: dict) -> None:
             replaces_meal_id=meal_id,
         )
         set_awaiting_manual(conn, user_id, meal_type=meal["meal_type"])
+        # F1: explicit "new flow" — discard any lingering awaiting_input_type
+        # (e.g. 'weight' set by the weekly cron and never cleared) so the
+        # user's edit text doesn't get intercepted by the weight handler.
+        set_awaiting_input(conn, user_id, None)
         send_message(
             chat_id,
             _t(

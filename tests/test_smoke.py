@@ -1840,6 +1840,73 @@ def test_button_text_to_command_routes_ask_button_to_ai_chooser():
     assert button_text_to_command(btn_label("suggest", locale="en")) == "/suggest_meal"
 
 
+def test_meal_edit_callback_clears_awaiting_input_type():
+    """Regression F1: tapping ✏️ Edit on a meal (from /meals or after a
+    fresh analysis) MUST clear `awaiting_input_type` so a stuck 'weight'
+    state from the weekly cron doesn't intercept the user's edit text
+    via the weight-input handler."""
+    import inspect
+    from api import webhook
+    src = inspect.getsource(webhook.handle_meal_manage_callback)
+    edit_branch_start = src.find('elif data.startswith("meal_edit:"):')
+    assert edit_branch_start >= 0, "meal_edit branch not found in handle_meal_manage_callback"
+    # Check the 2 KB window after the branch opener — that's the whole branch.
+    edit_block = src[edit_branch_start:edit_branch_start + 2000]
+    assert "set_awaiting_input(conn, user_id, None)" in edit_block, (
+        "F1 regression: meal_edit branch must call set_awaiting_input(..., None) "
+        "so the weight-input handler doesn't silently intercept edit text."
+    )
+
+
+def test_text_dispatcher_pending_analyses_takes_precedence_over_weight():
+    """Regression F4: in process_update, the meal-edit / manual-correction
+    check (pending_analyses.awaiting_manual) MUST appear BEFORE the
+    `awaiting_input_type == 'weight'` branch. This mirrors handle_voice's
+    long-correct order. Otherwise a stuck weight state intercepts meal-edit
+    text and the user sees 'Hmm, that doesn't look like a number.'"""
+    import inspect
+    from api import webhook
+    src = inspect.getsource(webhook.process_update)
+    # The new awaiting_manual check uses a uniquely-named local to avoid
+    # collisions; both that AND the legacy variant are valid hits.
+    pending_check = src.find('_pending_for_text["awaiting_manual"]')
+    if pending_check < 0:
+        pending_check = src.find('pending["awaiting_manual"]')
+    weight_check = src.find('"awaiting_input_type") == "weight"')
+    assert pending_check >= 0, "awaiting_manual text-branch check not found"
+    assert weight_check >= 0, "weight awaiting_input_type branch not found"
+    assert pending_check < weight_check, (
+        "F4 regression: pending_analyses.awaiting_manual must be checked "
+        "before awaiting_input_type == 'weight' in process_update."
+    )
+
+
+def test_cancel_handlers_clear_awaiting_input_type():
+    """Regression F2 + F3: both /cancel (text) and mod:cancel (inline button)
+    must clear `awaiting_input_type`. /cancel is the universal escape hatch —
+    if it leaves FSM state set, the bug recurs the next time the user types."""
+    import inspect
+    from api import webhook
+
+    # F2: /cancel text branch
+    src_pu = inspect.getsource(webhook.process_update)
+    cancel_block_start = src_pu.find('text.lower().strip() == "/cancel"')
+    assert cancel_block_start >= 0, "/cancel text branch not found"
+    cancel_block = src_pu[cancel_block_start:cancel_block_start + 1000]
+    assert "set_awaiting_input(conn, user_id, None)" in cancel_block, (
+        "F2 regression: /cancel text branch must clear awaiting_input_type."
+    )
+
+    # F3: mod:cancel callback
+    src_mod = inspect.getsource(webhook.handle_moderation_callback)
+    mod_cancel = src_mod.find('elif action == "cancel":')
+    assert mod_cancel >= 0, "mod:cancel branch not found"
+    mod_block = src_mod[mod_cancel:mod_cancel + 800]
+    assert "set_awaiting_input(conn, user_id, None)" in mod_block, (
+        "F3 regression: mod:cancel callback must clear awaiting_input_type."
+    )
+
+
 def test_main_menu_keyboard_layout_after_scanner_merge():
     """Current layout: row 3 is [profile, scanner]; suggest + recent
     are no longer on the visible keyboard but still dispatch via

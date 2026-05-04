@@ -1647,48 +1647,33 @@ class _NudgeConn:
         self.commits += 1
 
 
-def test_get_users_to_nudge_filters_and_tier_shape():
-    """Tiered nudge query: returns {user_id, lang, tier} for each onboarded
-    opt-in user with zero meals today, where stale users are gated by a
-    3-day cooldown via `last_nudge_sent_at`."""
+def test_get_users_to_nudge_filters_and_shape():
+    """Unified nudge query: returns {user_id, lang} for every onboarded
+    opt-in user with zero meals today. No tier, no cooldown."""
     conn = _NudgeConn(rows=[
-        (301, "en", "recent"),
-        (302, "uk", "stale"),
+        (301, "en"),
+        (302, "uk"),
     ])
     out = db.get_users_to_nudge(conn)
     assert len(conn.calls) == 1
     sql, params = conn.calls[0]
-    # Tier classification + critical filters:
-    assert "CASE" in sql and "'recent'" in sql and "'stale'" in sql
+    # Critical filters preserved:
     assert "onboarding_step = 'done'" in sql
     assert "daily_calorie_target IS NOT NULL" in sql
     assert "COALESCE(up.nudge_optout, 0) = 0" in sql
     assert "NOT EXISTS" in sql                          # no meal today
-    assert "m.created_at IS NOT NULL" in sql            # NULL guard
-    assert "last_nudge_sent_at IS NULL" in sql          # cooldown bypass for first-time
-    # Four params: cutoff_7d (tier), today, cutoff_7d (recent gate), cutoff_cd.
-    assert isinstance(params, tuple) and len(params) == 4
-    assert "T" in params[0] and "+00:00" in params[0]   # 7d cutoff (ISO)
-    assert "-" in params[1]                             # today (YYYY-MM-DD)
-    assert params[2] == params[0]                       # 7d cutoff repeated
-    assert "T" in params[3] and "+00:00" in params[3]   # 3d cooldown cutoff
-    # Cooldown cutoff is more recent than (i.e., string-greater-than) the 7d cutoff.
-    assert params[3] > params[0]
-    # Row → dict shape with tier.
+    # Unified path drops tier classification and cooldown gating:
+    assert "CASE" not in sql
+    assert "'recent'" not in sql and "'stale'" not in sql
+    assert "last_nudge_sent_at" not in sql
+    # Single param: today's YYYY-MM-DD.
+    assert isinstance(params, tuple) and len(params) == 1
+    assert "-" in params[0]
+    # Row → dict shape (no tier).
     assert out == [
-        {"user_id": 301, "lang": "en", "tier": "recent"},
-        {"user_id": 302, "lang": "uk", "tier": "stale"},
+        {"user_id": 301, "lang": "en"},
+        {"user_id": 302, "lang": "uk"},
     ]
-
-
-def test_get_users_to_nudge_custom_cooldown_passed_to_sql():
-    """Custom cooldown changes the 4th param's offset from now."""
-    conn = _NudgeConn(rows=[])
-    db.get_users_to_nudge(conn, stale_cooldown_days=7)
-    _, params = conn.calls[0]
-    # Cooldown cutoff (params[3]) for 7-day cooldown matches the 7-day window
-    # used for tier classification (params[0]) within a few seconds.
-    assert params[3][:13] == params[0][:13]   # same hour, give or take
 
 
 def test_mark_nudge_sent_updates_with_iso_timestamp():

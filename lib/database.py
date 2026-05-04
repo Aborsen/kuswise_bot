@@ -1422,58 +1422,34 @@ def get_users_due_weekly_checkin(conn, min_days_since_last: int = 6) -> list[int
     return [r[0] for r in rows]
 
 
-def get_users_to_nudge(conn, stale_cooldown_days: int = 3) -> list[dict]:
-    """Onboarded, opted-in users with zero meals today, classified into two tiers.
+def get_users_to_nudge(conn) -> list[dict]:
+    """Onboarded, opted-in users with zero meals today.
 
-    `tier='recent'`: ≥1 meal in the last 7 days. Daily cadence — no cooldown.
-    `tier='stale'`:  no meals in 7+ days (or never logged). Cooldown via
-        `last_nudge_sent_at`: only return stale users whose last nudge is older
-        than `stale_cooldown_days` (or who have never been nudged).
+    Daily cadence with no cooldown — never-loggers, lapsed users, and dormant
+    users all get one warm reminder per day. The only gates are explicit
+    `/quiet` (`nudge_optout=1`) and the auto-opt-out triggered by TG 400/403
+    in the cron.
 
-    Returns a list of `{user_id, lang, tier}` dicts.
+    Returns a list of `{user_id, lang}` dicts.
     """
     today = _today_str()
-    cutoff_7d = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
-    cutoff_cd = (datetime.now(timezone.utc) - timedelta(days=stale_cooldown_days)).isoformat()
     with conn.cursor() as cur:
         cur.execute(
             """
-            SELECT
-                up.user_id,
-                COALESCE(up.lang, 'en') AS lang,
-                CASE
-                    WHEN EXISTS (
-                        SELECT 1 FROM meals m
-                        WHERE m.user_id = up.user_id
-                          AND m.created_at IS NOT NULL
-                          AND m.created_at >= %s
-                    ) THEN 'recent'
-                    ELSE 'stale'
-                END AS tier
+            SELECT up.user_id, COALESCE(up.lang, 'en') AS lang
             FROM user_profiles up
             WHERE up.onboarding_step = 'done'
               AND up.daily_calorie_target IS NOT NULL
               AND COALESCE(up.nudge_optout, 0) = 0
               AND NOT EXISTS (
-                  SELECT 1 FROM meals m
-                  WHERE m.user_id = up.user_id AND m.date = %s
-              )
-              AND (
-                  EXISTS (
-                      SELECT 1 FROM meals m
-                      WHERE m.user_id = up.user_id
-                        AND m.created_at IS NOT NULL
-                        AND m.created_at >= %s
-                  )
-                  OR up.last_nudge_sent_at IS NULL
-                  OR up.last_nudge_sent_at < %s
+                  SELECT 1 FROM meals m WHERE m.user_id = up.user_id AND m.date = %s
               )
             ORDER BY up.user_id
             """,
-            (cutoff_7d, today, cutoff_7d, cutoff_cd),
+            (today,),
         )
         rows = cur.fetchall()
-    return [{"user_id": r[0], "lang": r[1], "tier": r[2]} for r in rows]
+    return [{"user_id": r[0], "lang": r[1]} for r in rows]
 
 
 def mark_nudge_sent(conn, user_id: int) -> None:

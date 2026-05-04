@@ -349,7 +349,7 @@ Each "F-N" tag corresponds to a feature pillar referenced throughout the codebas
 | F-10 | 3-day meal plan with pantry | `/plan`, `plan_pantry` state | `lib/mealplan.py`, `meal_plans` |
 | F-11 | Single-meal recipe suggestion | `/suggest_meal`, `fridge_ingredients` state | `lib/openai_nutrition.py:suggest_meal`, `extract_pantry_from_photo` |
 | F-12 | Weekly recap PNG card | `/recap` (chat) + share-recap button (Mini App) | `lib/recap.py` (PIL + QR) |
-| F-13 | Tiered re-engagement nudge + `/quiet` opt-out | piggybacks on the 20:00 UTC `cron_daily_summary` — branch (2) sends `nudge.zero_today` daily to opt-in users active in the last 7 days who didn't log today, and `nudge.come_back` every 3 days (gated by `last_nudge_sent_at`) to stale users (no meals 7+ days OR never logged) | `api/cron_daily_summary.py`, `user_profiles.nudge_optout` / `last_nudge_sent_at`, `lib/database.py:get_users_to_nudge / mark_nudge_sent / set_nudge_optout` |
+| F-13 | Unified daily re-engagement nudge + `/quiet` opt-out | piggybacks on the 20:00 UTC `cron_daily_summary` — branch (2) sends one warm `nudge.daily_zero` reminder daily to every opt-in onboarded user with zero meals today (recent-lapsed, long-dormant, and never-loggers alike). No cooldown; the only gates are explicit `/quiet` (`nudge_optout=1`) and the auto-opt-out on TG 400/403 | `api/cron_daily_summary.py`, `user_profiles.nudge_optout`, `lib/database.py:get_users_to_nudge / set_nudge_optout` |
 |  — | `/ask` (free-form Q&A) | `/ask` | `lib/openai_chat.py`, `chat_sessions` |
 |  — | Water tracking | bot only — `/water` (quick-add buttons) and reply-keyboard `+250мл`. Dashboard shows a read-only display. | `water_logs`, `water_prefs` |
 
@@ -493,7 +493,7 @@ Configured in `kuswise_bot/vercel.json`:
 
 | Path | Cron | Purpose |
 |---|---|---|
-| `/api/cron_daily_summary` | `0 20 * * *` (20:00 UTC daily) | Per onboarded, opt-in user. Branch (1): meals today → OpenAI end-of-day coaching message (`SUMMARY_PROMPT_TEMPLATE`), persisted in `daily_recommendations`, marks `summary_sent=1`. Branch (2): zero today → tier-aware nudge from `get_users_to_nudge`. Recent tier (≥1 meal in last 7 days) gets `nudge.zero_today` daily. Stale tier (no meals 7+ days OR never logged) gets `nudge.come_back` every 3 days, gated by `last_nudge_sent_at` and stamped via `mark_nudge_sent` after each successful send. Both nudges carry the inline 🔕 opt-out button. On Telegram `error_code in (400, 403)` for any send, auto-opts the user out (sets `nudge_optout=1`) to stop retrying blocked / gone chats. Per-send 40 ms pacing. `/quiet` toggles `nudge_optout`. |
+| `/api/cron_daily_summary` | `0 20 * * *` (20:00 UTC daily) | Per onboarded, opt-in user. Branch (1): meals today → OpenAI end-of-day coaching message (`SUMMARY_PROMPT_TEMPLATE`), persisted in `daily_recommendations`, marks `summary_sent=1`. Branch (2): zero today → one warm `nudge.daily_zero` reminder, daily, no cooldown — covers recent-lapsed, long-dormant, and never-loggers uniformly. Carries the inline 🔕 opt-out button. On Telegram `error_code in (400, 403)` for any send, auto-opts the user out (sets `nudge_optout=1`) to stop retrying blocked / gone chats. Per-send 40 ms pacing. `/quiet` toggles `nudge_optout`. |
 | `/api/cron_midnight_reset` | `0 0 * * *` (00:00 UTC daily) | Prunes `usage_quota` (>7 days), `meal_plans` (>90 days), `menu_ocr_results` (>1 hour). Bumps `user_streaks.freeze_days_remaining` back to 3 on the 1st of each month. |
 | `/api/cron_weekly_weight_checkin` | `0 6 * * 1` (Monday 06:00 UTC) | DMs onboarded users a weight-entry prompt. Updates `user_profiles.weekly_checkin_sent_at`. |
 
@@ -550,7 +550,7 @@ All scripts read from `.env` / `.env.local` via `python-dotenv` and fail loudly 
 | `scan.py` | Mini App: barcode scanner page. |
 | `barcode.py` | POST endpoint for barcode lookups (Open Food Facts). |
 | `admin_stats.py` | Internal admin dashboard (HTTP Basic Auth). |
-| `cron_daily_summary.py` | End-of-day cron. Branch (1) AI coaching summary for users with meals today; branch (2) tier-aware nudge — daily `nudge.zero_today` for recent users who skipped today, every-3-days `nudge.come_back` for stale users (no meals 7+ days OR never logged) gated by `last_nudge_sent_at`. Auto-opt-out on Telegram 400/403. |
+| `cron_daily_summary.py` | End-of-day cron. Branch (1) AI coaching summary for users with meals today; branch (2) one warm `nudge.daily_zero` reminder, daily, for every opt-in user with zero meals today (no tier, no cooldown). Auto-opt-out on Telegram 400/403. |
 | `cron_midnight_reset.py` | Daily janitorial cron (quota / plan / cache cleanup). |
 | `cron_weekly_weight_checkin.py` | Weekly weight-prompt cron. |
 
@@ -610,4 +610,4 @@ All scripts read from `.env` / `.env.local` via `python-dotenv` and fail loudly 
 
 ## Last updated
 
-This document was last refreshed 2026-05-03 — added F-13 (inactivity nudge), 4th cron, dashboard sprint 1 (weight trend + 30-day calorie bars + fiber/sugar bars + allergen chips + coach-note card + read-only water), and the latent goals-projection bug fix in `_render_dashboard`. Schema state, module map, and feature pillars are accurate as of that date. Authoritative source is always the code; prefer file:line references over this document when they disagree.
+This document was last refreshed 2026-05-04 — F-13 simplified to a unified daily reminder (`nudge.daily_zero`) with no cooldown and no recent/stale tiers, so never-loggers and dormant users now get one warm message per day alongside recent-lapsed users. Earlier 2026-05-03 refresh covered the original tiered F-13 launch, 4th cron, dashboard sprint 1, and the latent goals-projection bug fix in `_render_dashboard`. Schema state, module map, and feature pillars are accurate as of that date. Authoritative source is always the code; prefer file:line references over this document when they disagree.

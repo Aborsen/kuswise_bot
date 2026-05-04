@@ -1,11 +1,11 @@
 """Vercel Cron endpoint — runs daily at 20:00 UTC.
 
 Per opt-in, onboarded user:
-  (1) meals today          → GPT-4o end-of-day summary (`summary_sent=1` flag)
-  (2) zero today, recent   → static `nudge.zero_today` (active in last 7 days)
-  (2) zero today, stale    → static `nudge.come_back`  (no meals 7+ days OR
-                             never logged), gated by 3-day `last_nudge_sent_at`
-                             cooldown to avoid spam
+  (1) meals today  → GPT-4o end-of-day summary (`summary_sent=1` flag)
+  (2) zero today   → one warm `nudge.daily_zero` reminder, daily, no cooldown.
+                     Covers recent-lapsed, long-dormant, and never-loggers
+                     uniformly. Only gates are explicit `/quiet` and the
+                     auto-opt-out below.
 
 Carries over the deleted `cron_inactivity_nudge`'s safety behavior: when
 Telegram returns 400/403 we auto-flip `nudge_optout=1` so we don't keep
@@ -30,7 +30,6 @@ from lib.database import (
     init_db,
     get_users_needing_summary,
     get_users_to_nudge,
-    mark_nudge_sent,
     get_today_log,
     get_meals_for_day,
     save_recommendation,
@@ -68,7 +67,7 @@ class handler(BaseHTTPRequestHandler):
             self.end_headers()
             return
 
-        result = {"ok": True, "sent_summary": 0, "sent_recent": 0, "sent_stale": 0, "errors": []}
+        result = {"ok": True, "sent_summary": 0, "sent_nudge": 0, "errors": []}
         try:
             result = run_daily_summary()
         except Exception as exc:
@@ -99,8 +98,7 @@ def _send_with_autoptout(conn, user_id: int, text: str, reply_markup=None) -> st
 def run_daily_summary() -> dict:
     conn = get_conn()
     sent_summary = 0
-    sent_recent = 0
-    sent_stale = 0
+    sent_nudge = 0
     skipped_blocked = 0
     errors: list[dict] = []
     try:
@@ -130,17 +128,15 @@ def run_daily_summary() -> dict:
                 errors.append({"user_id": user_id, "branch": "summary", "error": str(e)})
                 error("summary_user_failed", exc=e, user_id=user_id)
 
-        # Branch (2): zero today — tier-aware nudge (recent daily, stale every 3d).
+        # Branch (2): zero today — one warm daily reminder for everyone.
         for u in get_users_to_nudge(conn):
             uid = u["user_id"]
-            tier = u["tier"]
             try:
                 profile = get_profile(conn, uid)
                 if not profile:
                     continue
                 lang = i18n_mod.locale_of(profile)
-                key = "nudge.zero_today" if tier == "recent" else "nudge.come_back"
-                text = i18n_mod.t(key, locale=lang)
+                text = i18n_mod.t("nudge.daily_zero", locale=lang)
                 outcome = _send_with_autoptout(
                     conn, uid, text, reply_markup=nudge_optout_keyboard(locale=lang),
                 )
@@ -148,14 +144,10 @@ def run_daily_summary() -> dict:
                     skipped_blocked += 1
                     continue
                 if outcome == "sent":
-                    if tier == "stale":
-                        mark_nudge_sent(conn, uid)
-                        sent_stale += 1
-                    else:
-                        sent_recent += 1
+                    sent_nudge += 1
                 time.sleep(_SEND_DELAY_S)
             except Exception as e:
-                errors.append({"user_id": uid, "branch": f"nudge_{tier}", "error": str(e)})
+                errors.append({"user_id": uid, "branch": "nudge", "error": str(e)})
                 error("nudge_user_failed", exc=e, user_id=uid)
     finally:
         try:
@@ -166,8 +158,7 @@ def run_daily_summary() -> dict:
     return {
         "ok": True,
         "sent_summary": sent_summary,
-        "sent_recent": sent_recent,
-        "sent_stale": sent_stale,
+        "sent_nudge": sent_nudge,
         "skipped_blocked": skipped_blocked,
         "errors": errors,
         "ran_at": datetime.now(timezone.utc).isoformat(),

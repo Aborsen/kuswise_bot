@@ -793,10 +793,17 @@ def _finalize_onboarding(conn, chat_id: int, user_id: int, first_name: str | Non
     except Exception as e:
         error("water_target_upsert_failed", exc=e, user_id=user_id)
         water = None
-    done_text = _t("onboarding.done", profile, name=first_name or _t("onboarding.default_name", profile))
-    if water:
-        done_text += "\n\n" + _t("onboarding.done_calorie_line", profile, cal=cal)
-        done_text += "\n" + _t("onboarding.done_water_line", profile, water=water)
+    # Variant A copy: cal + water targets are inlined into `onboarding.done`
+    # itself so the activation CTA stays at the bottom of the message instead
+    # of being buried by appended target lines. Fall back to a reasonable
+    # water default in the rare case the upsert failed.
+    done_text = _t(
+        "onboarding.done",
+        profile,
+        name=first_name or _t("onboarding.default_name", profile),
+        cal=cal,
+        water=water or 2000,
+    )
     send_message(chat_id, done_text, reply_markup=main_menu_keyboard(locale=i18n_mod.locale_of(profile)))
 
     # Best-effort admin-channel notification. Wrapped to never affect the user.

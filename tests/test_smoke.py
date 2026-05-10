@@ -496,12 +496,19 @@ def test_onboarding_ask_age_localizes():
 
 
 def test_onboarding_done_format_kwargs():
-    """The done message takes a name kwarg — make sure it interpolates."""
-    en = i18n_mod.t("onboarding.done", locale="en", name="Vic")
-    uk = i18n_mod.t("onboarding.done", locale="uk", name="Віктор")
-    assert "<b>Vic</b>"   in en
-    assert "<b>Віктор</b>" in uk
-    assert "/profile" in en and "/profile" in uk
+    """The done message takes name + cal + water kwargs — make sure they
+    interpolate and the activation CTA is present at the end."""
+    en = i18n_mod.t("onboarding.done", locale="en", name="Vic", cal=2400, water=2500)
+    uk = i18n_mod.t("onboarding.done", locale="uk", name="Віктор", cal=2400, water=2500)
+    assert "<b>Vic</b>"      in en
+    assert "<b>Віктор</b>"   in uk
+    # Targets inlined into the body.
+    assert "2400 kcal" in en and "2500 ml"  in en
+    assert "2400 ккал" in uk and "2500 мл"  in uk
+    # Activation CTA (photo affordance) lives at the end of the message.
+    assert "📸" in en and "📸" in uk
+    assert en.rstrip().endswith("counting for you.")
+    assert uk.rstrip().endswith("рахувати за тебе.")
 
 
 def test_onboarding_default_name_is_locale_specific():

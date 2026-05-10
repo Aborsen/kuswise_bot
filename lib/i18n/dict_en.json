@@ -23,7 +23,7 @@
   "onboarding.custom_cal_prompt": "Enter your own calorie target (whole number, 1000–6000):",
   "onboarding.custom_cal_range": "Calories should be between 1000 and 6000. Try again. 🙂",
   "onboarding.need_button": "Please use the button below. 👇",
-  "onboarding.done": "🎉 All set, <b>{name}</b>! I know everything I need now.\n\nSend me 📸 a meal photo or 📝 a text description — I'll count it. Commands are in the «/» menu, your profile is at /profile.",
+  "onboarding.done": "🎉 All set, <b>{name}</b>!\n\nYour daily targets:\n🎯 <b>{cal} kcal</b> · 💧 <b>{water} ml</b>\n\nNow it's your turn. 📸 Snap a photo of your next meal (or describe it in text, e.g. «<i>scrambled eggs with tomatoes and coffee</i>»), and I'll start counting for you.",
   "onboarding.required": "Let's get to know each other first 👋 Tap /start — I'll ask a few questions and calculate your target.",
   "onboarding.default_name": "friend",
 

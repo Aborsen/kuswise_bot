@@ -2181,6 +2181,161 @@ def record_cron_run(conn, cron_name: str, status: str,
     conn.commit()
 
 
+def get_nudge_effectiveness(conn, days: int = 30) -> dict:
+    """Crude conversion: of users with `last_nudge_sent_at` in the last `days`,
+    how many logged a meal within 24h after that stamp?
+
+    Important caveat: `last_nudge_sent_at` is overwritten on each nudge, so
+    this only sees the *most recent* nudge per user. The admin UI must
+    surface this limitation in a footnote.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            f"""
+            SELECT
+              COUNT(*) FILTER (
+                WHERE up.last_nudge_sent_at::timestamptz > NOW() - INTERVAL '{int(days)} days'
+              ) AS sent,
+              COUNT(*) FILTER (
+                WHERE up.last_nudge_sent_at::timestamptz > NOW() - INTERVAL '{int(days)} days'
+                  AND EXISTS (
+                    SELECT 1 FROM meals m
+                    WHERE m.user_id = up.user_id
+                      AND m.created_at IS NOT NULL
+                      AND m.created_at::timestamptz BETWEEN up.last_nudge_sent_at::timestamptz
+                                                        AND up.last_nudge_sent_at::timestamptz + INTERVAL '24 hours'
+                  )
+              ) AS converted
+            FROM user_profiles up
+            WHERE up.last_nudge_sent_at IS NOT NULL
+            """
+        )
+        row = cur.fetchone()
+    sent = int(row[0] or 0)
+    converted = int(row[1] or 0)
+    pct = round(converted / sent * 100, 1) if sent else 0.0
+    return {"sent": sent, "converted": converted, "pct": pct}
+
+
+def get_ai_cost_estimate(conn, days: int = 30, rates: Optional[dict] = None) -> dict:
+    """Estimated OpenAI cost from `usage_quota` × per-action rate map.
+
+    Returns `{total_usd, by_action, by_day, top_spenders}`.
+    """
+    from lib.config import COST_RATES as _DEFAULT_RATES
+    rates = rates or _DEFAULT_RATES
+    with conn.cursor() as cur:
+        cur.execute(
+            f"""
+            SELECT day, action, user_id, count
+            FROM usage_quota
+            WHERE day >= TO_CHAR(CURRENT_DATE - {int(days) - 1}, 'YYYY-MM-DD')
+            """
+        )
+        rows = cur.fetchall()
+    total = 0.0
+    by_action: dict[str, float] = {}
+    by_day: dict[str, float] = {}
+    by_user: dict[int, float] = {}
+    for day, action, uid, count in rows:
+        rate = float(rates.get(action, 0.0))
+        cost = rate * int(count or 0)
+        total += cost
+        by_action[action] = by_action.get(action, 0.0) + cost
+        by_day[day] = by_day.get(day, 0.0) + cost
+        by_user[uid] = by_user.get(uid, 0.0) + cost
+    top_spenders = sorted(by_user.items(), key=lambda kv: kv[1], reverse=True)[:5]
+    return {
+        "total_usd":    round(total, 2),
+        "by_action":    {a: round(v, 2) for a, v in by_action.items()},
+        "by_day":       {d: round(v, 2) for d, v in sorted(by_day.items())},
+        "top_spenders": [(uid, round(v, 2)) for uid, v in top_spenders],
+    }
+
+
+def get_weight_outcomes(conn, days: int = 30) -> dict:
+    """For users with a target weight + lose/gain goal, bucket by 30-day trend.
+
+    Returns `{on_track: [...], stalled: [...], regressing: [...]}` where
+    each list contains `{user_id, goal, target_weight_kg, weight_kg,
+    delta_30d_kg}` dicts.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            f"""
+            WITH series AS (
+              SELECT user_id,
+                     REGR_SLOPE(weight_kg, EXTRACT(EPOCH FROM recorded_at)) AS slope_per_sec
+              FROM weight_history
+              WHERE recorded_at > NOW() - INTERVAL '{int(days)} days'
+              GROUP BY user_id
+              HAVING COUNT(*) >= 2
+            )
+            SELECT s.user_id, p.goal, p.target_weight_kg, p.weight_kg,
+                   s.slope_per_sec * 86400 * {int(days)} AS delta_kg
+            FROM series s
+            JOIN user_profiles p ON p.user_id = s.user_id
+            WHERE p.target_weight_kg IS NOT NULL
+              AND p.goal IN ('lose', 'gain')
+            """
+        )
+        rows = cur.fetchall()
+    buckets: dict[str, list[dict]] = {"on_track": [], "stalled": [], "regressing": []}
+    for uid, goal, target, weight, delta in rows:
+        d = float(delta or 0)
+        rec = {
+            "user_id":          uid,
+            "goal":             goal,
+            "target_weight_kg": target,
+            "weight_kg":        weight,
+            "delta_30d_kg":     round(d, 2),
+        }
+        if abs(d) <= 0.2:
+            buckets["stalled"].append(rec)
+        elif (goal == "lose" and d < -0.2) or (goal == "gain" and d > 0.2):
+            buckets["on_track"].append(rec)
+        else:
+            buckets["regressing"].append(rec)
+    return buckets
+
+
+def get_recent_events(conn, limit: int = 50) -> list[dict]:
+    """Synthesised event feed: most-recent N entries across signups, meals,
+    weight logs, and (latest-only) nudges. UNION ALL with per-source LIMITs
+    keeps the result snappy without scanning whole tables.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            f"""
+            ( SELECT 'signup'::text AS kind, user_id, created_at::timestamptz AS ts,
+                     ''::text AS extra
+              FROM users WHERE created_at IS NOT NULL
+              ORDER BY created_at::timestamptz DESC LIMIT {int(limit)} )
+            UNION ALL
+            ( SELECT 'meal'::text, user_id, created_at::timestamptz,
+                     COALESCE(LEFT(description, 60), '')
+              FROM meals WHERE created_at IS NOT NULL
+              ORDER BY created_at::timestamptz DESC LIMIT {int(limit)} )
+            UNION ALL
+            ( SELECT 'weight'::text, user_id, recorded_at,
+                     weight_kg::text
+              FROM weight_history
+              ORDER BY recorded_at DESC LIMIT {int(limit)} )
+            UNION ALL
+            ( SELECT 'nudge'::text, user_id, last_nudge_sent_at::timestamptz,
+                     ''::text
+              FROM user_profiles WHERE last_nudge_sent_at IS NOT NULL
+              ORDER BY last_nudge_sent_at::timestamptz DESC LIMIT {int(limit)} )
+            ORDER BY ts DESC NULLS LAST LIMIT {int(limit)}
+            """
+        )
+        rows = cur.fetchall()
+    return [
+        {"kind": r[0], "user_id": r[1], "ts": r[2], "extra": r[3]}
+        for r in rows
+    ]
+
+
 def get_latest_cron_runs(conn) -> list[dict]:
     """One most-recent row per `cron_name`, ordered alphabetically by name.
 

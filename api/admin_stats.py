@@ -19,12 +19,16 @@ from lib.database import (
     delete_meal,
     delete_meal_admin,
     delete_user_all_data,
+    get_ai_cost_estimate,
     get_conn,
     get_daily_trends,
     get_latest_cron_runs,
+    get_nudge_effectiveness,
     get_onboarding_funnel,
+    get_recent_events,
     get_retention_cohorts,
     get_user_breakdowns,
+    get_weight_outcomes,
     init_db,
     recalc_daily_log,
 )
@@ -469,6 +473,22 @@ def build_html(nonce: str = "") -> str:
             latest_cron_runs = get_latest_cron_runs(conn)
         except Exception:
             latest_cron_runs = []
+        try:
+            nudge_eff = get_nudge_effectiveness(conn)
+        except Exception:
+            nudge_eff = {"sent": 0, "converted": 0, "pct": 0.0}
+        try:
+            ai_cost = get_ai_cost_estimate(conn)
+        except Exception:
+            ai_cost = {"total_usd": 0.0, "by_action": {}, "by_day": {}, "top_spenders": []}
+        try:
+            weight_outcomes = get_weight_outcomes(conn)
+        except Exception:
+            weight_outcomes = {"on_track": [], "stalled": [], "regressing": []}
+        try:
+            recent_events = get_recent_events(conn, limit=50)
+        except Exception:
+            recent_events = []
     finally:
         try:
             conn.close()
@@ -673,6 +693,140 @@ def build_html(nonce: str = "") -> str:
         f"Кожен бар — кількість користувачів, які зараз застрягли на цьому кроці. "
         f"`done` = успішно завершили онбординг.</div>"
         f"</div>"
+    )
+
+    # --- F-14 §4: nudge effectiveness ---
+    _ne_pct = nudge_eff["pct"]
+    _ne_color = "#4caf50" if _ne_pct >= 20 else ("#ff9800" if _ne_pct >= 10 else "#e94560")
+    nudge_eff_html = (
+        f"<h2>🔔 Ефективність нагадувань</h2>"
+        f"<div style='display:flex;gap:16px;flex-wrap:wrap;margin-bottom:8px'>"
+        f"<div class='card'><div class='num'>{nudge_eff['sent']}</div>"
+        f"<div class='label'>Надіслано за 30 днів</div></div>"
+        f"<div class='card'><div class='num green'>{nudge_eff['converted']}</div>"
+        f"<div class='label'>Залогували протягом 24h</div></div>"
+        f"<div class='card'><div class='num' style='color:{_ne_color}'>{_ne_pct}%</div>"
+        f"<div class='label'>Конверсія</div></div>"
+        f"</div>"
+        f"<p style='color:#666;font-size:0.78em;margin-top:0;margin-bottom:20px'>"
+        f"⚠️ `last_nudge_sent_at` перезаписується при кожному надсиланні, "
+        f"тож метрика враховує лише найсвіжіше нагадування на користувача. "
+        f"Для повноцінної аналітики потрібен окремий журнал відправлень.</p>"
+    )
+
+    # --- F-14 §5: AI cost estimate ---
+    _by_action_rows = "".join(
+        f"<tr><td>{_esc(action)}</td>"
+        f"<td class='num'>${cost:.2f}</td></tr>"
+        for action, cost in sorted(ai_cost["by_action"].items(), key=lambda kv: kv[1], reverse=True)
+    ) or "<tr><td colspan='2' style='color:#666'>Немає даних.</td></tr>"
+    _top_spend_rows = "".join(
+        f"<tr><td>{_esc(uid)}</td><td class='num'>${cost:.2f}</td></tr>"
+        for uid, cost in ai_cost["top_spenders"]
+    ) or "<tr><td colspan='2' style='color:#666'>Немає даних.</td></tr>"
+    _cost_daily = list(ai_cost["by_day"].values())
+    _cost_sparkline = (
+        _sparkline(_cost_daily, width=300, height=50, color="#ff9800") if _cost_daily else ""
+    )
+    ai_cost_html = (
+        f"<h2>💰 OpenAI витрати (оцінка)</h2>"
+        f"<div style='display:flex;gap:16px;flex-wrap:wrap;margin-bottom:8px'>"
+        f"<div class='card'><div class='num' style='color:#ff9800'>${ai_cost['total_usd']:.2f}</div>"
+        f"<div class='label'>Сумарно за 30 днів</div></div>"
+        f"<div style='background:#16213e;border-radius:12px;padding:14px 18px;flex:2;min-width:320px'>"
+        f"<div style='color:#a0a0a0;font-size:0.85em;margin-bottom:4px'>Витрати по днях</div>"
+        f"{_cost_sparkline}"
+        f"</div>"
+        f"</div>"
+        f"<div style='display:flex;gap:16px;flex-wrap:wrap;margin-bottom:8px'>"
+        f"<div style='flex:1;min-width:260px'>"
+        f"<h3 style='font-size:1em;color:#ccc;margin:8px 0'>За типом дії</h3>"
+        f"<table><thead><tr><th>Action</th><th>USD</th></tr></thead>"
+        f"<tbody>{_by_action_rows}</tbody></table></div>"
+        f"<div style='flex:1;min-width:260px'>"
+        f"<h3 style='font-size:1em;color:#ccc;margin:8px 0'>Топ-5 споживачів</h3>"
+        f"<table><thead><tr><th>user_id</th><th>USD</th></tr></thead>"
+        f"<tbody>{_top_spend_rows}</tbody></table></div>"
+        f"</div>"
+        f"<p style='color:#666;font-size:0.78em;margin-top:0;margin-bottom:20px'>"
+        f"💡 Оцінка: count × per-action rate з `lib/config.py:COST_RATES`. "
+        f"Не реальний рахунок — реальні витрати дивись у OpenAI dashboard.</p>"
+    )
+
+    # --- F-14 §6: weight-loss outcomes ---
+    _bucket_counts = {k: len(v) for k, v in weight_outcomes.items()}
+    _bucket_total = sum(_bucket_counts.values()) or 1
+    _GOAL_TXT = {"lose": "🔥 Схуднути", "gain": "💪 Набір"}
+
+    def _delta_color(d: float) -> str:
+        if d < 0:   return "#4caf50"
+        if d > 0:   return "#e94560"
+        return "#888"
+
+    def _outcome_table(rows):
+        if not rows:
+            return "<p style='color:#666;font-size:0.85em'>Порожньо.</p>"
+        body_parts = []
+        for r in rows:
+            color = _delta_color(r["delta_30d_kg"])
+            body_parts.append(
+                f"<tr><td>{_esc(r['user_id'])}</td>"
+                f"<td>{_esc(_GOAL_TXT.get(r['goal'], r['goal']))}</td>"
+                f"<td class='num'>{_esc(r['weight_kg'])}</td>"
+                f"<td class='num'>{_esc(r['target_weight_kg'])}</td>"
+                f"<td class='num' style='color:{color}'>"
+                f"{r['delta_30d_kg']:+.2f} кг</td></tr>"
+            )
+        body = "".join(body_parts)
+        return (
+            f"<table style='font-size:0.85em'><thead><tr>"
+            f"<th>user_id</th><th>Мета</th><th>Вага</th><th>Ціль</th><th>Δ 30d</th>"
+            f"</tr></thead><tbody>{body}</tbody></table>"
+        )
+
+    weight_html = (
+        f"<h2>⚖️ Прогрес ваги (30 днів)</h2>"
+        f"<div style='display:flex;gap:16px;flex-wrap:wrap;margin-bottom:14px'>"
+        f"<div class='card'><div class='num green'>{_bucket_counts['on_track']}</div>"
+        f"<div class='label'>На правильному шляху</div></div>"
+        f"<div class='card'><div class='num' style='color:#ff9800'>{_bucket_counts['stalled']}</div>"
+        f"<div class='label'>Без змін</div></div>"
+        f"<div class='card'><div class='num'>{_bucket_counts['regressing']}</div>"
+        f"<div class='label'>Регресують</div></div>"
+        f"</div>"
+        f"<div style='display:flex;gap:16px;flex-wrap:wrap;margin-bottom:20px'>"
+        f"<div style='flex:1;min-width:340px'>"
+        f"<h3 style='font-size:0.95em;color:#4caf50;margin:6px 0'>На правильному шляху</h3>"
+        f"{_outcome_table(weight_outcomes['on_track'])}</div>"
+        f"<div style='flex:1;min-width:340px'>"
+        f"<h3 style='font-size:0.95em;color:#ff9800;margin:6px 0'>Стопориться</h3>"
+        f"{_outcome_table(weight_outcomes['stalled'])}</div>"
+        f"<div style='flex:1;min-width:340px'>"
+        f"<h3 style='font-size:0.95em;color:#e94560;margin:6px 0'>Регресують</h3>"
+        f"{_outcome_table(weight_outcomes['regressing'])}</div>"
+        f"</div>"
+    )
+
+    # --- F-14 §9: recent events feed ---
+    _KIND_LABEL = {"signup": "🆕 Нова реєстрація", "meal": "🍽️ Страва",
+                   "weight": "⚖️ Вага", "nudge": "🔔 Нагадування"}
+    _KIND_COLOR = {"signup": "#4caf50", "meal": "#e94560",
+                   "weight": "#0288d1", "nudge": "#ff9800"}
+    _event_rows = "".join(
+        f"<tr>"
+        f"<td style='font-size:0.85em;color:#888'>{_esc(str(e['ts'])[:19])}</td>"
+        f"<td style='color:{_KIND_COLOR.get(e['kind'], '#888')}'>{_esc(_KIND_LABEL.get(e['kind'], e['kind']))}</td>"
+        f"<td>{_esc(e['user_id'])}</td>"
+        f"<td style='color:#888'>{_esc((e['extra'] or '')[:60])}</td>"
+        f"</tr>"
+        for e in recent_events
+    )
+    events_html = (
+        f"<h2>📰 Стрічка подій (останні 50)</h2>"
+        f"<div class='table-wrap' style='max-height:60vh'><table>"
+        f"<thead><tr><th>Час</th><th>Подія</th><th>user_id</th><th>Деталі</th></tr></thead>"
+        f"<tbody>{_event_rows or '<tr><td colspan=4 style=color:#666>Немає подій.</td></tr>'}</tbody>"
+        f"</table></div>"
     )
 
     # --- F-14 §8: cron status panel ---
@@ -992,7 +1146,11 @@ def build_html(nonce: str = "") -> str:
 {retention_html}
 {trends_html}
 {onboarding_html}
+{nudge_eff_html}
+{ai_cost_html}
+{weight_html}
 {cron_html}
+{events_html}
 </section>
 
 <section id="tab-meals" hidden>

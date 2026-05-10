@@ -1835,6 +1835,69 @@ def test_get_latest_cron_runs_distinct_per_name():
     assert out[0]["status"] == "ok"
 
 
+def test_get_nudge_effectiveness_24h_window():
+    """Conversion query gates on `last_nudge_sent_at + 24h` and recent days."""
+    conn = _AdminConn(rows=[(13, 2)])
+    out = db.get_nudge_effectiveness(conn, days=30)
+    sql, _ = conn.calls[0]
+    assert "INTERVAL '30 days'" in sql
+    assert "INTERVAL '24 hours'" in sql
+    assert "last_nudge_sent_at" in sql
+    assert out == {"sent": 13, "converted": 2, "pct": round(2 / 13 * 100, 1)}
+
+
+def test_get_ai_cost_estimate_multiplies_count_by_rate():
+    """Cost helper multiplies usage_quota counts by COST_RATES per action."""
+    # Two days, two actions, two users.
+    conn = _AdminConn(rows=[
+        ("2026-05-10", "meal_analysis", 100, 5),     # 5 × $0.005 = $0.025
+        ("2026-05-10", "ask",           100, 10),    # 10 × $0.001 = $0.010
+        ("2026-05-09", "meal_analysis", 200, 4),     # 4 × $0.005 = $0.020
+    ])
+    out = db.get_ai_cost_estimate(conn, days=30)
+    # Use abs-tolerance comparisons — exact float equality after 2-decimal
+    # rounding bites on values like 0.045 that float can't represent.
+    assert abs(out["total_usd"] - 0.055) < 0.01
+    assert abs(out["by_action"]["meal_analysis"] - 0.045) < 0.01
+    assert abs(out["by_action"]["ask"] - 0.010) < 0.01
+    # Top spender by user_id sum.
+    assert out["top_spenders"][0][0] == 100
+    assert abs(out["top_spenders"][0][1] - 0.035) < 0.01
+
+
+def test_get_weight_outcomes_buckets_correctly():
+    """Buckets: on_track (matches goal direction, |Δ|>0.2), stalled (|Δ|≤0.2),
+    regressing (opposite direction)."""
+    conn = _AdminConn(rows=[
+        (1, "lose", 75.0, 80.0, -2.0),   # losing 2kg, goal lose → on_track
+        (2, "lose", 75.0, 80.0, +1.0),   # gaining, goal lose → regressing
+        (3, "lose", 75.0, 80.0, -0.1),   # flat → stalled
+        (4, "gain", 80.0, 75.0, +1.5),   # gaining, goal gain → on_track
+        (5, "gain", 80.0, 75.0, -1.0),   # losing, goal gain → regressing
+    ])
+    out = db.get_weight_outcomes(conn)
+    assert {r["user_id"] for r in out["on_track"]} == {1, 4}
+    assert {r["user_id"] for r in out["regressing"]} == {2, 5}
+    assert {r["user_id"] for r in out["stalled"]} == {3}
+
+
+def test_get_recent_events_unions_four_sources():
+    """Recent-events query must UNION ALL signups + meals + weight + nudges."""
+    conn = _AdminConn(rows=[
+        ("meal",   100, "2026-05-10T20:00", "Yogurt"),
+        ("signup", 101, "2026-05-10T19:00", ""),
+    ])
+    out = db.get_recent_events(conn, limit=10)
+    sql, _ = conn.calls[0]
+    # All four event sources present in the UNION.
+    assert "'signup'" in sql and "FROM users" in sql
+    assert "'meal'" in sql and "FROM meals" in sql
+    assert "'weight'" in sql and "FROM weight_history" in sql
+    assert "'nudge'" in sql and "last_nudge_sent_at" in sql
+    assert "UNION ALL" in sql
+    assert out[0]["kind"] == "meal" and out[1]["kind"] == "signup"
+
+
 def test_cost_rates_constant_covers_tracked_actions():
     """All actions tracked by usage_quota have a USD estimate in COST_RATES."""
     from lib.config import COST_RATES

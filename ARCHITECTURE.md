@@ -16,7 +16,7 @@ This document describes the runtime structure end-to-end: stack, components, dat
 6. [Database (Postgres / Neon)](#6-database-postgres--neon)
 7. [State machine](#7-state-machine)
 8. [Meal-log lifecycle](#8-meal-log-lifecycle)
-9. [Feature map (F-1 … F-12)](#9-feature-map)
+9. [Feature map (F-1 … F-14)](#9-feature-map)
 10. [External integrations](#10-external-integrations)
 11. [Localization (i18n)](#11-localization-i18n)
 12. [Security posture](#12-security-posture)
@@ -350,6 +350,7 @@ Each "F-N" tag corresponds to a feature pillar referenced throughout the codebas
 | F-11 | Single-meal recipe suggestion | `/suggest_meal`, `fridge_ingredients` state | `lib/openai_nutrition.py:suggest_meal`, `extract_pantry_from_photo` |
 | F-12 | Weekly recap PNG card | `/recap` (chat) + share-recap button (Mini App) | `lib/recap.py` (PIL + QR) |
 | F-13 | Unified daily re-engagement nudge + `/quiet` opt-out | piggybacks on the hourly `cron_daily_summary` — branch (2) sends one warm `nudge.daily_zero` reminder per user-local day, fired at the user's local 22:00 (`user_profiles.tz`). Covers recent-lapsed, long-dormant, and never-loggers uniformly. Per-day dedup via `last_nudge_sent_at` (now compared in user-tz date space). The only opt-out gates are explicit `/quiet` (`nudge_optout=1`) and the auto-opt-out on TG 400/403 | `api/cron_daily_summary.py`, `user_profiles.tz / nudge_optout / last_nudge_sent_at`, `lib/database.py:get_users_to_nudge / mark_nudge_sent / set_nudge_optout` |
+| F-14 | Admin analytics dashboard | New "📈 Аналітика" tab in `api/admin_stats.py` with 8 sections (retention cohorts D1/D7/D30, 30-day trends sparklines, onboarding funnel detail, nudge ROI, AI cost estimate, weight-loss outcomes, cron status panel, recent events feed). Plus a lang/tz/sex/goal breakdown in Overview and a per-user 30-day sparkline column in the Users table. Cron-run rows are persisted to a new `cron_runs` table (written from each cron's `finally:` block via `record_cron_run`); AI cost is computed from `usage_quota` × `lib/config.py:COST_RATES` (rate-map estimate, not real invoices). | `api/admin_stats.py`, `lib/database.py:get_retention_cohorts / get_daily_trends / get_onboarding_funnel / get_user_breakdowns / get_nudge_effectiveness / get_ai_cost_estimate / get_weight_outcomes / get_recent_events / get_user_activity_30d / record_cron_run / get_latest_cron_runs`, `lib/config.py:COST_RATES`, `cron_runs` table |
 |  — | `/ask` (free-form Q&A) | `/ask` | `lib/openai_chat.py`, `chat_sessions` |
 |  — | Water tracking | bot only — `/water` (quick-add buttons) and reply-keyboard `+250мл`. Dashboard shows a read-only display. | `water_logs`, `water_prefs` |
 
@@ -600,7 +601,7 @@ All scripts read from `.env` / `.env.local` via `python-dotenv` and fail loudly 
 
 ## Glossary
 
-- **F-N tags** — internal feature pillars (F-1 through F-12). Used in code comments + commit history to group related work. See [Feature map](#9-feature-map).
+- **F-N tags** — internal feature pillars (F-1 through F-14). Used in code comments + commit history to group related work. See [Feature map](#9-feature-map).
 - **Pending analysis** — a row in `pending_analyses` representing an AI result the user hasn't yet confirmed. Carries enough context to re-run, modify, or accept.
 - **Health addendum** — string injected into the AI system prompt listing the user's allergens / conditions and extending the JSON schema with `allergen_flags` / `crohn_flags`. Empty for users without a health profile (the AI then doesn't generate those fields, saving tokens).
 - **Personalization addendum** — top-N EWMA-learned aliases prepended as few-shot anchors, so the AI matches the user's actual habitual portions for known dishes.
@@ -610,4 +611,4 @@ All scripts read from `.env` / `.env.local` via `python-dotenv` and fail loudly 
 
 ## Last updated
 
-This document was last refreshed 2026-05-04 — F-13 moved to per-user-local 22:00 timing: `cron_daily_summary` now runs hourly and uses `EXTRACT(HOUR FROM NOW() AT TIME ZONE up.tz)` to fire each user's branch at their local 22:00 instead of a bot-wide 20:00 UTC. `last_nudge_sent_at` re-introduced as the per-user-local-day dedup gate. Earlier same-day refresh unified the two-tier nudge into a single `nudge.daily_zero`. Schema unchanged. Authoritative source is always the code; prefer file:line references over this document when they disagree.
+This document was last refreshed 2026-05-11 — F-14 admin analytics dashboard landed (Analytics tab with 8 sections, lang/tz/sex/goal breakdown cards, per-user 30-day sparkline column). One new table (`cron_runs`) and one config constant (`COST_RATES`) added. Earlier 2026-05-04 refresh: F-13 moved to per-user-local 22:00 timing and unified to one `nudge.daily_zero` message. Authoritative source is always the code; prefer file:line references over this document when they disagree.

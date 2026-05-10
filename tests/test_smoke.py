@@ -1910,6 +1910,31 @@ def test_cost_rates_constant_covers_tracked_actions():
         assert 0.0001 <= rate <= 1.0, f"{action} = {rate} is out of range"
 
 
+def test_get_user_activity_30d_dense_oldest_first():
+    """Activity helper returns a 30-element array per user, oldest day first."""
+    # 3 rows: user 1 logged today (days_ago=0), 3 days ago, 29 days ago.
+    conn = _AdminConn(rows=[(1, 0, 5), (1, 3, 2), (1, 29, 1)])
+    out = db.get_user_activity_30d(conn, days=30)
+    assert 1 in out
+    arr = out[1]
+    assert len(arr) == 30
+    # days_ago=0 → last slot (index 29)
+    assert arr[29] == 5
+    # days_ago=3 → index 26
+    assert arr[26] == 2
+    # days_ago=29 → index 0 (oldest)
+    assert arr[0] == 1
+    # All other slots zero.
+    assert sum(arr) == 5 + 2 + 1
+
+
+def test_get_user_activity_30d_users_with_no_activity_absent():
+    """Users with no rows in the period are simply not in the dict."""
+    conn = _AdminConn(rows=[])
+    out = db.get_user_activity_30d(conn)
+    assert out == {}
+
+
 # ---------- dashboard sprint 1 helpers ----------
 
 def test_get_latest_recommendation_select_shape():

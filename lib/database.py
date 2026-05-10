@@ -2181,6 +2181,39 @@ def record_cron_run(conn, cron_name: str, status: str,
     conn.commit()
 
 
+def get_user_activity_30d(conn, days: int = 30) -> dict[int, list[int]]:
+    """For each user with logs in the last `days`, a dense array of per-day
+    meal counts oriented oldest-first.
+
+    Returns `{user_id: [count_d-(days-1), …, count_d0]}` so callers can render
+    inline sparklines without further bookkeeping. Users with no recent
+    activity are simply absent from the dict (caller draws nothing).
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            f"""
+            SELECT user_id,
+                   (CURRENT_DATE - m.day) AS days_ago,
+                   m.cnt
+            FROM (
+              SELECT user_id, created_at::date AS day, COUNT(*) AS cnt
+              FROM meals
+              WHERE created_at IS NOT NULL
+                AND created_at::date > CURRENT_DATE - {int(days)}
+              GROUP BY user_id, created_at::date
+            ) m
+            """
+        )
+        rows = cur.fetchall()
+    out: dict[int, list[int]] = {}
+    for uid, days_ago, cnt in rows:
+        arr = out.setdefault(uid, [0] * days)
+        idx = (days - 1) - int(days_ago)
+        if 0 <= idx < days:
+            arr[idx] = int(cnt)
+    return out
+
+
 def get_nudge_effectiveness(conn, days: int = 30) -> dict:
     """Crude conversion: of users with `last_nudge_sent_at` in the last `days`,
     how many logged a meal within 24h after that stamp?

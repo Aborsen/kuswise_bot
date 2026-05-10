@@ -27,6 +27,7 @@ from lib.database import (
     get_onboarding_funnel,
     get_recent_events,
     get_retention_cohorts,
+    get_user_activity_30d,
     get_user_breakdowns,
     get_weight_outcomes,
     init_db,
@@ -489,6 +490,10 @@ def build_html(nonce: str = "") -> str:
             recent_events = get_recent_events(conn, limit=50)
         except Exception:
             recent_events = []
+        try:
+            user_activity = get_user_activity_30d(conn)
+        except Exception:
+            user_activity = {}
     finally:
         try:
             conn.close()
@@ -520,6 +525,8 @@ def build_html(nonce: str = "") -> str:
             tw_cell = "—"
         lang_cell = (lang or "").upper() or "—"
         tz_cell = tz or "—"
+        spark_series = user_activity.get(uid, [])
+        spark_html = _sparkline(spark_series, width=60, height=20) if spark_series else "<span style='color:#444'>—</span>"
         user_tbody += (
             f'<tr data-uid="{_esc(uid)}">'
             f'<td class="clickable">{_esc(uid)}</td>'
@@ -539,6 +546,7 @@ def build_html(nonce: str = "") -> str:
             f"<td class='clickable'>{_esc((joined or '')[:10])}</td>"
             f"<td class='clickable'>{_esc(lang_cell)}</td>"
             f"<td class='clickable'>{_esc(tz_cell)}</td>"
+            f"<td>{spark_html}</td>"
             f'<td><button type="button" class="btn-del btn-del-user" data-uid="{_esc(uid)}" title="Видалити користувача">🗑</button></td>'
             f"</tr>\n"
         )
@@ -1133,6 +1141,7 @@ def build_html(nonce: str = "") -> str:
   <th data-col="14" data-type="str">Приєднався <span class="arrow">▲</span></th>
   <th data-col="15" data-type="str">Мова <span class="arrow">▲</span></th>
   <th data-col="16" data-type="str">Часовий пояс <span class="arrow">▲</span></th>
+  <th class="no-sort" title="Логи за 30 днів">📈 30д</th>
   <th class="no-sort">Дія</th>
 </tr></thead>
 <tbody>{user_tbody}</tbody>

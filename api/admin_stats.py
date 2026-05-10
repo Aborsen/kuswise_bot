@@ -409,11 +409,12 @@ def build_html(nonce: str = "") -> str:
                    COUNT(m.id) AS meals, MAX(m.created_at) AS last_meal,
                    p.age, p.sex, p.weight_kg, p.height_cm,
                    p.gym_per_week, p.goal, p.daily_calorie_target,
-                   p.target_weight_kg, p.lang, p.tz
+                   p.target_weight_kg, p.lang, p.tz,
+                   COALESCE(u.first_name, '')
             FROM users u
             LEFT JOIN meals m ON m.user_id = u.user_id
             LEFT JOIN user_profiles p ON p.user_id = u.user_id
-            GROUP BY u.user_id, u.username, u.created_at,
+            GROUP BY u.user_id, u.username, u.first_name, u.created_at,
                      p.age, p.sex, p.weight_kg, p.height_cm,
                      p.gym_per_week, p.goal, p.daily_calorie_target,
                      p.target_weight_kg, p.lang, p.tz
@@ -429,7 +430,7 @@ def build_html(nonce: str = "") -> str:
             """
             SELECT m.id, m.user_id, COALESCE(u.username, ''), m.date, m.meal_type,
                    m.description, m.calories, m.protein_g, m.carbs_g, m.fat_g,
-                   m.fiber_g, m.sugar_g, m.created_at
+                   m.fiber_g, m.sugar_g, m.created_at, COALESCE(u.first_name, '')
             FROM meals m LEFT JOIN users u ON u.user_id = m.user_id
             ORDER BY m.id DESC
             LIMIT %s
@@ -494,16 +495,19 @@ def build_html(nonce: str = "") -> str:
             user_activity = get_user_activity_30d(conn)
         except Exception:
             user_activity = {}
-        # Single bulk fetch of username map for the Analytics tab. Used by
-        # the AI-cost top-spenders, weight-outcomes table, and events feed
-        # so each row renders as `@username` (or `user_id` fallback when
-        # the user never set a Telegram username).
-        username_map: dict[int, str] = {}
+        # Single bulk fetch for the Analytics tab. `username` is the public
+        # Telegram @handle (often empty); `first_name` is the display name.
+        # `_uname()` below picks `@handle` → `first_name` → numeric id, in
+        # that priority, so users without a public handle never get a
+        # misleading `@firstname` rendering.
+        username_map: dict[int, tuple[str, str]] = {}
         try:
             with conn.cursor() as _cur_u:
-                _cur_u.execute("SELECT user_id, COALESCE(username, '') FROM users")
-                for _uid, _uname in _cur_u.fetchall():
-                    username_map[_uid] = _uname
+                _cur_u.execute(
+                    "SELECT user_id, COALESCE(username, ''), COALESCE(first_name, '') FROM users"
+                )
+                for _uid, _uname, _fname in _cur_u.fetchall():
+                    username_map[_uid] = (_uname, _fname)
         except Exception:
             pass
     finally:
@@ -520,7 +524,14 @@ def build_html(nonce: str = "") -> str:
     user_tbody = ""
     for r in user_rows:
         (uid, uname, joined, meals, last, age, sex, weight, height,
-         gym, goal, cal_target, target_weight, lang, tz) = r
+         gym, goal, cal_target, target_weight, lang, tz, first_name) = r
+        # Show `@handle` when the user has a real Telegram username;
+        # otherwise fall back to their display name. The dash for "no
+        # handle AND no display name" mirrors the rest of the table.
+        username_cell = (
+            f"@{_esc(uname)}" if uname.strip()
+            else (_esc(first_name) if first_name.strip() else "—")
+        )
         adh = adherence_map.get(uid)
         adh_cell = f"{adh}%" if adh is not None else "—"
         adh_color = ""
@@ -542,7 +553,7 @@ def build_html(nonce: str = "") -> str:
         user_tbody += (
             f'<tr data-uid="{_esc(uid)}">'
             f'<td class="clickable">{_esc(uid)}</td>'
-            f'<td class="clickable">{_esc(uname)}</td>'
+            f'<td class="clickable">{username_cell}</td>'
             f"<td class='num clickable'>{_esc(age) if age else '—'}</td>"
             f"<td class='clickable'>{_SEX_UA.get(sex or '', '—')}</td>"
             f"<td class='num clickable'>{_esc(weight) if weight else '—'}</td>"
@@ -566,12 +577,20 @@ def build_html(nonce: str = "") -> str:
     # Meals table — all history
     meals_tbody = ""
     for r in meal_rows:
-        mid, uid, uname, date, mt, desc, cal, p, c, f, fib, sug, ts = r
+        mid, uid, uname, date, mt, desc, cal, p, c, f, fib, sug, ts, meal_first_name = r
+        # Same priority as the Users table and Analytics tab — show
+        # @handle when present, else first_name, else nothing extra.
+        if uname and uname.strip():
+            meal_user_label = f"@{_esc(uname.strip())}"
+        elif meal_first_name and meal_first_name.strip():
+            meal_user_label = _esc(meal_first_name.strip())
+        else:
+            meal_user_label = ""
         meals_tbody += (
             f'<tr data-mid="{_esc(mid)}" data-uid="{_esc(uid)}">'
             f'<td><input type="checkbox" class="meal-check" value="{_esc(mid)}"></td>'
             f"<td>{_esc((ts or '')[:16])}</td>"
-            f"<td>{_esc(uname)} <span class='uid'>({_esc(uid)})</span></td>"
+            f"<td>{meal_user_label} <span class='uid'>({_esc(uid)})</span></td>"
             f"<td>{_esc(date)}</td>"
             f"<td>{_esc(mt)}</td>"
             f"<td>{_esc((desc or '')[:80])}</td>"
@@ -721,9 +740,19 @@ def build_html(nonce: str = "") -> str:
     )
 
     def _uname(uid) -> str:
-        """Render a user as `@username`; fall back to numeric id when blank."""
-        name = (username_map.get(uid) or "").strip()
-        return f"@{name}" if name else f"{uid}"
+        """Render a user with the right priority: `@handle` → display name
+        → numeric id. The `@` prefix is reserved for genuine Telegram
+        handles so a row like `Anna` (no public handle) doesn't look like
+        the handle `@Anna`.
+        """
+        username, first_name = username_map.get(uid, ("", ""))
+        username = (username or "").strip()
+        first_name = (first_name or "").strip()
+        if username:
+            return f"@{username}"
+        if first_name:
+            return first_name
+        return f"{uid}"
 
     # --- F-14 §4: nudge effectiveness ---
     _ne_pct = nudge_eff["pct"]
@@ -911,9 +940,18 @@ def build_html(nonce: str = "") -> str:
     user_modal_data = {}
     for r in user_rows:
         (uid, uname, joined, meals, last, age, sex, weight, height,
-         gym, goal, cal_target, target_weight, lang, tz) = r
+         gym, goal, cal_target, target_weight, lang, tz, first_name) = r
+        # Modal title: prefer @handle, then first_name, then numeric id.
+        # JS uses `uname` as the heading so it must already include the
+        # right prefix.
+        if uname and uname.strip():
+            display_name = f"@{uname.strip()}"
+        elif first_name and first_name.strip():
+            display_name = first_name.strip()
+        else:
+            display_name = str(uid)
         user_modal_data[str(uid)] = {
-            "uid": uid, "uname": uname or "—",
+            "uid": uid, "uname": display_name,
             "joined": str(joined or "")[:10],
             "meals": meals,
             "last": str(last or "")[:10],
@@ -1426,11 +1464,11 @@ function showUserModal(row) {{
   const uid = row.dataset.uid;
   const d = USER_DATA[uid];
   if (!d) return;
-  document.getElementById('modalTitle').textContent = `@${{d.uname}} (${{d.uid}})`;
+  document.getElementById('modalTitle').textContent = `${{d.uname}} (${{d.uid}})`;
   const adh = d.adherence != null ? d.adherence + '%' : '—';
   const fields = [
     ['Telegram ID', d.uid],
-    ['Username', '@' + d.uname],
+    ['Username', d.uname],
     ['Приєднався', d.joined],
     ['Остання страва', d.last],
     ['Страв всього', d.meals],

@@ -390,8 +390,12 @@ def process_update(update: dict) -> None:
 
         user = message.get("from", {})
         user_id = user.get("id")
-        username = user.get("username") or user.get("first_name")
-        first_name = user.get("first_name")
+        # Persist the two Telegram fields as-is. `username` is the public
+        # @handle (often empty); `first_name` is the display name. Do NOT
+        # collapse them — the admin panel renders `@username` vs plain
+        # display-name differently and depends on the distinction.
+        username = user.get("username") or ""
+        first_name = user.get("first_name") or ""
 
         if not _is_allowed(user_id):
             chat_id = message.get("chat", {}).get("id")
@@ -403,7 +407,7 @@ def process_update(update: dict) -> None:
             return
 
         if user_id:
-            upsert_user(conn, user_id, username)
+            upsert_user(conn, user_id, username, first_name)
 
         chat_id = message["chat"]["id"]
 

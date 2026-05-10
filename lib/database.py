@@ -52,6 +52,14 @@ def init_db(conn=None, force: bool = False) -> None:
                 created_at TEXT
             )
         """)
+        # `username` stores the Telegram @handle ONLY (lowercase ASCII /
+        # underscores, may be empty); `first_name` stores the Telegram
+        # display name. Historically `username` was a misnomer that held
+        # whichever of (handle, first_name) was non-empty, which made the
+        # admin panel render `@Anna` for users who had no public handle.
+        cur.execute(
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS first_name TEXT NOT NULL DEFAULT ''"
+        )
         cur.execute("""
             CREATE TABLE IF NOT EXISTS daily_logs (
                 id BIGSERIAL PRIMARY KEY,
@@ -374,12 +382,24 @@ def init_db(conn=None, force: bool = False) -> None:
 
 # ---------- Users ----------
 
-def upsert_user(conn, user_id: int, username: Optional[str]) -> None:
+def upsert_user(conn, user_id: int, username: Optional[str],
+                first_name: Optional[str] = "") -> None:
+    """Insert or refresh a `users` row.
+
+    `username` must be the bare Telegram @handle (no leading "@"), or empty
+    string for users without a public handle. `first_name` is the display
+    name. Conflicts UPDATE both columns so admin reads stay fresh when a
+    user later sets / changes their handle or display name (the old
+    `DO NOTHING` froze whichever value landed first).
+    """
     with conn.cursor() as cur:
         cur.execute(
-            "INSERT INTO users (user_id, username, created_at) VALUES (%s, %s, %s) "
-            "ON CONFLICT (user_id) DO NOTHING",
-            (user_id, username or "", _now_iso()),
+            """INSERT INTO users (user_id, username, first_name, created_at)
+               VALUES (%s, %s, %s, %s)
+               ON CONFLICT (user_id) DO UPDATE SET
+                   username   = EXCLUDED.username,
+                   first_name = EXCLUDED.first_name""",
+            (user_id, username or "", first_name or "", _now_iso()),
         )
     conn.commit()
 

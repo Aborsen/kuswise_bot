@@ -494,6 +494,18 @@ def build_html(nonce: str = "") -> str:
             user_activity = get_user_activity_30d(conn)
         except Exception:
             user_activity = {}
+        # Single bulk fetch of username map for the Analytics tab. Used by
+        # the AI-cost top-spenders, weight-outcomes table, and events feed
+        # so each row renders as `@username` (or `user_id` fallback when
+        # the user never set a Telegram username).
+        username_map: dict[int, str] = {}
+        try:
+            with conn.cursor() as _cur_u:
+                _cur_u.execute("SELECT user_id, COALESCE(username, '') FROM users")
+                for _uid, _uname in _cur_u.fetchall():
+                    username_map[_uid] = _uname
+        except Exception:
+            pass
     finally:
         try:
             conn.close()
@@ -635,16 +647,21 @@ def build_html(nonce: str = "") -> str:
             d30pct = round(c["d30"] / size * 100) if size else 0
             def _retcell(pct: int) -> str:
                 color = "#4caf50" if pct >= 50 else ("#ff9800" if pct >= 20 else "#e94560")
-                return f"<td class='num' style='color:{color}'>{pct}%</td>"
+                return (f"<td style='text-align:center;color:{color};"
+                        f"font-variant-numeric:tabular-nums'>{pct}%</td>")
             cohort_rows += (
-                f"<tr><td>{week}</td><td class='num'>{size}</td>"
+                f"<tr><td>{week}</td>"
+                f"<td style='text-align:center;font-variant-numeric:tabular-nums'>{size}</td>"
                 f"{_retcell(d1pct)}{_retcell(d7pct)}{_retcell(d30pct)}</tr>"
             )
         retention_html = (
             f"<h2>🎯 Когорти утримання</h2>"
-            f"<div class='table-wrap' style='max-height:none'><table>"
-            f"<thead><tr><th>Тиждень реєстрації</th><th>Розмір</th>"
-            f"<th>D1</th><th>D7</th><th>D30</th></tr></thead>"
+            f"<div style='max-width:560px'><table style='width:auto;min-width:480px'>"
+            f"<thead><tr><th style='text-align:left'>Тиждень реєстрації</th>"
+            f"<th style='text-align:center'>Розмір</th>"
+            f"<th style='text-align:center'>D1</th>"
+            f"<th style='text-align:center'>D7</th>"
+            f"<th style='text-align:center'>D30</th></tr></thead>"
             f"<tbody>{cohort_rows}</tbody></table></div>"
         )
     else:
@@ -703,6 +720,11 @@ def build_html(nonce: str = "") -> str:
         f"</div>"
     )
 
+    def _uname(uid) -> str:
+        """Render a user as `@username`; fall back to numeric id when blank."""
+        name = (username_map.get(uid) or "").strip()
+        return f"@{name}" if name else f"{uid}"
+
     # --- F-14 §4: nudge effectiveness ---
     _ne_pct = nudge_eff["pct"]
     _ne_color = "#4caf50" if _ne_pct >= 20 else ("#ff9800" if _ne_pct >= 10 else "#e94560")
@@ -729,7 +751,7 @@ def build_html(nonce: str = "") -> str:
         for action, cost in sorted(ai_cost["by_action"].items(), key=lambda kv: kv[1], reverse=True)
     ) or "<tr><td colspan='2' style='color:#666'>Немає даних.</td></tr>"
     _top_spend_rows = "".join(
-        f"<tr><td>{_esc(uid)}</td><td class='num'>${cost:.2f}</td></tr>"
+        f"<tr><td>{_esc(_uname(uid))}</td><td class='num'>${cost:.2f}</td></tr>"
         for uid, cost in ai_cost["top_spenders"]
     ) or "<tr><td colspan='2' style='color:#666'>Немає даних.</td></tr>"
     _cost_daily = list(ai_cost["by_day"].values())
@@ -747,13 +769,17 @@ def build_html(nonce: str = "") -> str:
         f"</div>"
         f"</div>"
         f"<div style='display:flex;gap:16px;flex-wrap:wrap;margin-bottom:8px'>"
-        f"<div style='flex:1;min-width:260px'>"
+        f"<div style='flex:1;min-width:260px;max-width:380px'>"
         f"<h3 style='font-size:1em;color:#ccc;margin:8px 0'>За типом дії</h3>"
-        f"<table><thead><tr><th>Action</th><th>USD</th></tr></thead>"
+        f"<table style='width:auto;min-width:240px'>"
+        f"<thead><tr><th style='text-align:left'>Action</th>"
+        f"<th style='text-align:right'>USD</th></tr></thead>"
         f"<tbody>{_by_action_rows}</tbody></table></div>"
-        f"<div style='flex:1;min-width:260px'>"
+        f"<div style='flex:1;min-width:260px;max-width:380px'>"
         f"<h3 style='font-size:1em;color:#ccc;margin:8px 0'>Топ-5 споживачів</h3>"
-        f"<table><thead><tr><th>user_id</th><th>USD</th></tr></thead>"
+        f"<table style='width:auto;min-width:240px'>"
+        f"<thead><tr><th style='text-align:left'>Користувач</th>"
+        f"<th style='text-align:right'>USD</th></tr></thead>"
         f"<tbody>{_top_spend_rows}</tbody></table></div>"
         f"</div>"
         f"<p style='color:#666;font-size:0.78em;margin-top:0;margin-bottom:20px'>"
@@ -778,7 +804,7 @@ def build_html(nonce: str = "") -> str:
         for r in rows:
             color = _delta_color(r["delta_30d_kg"])
             body_parts.append(
-                f"<tr><td>{_esc(r['user_id'])}</td>"
+                f"<tr><td>{_esc(_uname(r['user_id']))}</td>"
                 f"<td>{_esc(_GOAL_TXT.get(r['goal'], r['goal']))}</td>"
                 f"<td class='num'>{_esc(r['weight_kg'])}</td>"
                 f"<td class='num'>{_esc(r['target_weight_kg'])}</td>"
@@ -787,8 +813,12 @@ def build_html(nonce: str = "") -> str:
             )
         body = "".join(body_parts)
         return (
-            f"<table style='font-size:0.85em'><thead><tr>"
-            f"<th>user_id</th><th>Мета</th><th>Вага</th><th>Ціль</th><th>Δ 30d</th>"
+            f"<table style='font-size:0.85em;width:auto;min-width:340px'><thead><tr>"
+            f"<th style='text-align:left'>Користувач</th>"
+            f"<th style='text-align:left'>Мета</th>"
+            f"<th style='text-align:right'>Вага</th>"
+            f"<th style='text-align:right'>Ціль</th>"
+            f"<th style='text-align:right'>Δ 30d</th>"
             f"</tr></thead><tbody>{body}</tbody></table>"
         )
 
@@ -824,15 +854,20 @@ def build_html(nonce: str = "") -> str:
         f"<tr>"
         f"<td style='font-size:0.85em;color:#888'>{_esc(str(e['ts'])[:19])}</td>"
         f"<td style='color:{_KIND_COLOR.get(e['kind'], '#888')}'>{_esc(_KIND_LABEL.get(e['kind'], e['kind']))}</td>"
-        f"<td>{_esc(e['user_id'])}</td>"
+        f"<td>{_esc(_uname(e['user_id']))}</td>"
         f"<td style='color:#888'>{_esc((e['extra'] or '')[:60])}</td>"
         f"</tr>"
         for e in recent_events
     )
     events_html = (
         f"<h2>📰 Стрічка подій (останні 50)</h2>"
-        f"<div class='table-wrap' style='max-height:60vh'><table>"
-        f"<thead><tr><th>Час</th><th>Подія</th><th>user_id</th><th>Деталі</th></tr></thead>"
+        f"<div style='max-width:900px;max-height:60vh;overflow:auto;"
+        f"border:1px solid #1e1e3a;border-radius:8px'>"
+        f"<table style='width:auto;min-width:760px'>"
+        f"<thead><tr><th style='text-align:left'>Час</th>"
+        f"<th style='text-align:left'>Подія</th>"
+        f"<th style='text-align:left'>Користувач</th>"
+        f"<th style='text-align:left'>Деталі</th></tr></thead>"
         f"<tbody>{_event_rows or '<tr><td colspan=4 style=color:#666>Немає подій.</td></tr>'}</tbody>"
         f"</table></div>"
     )
@@ -857,9 +892,12 @@ def build_html(nonce: str = "") -> str:
             )
         cron_html = (
             f"<h2>🕐 Стан крон-задач</h2>"
-            f"<div class='table-wrap' style='max-height:none'><table>"
-            f"<thead><tr><th>Крон</th><th>Останній запуск</th><th>Статус</th>"
-            f"<th>Лічильники</th><th>Помилка</th></tr></thead>"
+            f"<div style='max-width:1000px'><table style='width:auto;min-width:780px'>"
+            f"<thead><tr><th style='text-align:left'>Крон</th>"
+            f"<th style='text-align:left'>Останній запуск</th>"
+            f"<th style='text-align:left'>Статус</th>"
+            f"<th style='text-align:left'>Лічильники</th>"
+            f"<th style='text-align:left'>Помилка</th></tr></thead>"
             f"<tbody>{cron_rows}</tbody></table></div>"
         )
     else:

@@ -20,6 +20,7 @@ from lib.database import (
     get_conn,
     init_db,
     mark_all_previous_summaries_sent,
+    record_cron_run,
     reset_monthly_freezes,
 )
 from lib.log import setup_sentry, http_handler, error
@@ -60,6 +61,9 @@ class handler(BaseHTTPRequestHandler):
 
 def run_midnight_reset() -> dict:
     conn = get_conn()
+    status = "ok"
+    err: str | None = None
+    result: dict = {"ok": True}
     try:
         init_db(conn)
         # Failsafe: mark any unsent prior-day summaries so they don't queue up
@@ -80,9 +84,19 @@ def run_midnight_reset() -> dict:
         # Kyiv user at 02:00 local on Feb 1 gets the refill ~24h later.
         if datetime.now(timezone.utc).day == 1:
             reset_monthly_freezes(conn)
+        result = {"ok": True, "ran_at": datetime.now(timezone.utc).isoformat()}
+    except Exception as exc:
+        status = "error"
+        err = repr(exc)
+        raise
     finally:
+        try:
+            record_cron_run(conn, "cron_midnight_reset", status,
+                            result if status == "ok" else None, err)
+        except Exception:
+            pass  # never let cron-status logging mask the real run outcome
         try:
             conn.close()
         except Exception:
             pass
-    return {"ok": True, "ran_at": datetime.now(timezone.utc).isoformat()}
+    return result

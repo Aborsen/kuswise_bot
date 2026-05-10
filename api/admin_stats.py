@@ -14,8 +14,20 @@ _ROOT = os.path.dirname(_THIS)
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
-from lib.config import ADMIN_PASSWORD, ADMIN_USERNAME
-from lib.database import get_conn, init_db, delete_meal, delete_meal_admin, recalc_daily_log, delete_user_all_data
+from lib.config import ADMIN_PASSWORD, ADMIN_USERNAME, COST_RATES
+from lib.database import (
+    delete_meal,
+    delete_meal_admin,
+    delete_user_all_data,
+    get_conn,
+    get_daily_trends,
+    get_latest_cron_runs,
+    get_onboarding_funnel,
+    get_retention_cohorts,
+    get_user_breakdowns,
+    init_db,
+    recalc_daily_log,
+)
 from lib.log import setup_sentry, http_handler, error
 
 setup_sentry("admin_stats")
@@ -277,6 +289,52 @@ def _esc(s) -> str:
     return html.escape(str(s), quote=True)
 
 
+def _sparkline(values: list, width: int = 60, height: int = 20,
+               color: str = "#e94560", baseline: str = "#1e1e3a") -> str:
+    """Inline SVG sparkline from a list of numeric values.
+
+    Empty / all-zero input renders a flat baseline. Used both inline on the
+    Users table (60×20 per user) and at full width inside the Analytics
+    tab's trend chart, so width / height are caller-controlled.
+    """
+    if not values:
+        return f'<svg width="{width}" height="{height}"></svg>'
+    n = len(values)
+    vmax = max(values) or 1
+    step = width / max(n - 1, 1)
+    pts = []
+    for i, v in enumerate(values):
+        x = i * step
+        y = height - (float(v) / vmax) * (height - 2) - 1
+        pts.append(f"{x:.1f},{y:.1f}")
+    points = " ".join(pts)
+    return (
+        f'<svg width="{width}" height="{height}" viewBox="0 0 {width} {height}" '
+        f'preserveAspectRatio="none" style="display:inline-block;vertical-align:middle">'
+        f'<polyline fill="none" stroke="{color}" stroke-width="1.5" points="{points}" />'
+        f'<line x1="0" y1="{height-1}" x2="{width}" y2="{height-1}" '
+        f'stroke="{baseline}" stroke-width="0.5" />'
+        f'</svg>'
+    )
+
+
+def _bar(value: int, max_val: int, width: int = 200,
+         color: str = "#e94560", label: str = "") -> str:
+    """Horizontal bar segment for funnel / breakdown rows."""
+    pct = (value / max_val * 100) if max_val else 0
+    return (
+        f'<div style="display:flex;align-items:center;gap:8px;margin:3px 0">'
+        f'<div style="flex:1;background:#1a1a2e;border-radius:4px;height:18px;'
+        f'position:relative;max-width:{width}px">'
+        f'<div style="background:{color};height:100%;width:{pct:.1f}%;border-radius:4px"></div>'
+        f'</div>'
+        f'<span style="font-size:0.85em;color:#ccc;min-width:140px">{label}</span>'
+        f'<span style="font-size:0.85em;color:#888;min-width:50px;text-align:right">'
+        f'{value} ({pct:.0f}%)</span>'
+        f'</div>'
+    )
+
+
 # Hard caps on rows rendered into the admin HTML. The auto-refresh fires every
 # 60s, so unbounded fetches grow linearly with usage and eventually OOM the
 # function. These limits keep the response under a few hundred KB at scale.
@@ -388,6 +446,29 @@ def build_html(nonce: str = "") -> str:
         top_foods = cur.fetchall()
 
         cur.close()
+
+        # F-14 analytics data (separate cursors so a failure in any one doesn't
+        # taint the whole render).
+        try:
+            retention_cohorts = get_retention_cohorts(conn)
+        except Exception:
+            retention_cohorts = []
+        try:
+            daily_trends = get_daily_trends(conn)
+        except Exception:
+            daily_trends = []
+        try:
+            onboarding_funnel = get_onboarding_funnel(conn)
+        except Exception:
+            onboarding_funnel = []
+        try:
+            user_breakdowns = get_user_breakdowns(conn)
+        except Exception:
+            user_breakdowns = {}
+        try:
+            latest_cron_runs = get_latest_cron_runs(conn)
+        except Exception:
+            latest_cron_runs = []
     finally:
         try:
             conn.close()
@@ -478,6 +559,152 @@ def build_html(nonce: str = "") -> str:
             f"<span class='tf-cnt'>{cnt}×</span>"
             f"<span class='tf-cal'>{int(avg_cal or 0)} ккал</span>"
             f"</div>\n"
+        )
+
+    # --- F-14: breakdown cards (Overview tab footer) ---
+    _DIM_LABELS = {"lang": "Мова", "tz": "Часовий пояс", "sex": "Стать", "goal": "Мета"}
+    _DIM_COLORS = {"lang": "#9c27b0", "tz": "#0288d1", "sex": "#e94560", "goal": "#4caf50"}
+    _SEX_LABEL = {"male": "♂ Чол", "female": "♀ Жін"}
+    _GOAL_LABEL = {"lose": "🔥 Схуднути", "maintain": "⚖️ Підтримка", "gain": "💪 Набір"}
+
+    def _humanise(dim: str, val: str) -> str:
+        if dim == "sex":  return _SEX_LABEL.get(val, val)
+        if dim == "goal": return _GOAL_LABEL.get(val, val)
+        if dim == "lang": return (val or "").upper() or "—"
+        return val or "—"
+
+    breakdown_cards_html = ""
+    for dim in ("lang", "tz", "sex", "goal"):
+        items = user_breakdowns.get(dim, [])
+        if not items:
+            continue
+        total = sum(c for _, c in items) or 1
+        rows_html = "".join(
+            _bar(c, total, width=220, color=_DIM_COLORS[dim], label=_esc(_humanise(dim, v)))
+            for v, c in items[:6]
+        )
+        breakdown_cards_html += (
+            f"<div style='background:#16213e;border-radius:12px;padding:16px 20px;flex:1;min-width:280px'>"
+            f"<div style='color:#a0a0a0;font-size:0.85em;text-transform:uppercase;letter-spacing:0.04em;margin-bottom:8px'>"
+            f"{_DIM_LABELS[dim]}</div>"
+            f"{rows_html}"
+            f"</div>"
+        )
+    breakdowns_html = (
+        f"<h2>👥 Розподіл користувачів</h2>"
+        f"<div style='display:flex;gap:16px;flex-wrap:wrap;margin-bottom:20px'>{breakdown_cards_html}</div>"
+        if breakdown_cards_html else ""
+    )
+
+    # --- F-14 §1: retention cohorts (Analytics tab) ---
+    if retention_cohorts:
+        cohort_rows = ""
+        for c in retention_cohorts:
+            week = str(c["cohort_week"])[:10]
+            size = c["size"] or 0
+            d1pct = round(c["d1"] / size * 100) if size else 0
+            d7pct = round(c["d7"] / size * 100) if size else 0
+            d30pct = round(c["d30"] / size * 100) if size else 0
+            def _retcell(pct: int) -> str:
+                color = "#4caf50" if pct >= 50 else ("#ff9800" if pct >= 20 else "#e94560")
+                return f"<td class='num' style='color:{color}'>{pct}%</td>"
+            cohort_rows += (
+                f"<tr><td>{week}</td><td class='num'>{size}</td>"
+                f"{_retcell(d1pct)}{_retcell(d7pct)}{_retcell(d30pct)}</tr>"
+            )
+        retention_html = (
+            f"<h2>🎯 Когорти утримання</h2>"
+            f"<div class='table-wrap' style='max-height:none'><table>"
+            f"<thead><tr><th>Тиждень реєстрації</th><th>Розмір</th>"
+            f"<th>D1</th><th>D7</th><th>D30</th></tr></thead>"
+            f"<tbody>{cohort_rows}</tbody></table></div>"
+        )
+    else:
+        retention_html = "<h2>🎯 Когорти утримання</h2><p style='color:#666'>Немає даних.</p>"
+
+    # --- F-14 §2: 30-day trends (3 sparklines) ---
+    if daily_trends:
+        signups_series = [r["new_users"] for r in daily_trends]
+        dau_series = [r["dau"] for r in daily_trends]
+        meals_series = [r["meals"] for r in daily_trends]
+        first_day = str(daily_trends[0]["day"])
+        last_day = str(daily_trends[-1]["day"])
+        trends_html = (
+            f"<h2>📈 Тренди (30 днів)</h2>"
+            f"<div style='display:flex;gap:18px;flex-wrap:wrap;margin-bottom:20px'>"
+            f"<div style='background:#16213e;border-radius:12px;padding:16px 20px;flex:1;min-width:300px'>"
+            f"<div style='color:#a0a0a0;font-size:0.85em'>Нові юзери / день</div>"
+            f"<div style='font-size:1.6em;color:#4caf50;font-weight:bold'>"
+            f"Σ {sum(signups_series)}</div>"
+            f"{_sparkline(signups_series, width=300, height=50, color='#4caf50')}"
+            f"</div>"
+            f"<div style='background:#16213e;border-radius:12px;padding:16px 20px;flex:1;min-width:300px'>"
+            f"<div style='color:#a0a0a0;font-size:0.85em'>DAU (унікальні з лоґом)</div>"
+            f"<div style='font-size:1.6em;color:#e94560;font-weight:bold'>"
+            f"max {max(dau_series) if dau_series else 0}</div>"
+            f"{_sparkline(dau_series, width=300, height=50, color='#e94560')}"
+            f"</div>"
+            f"<div style='background:#16213e;border-radius:12px;padding:16px 20px;flex:1;min-width:300px'>"
+            f"<div style='color:#a0a0a0;font-size:0.85em'>Страв записано / день</div>"
+            f"<div style='font-size:1.6em;color:#0288d1;font-weight:bold'>"
+            f"Σ {sum(meals_series)}</div>"
+            f"{_sparkline(meals_series, width=300, height=50, color='#0288d1')}"
+            f"</div>"
+            f"</div>"
+            f"<div style='color:#666;font-size:0.8em;margin-top:-12px;margin-bottom:20px'>"
+            f"{first_day} → {last_day}</div>"
+        )
+    else:
+        trends_html = "<h2>📈 Тренди (30 днів)</h2><p style='color:#666'>Немає даних.</p>"
+
+    # --- F-14 §3: onboarding funnel detail ---
+    funnel_rows = ""
+    funnel_max = max((n for _, n in onboarding_funnel), default=0)
+    for step, count in onboarding_funnel:
+        if count == 0 and step not in ("awaiting_age", "done"):
+            continue
+        color = "#4caf50" if step == "done" else "#e94560"
+        funnel_rows += _bar(count, funnel_max or 1, width=320, color=color, label=_esc(step))
+    onboarding_html = (
+        f"<h2>🚀 Воронка онбордингу (деталь)</h2>"
+        f"<div style='background:#16213e;border-radius:12px;padding:16px 20px;margin-bottom:20px'>"
+        f"{funnel_rows}"
+        f"<div style='color:#666;font-size:0.78em;margin-top:8px'>"
+        f"Кожен бар — кількість користувачів, які зараз застрягли на цьому кроці. "
+        f"`done` = успішно завершили онбординг.</div>"
+        f"</div>"
+    )
+
+    # --- F-14 §8: cron status panel ---
+    if latest_cron_runs:
+        cron_rows = ""
+        for r in latest_cron_runs:
+            status_color = {"ok": "#4caf50", "error": "#e94560", "running": "#ff9800"}.get(r["status"], "#888")
+            res = r.get("result") or {}
+            counters = ", ".join(f"{k}={v}" for k, v in res.items()
+                                  if isinstance(v, (int, float)) and not isinstance(v, bool)) or "—"
+            err = r.get("error") or ""
+            finished = str(r.get("finished_at") or "")[:19]
+            cron_rows += (
+                f"<tr><td>{_esc(r['cron_name'])}</td>"
+                f"<td>{_esc(finished)}</td>"
+                f"<td style='color:{status_color};font-weight:bold'>{_esc(r['status'])}</td>"
+                f"<td style='font-size:0.85em;color:#888'>{_esc(counters)}</td>"
+                f"<td style='font-size:0.8em;color:#e94560'>{_esc(err[:80])}</td>"
+                f"</tr>"
+            )
+        cron_html = (
+            f"<h2>🕐 Стан крон-задач</h2>"
+            f"<div class='table-wrap' style='max-height:none'><table>"
+            f"<thead><tr><th>Крон</th><th>Останній запуск</th><th>Статус</th>"
+            f"<th>Лічильники</th><th>Помилка</th></tr></thead>"
+            f"<tbody>{cron_rows}</tbody></table></div>"
+        )
+    else:
+        cron_html = (
+            f"<h2>🕐 Стан крон-задач</h2>"
+            f"<p style='color:#666'>Поки немає записів. Перший запис з'явиться "
+            f"після наступного запуску крону.</p>"
         )
 
     # Build modal user data as JSON for JS lookup
@@ -669,6 +896,7 @@ def build_html(nonce: str = "") -> str:
 
 <nav class="admin-tabs" id="adminTabs">
   <button type="button" class="active" data-tab="overview">📊 Огляд</button>
+  <button type="button" data-tab="analytics">📈 Аналітика</button>
   <button type="button" data-tab="meals">🍽️ Страви</button>
 </nav>
 
@@ -756,6 +984,15 @@ def build_html(nonce: str = "") -> str:
 <tbody>{user_tbody}</tbody>
 </table>
 </div>
+
+{breakdowns_html}
+</section>
+
+<section id="tab-analytics" hidden>
+{retention_html}
+{trends_html}
+{onboarding_html}
+{cron_html}
 </section>
 
 <section id="tab-meals" hidden>
@@ -817,7 +1054,7 @@ const USER_DATA = {user_modal_json};
 /* --- Top-level tab switcher --- */
 (function(){{
   const tabs = document.querySelectorAll('#adminTabs button');
-  const sections = ['overview', 'meals'];
+  const sections = ['overview', 'analytics', 'meals'];
   function setTab(name) {{
     tabs.forEach(b => b.classList.toggle('active', b.dataset.tab === name));
     sections.forEach(s => {{
@@ -827,7 +1064,8 @@ const USER_DATA = {user_modal_json};
     try {{ history.replaceState(null, '', '#' + name); }} catch(e) {{}}
   }}
   tabs.forEach(b => b.addEventListener('click', () => setTab(b.dataset.tab)));
-  if (location.hash === '#meals') setTab('meals');
+  const hashTab = (location.hash || '').slice(1);
+  if (sections.includes(hashTab)) setTab(hashTab);
 }})();
 
 /* --- Auto-refresh every 60s --- */

@@ -345,6 +345,24 @@ def init_db(conn=None, force: bool = False) -> None:
             "CREATE INDEX IF NOT EXISTS idx_saved_recipes_user_time "
             "ON saved_recipes(user_id, created_at DESC)"
         )
+        # F-14: one row per cron invocation. Admin panel reads the most-recent
+        # row per `cron_name` to surface last-run status and counts. Each
+        # `run_*()` writes a row in its `finally:` block.
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS cron_runs (
+                id BIGSERIAL PRIMARY KEY,
+                cron_name TEXT NOT NULL,
+                started_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                finished_at TIMESTAMPTZ,
+                status TEXT NOT NULL DEFAULT 'running',
+                result_json TEXT,
+                error TEXT
+            )
+        """)
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_cron_runs_name_time "
+            "ON cron_runs(cron_name, started_at DESC)"
+        )
     conn.commit()
     _SCHEMA_INITIALISED = True
     if close_after:
@@ -1992,3 +2010,207 @@ def get_meals_in_range(
         "fat_g":        r[6] or 0,
         "created_at":   r[7],
     } for r in rows]
+
+
+# ---------- F-14: Admin analytics helpers ----------
+
+def get_retention_cohorts(conn, weeks: int = 12) -> list[dict]:
+    """D1 / D7 / D30 retention by signup week, last `weeks` weeks.
+
+    Returns rows with `cohort_week` (date), `size`, `d1`, `d7`, `d30` counts.
+    A user is "retained at day N" iff they logged a meal whose `created_at`
+    falls within [signup_date + N-1d, signup_date + N+1d] window for D7/D30
+    (1-day slack absorbs timezone noise), or +24h for D1.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            f"""
+            WITH cohorts AS (
+              SELECT u.user_id,
+                     DATE_TRUNC('week', u.created_at::timestamp) AS cohort_week,
+                     u.created_at::timestamp AS signup_at
+              FROM users u
+              WHERE u.created_at IS NOT NULL
+                AND u.created_at::timestamp > NOW() - INTERVAL '{int(weeks)} weeks'
+            )
+            SELECT
+              c.cohort_week,
+              COUNT(DISTINCT c.user_id) AS size,
+              COUNT(DISTINCT c.user_id) FILTER (WHERE EXISTS (
+                SELECT 1 FROM meals m
+                WHERE m.user_id = c.user_id
+                  AND m.created_at IS NOT NULL
+                  AND m.created_at::timestamp BETWEEN c.signup_at + INTERVAL '0 days'
+                                                  AND c.signup_at + INTERVAL '2 days'
+              )) AS d1,
+              COUNT(DISTINCT c.user_id) FILTER (WHERE EXISTS (
+                SELECT 1 FROM meals m
+                WHERE m.user_id = c.user_id
+                  AND m.created_at IS NOT NULL
+                  AND m.created_at::timestamp BETWEEN c.signup_at + INTERVAL '6 days'
+                                                  AND c.signup_at + INTERVAL '8 days'
+              )) AS d7,
+              COUNT(DISTINCT c.user_id) FILTER (WHERE EXISTS (
+                SELECT 1 FROM meals m
+                WHERE m.user_id = c.user_id
+                  AND m.created_at IS NOT NULL
+                  AND m.created_at::timestamp BETWEEN c.signup_at + INTERVAL '29 days'
+                                                  AND c.signup_at + INTERVAL '31 days'
+              )) AS d30
+            FROM cohorts c
+            GROUP BY c.cohort_week
+            ORDER BY c.cohort_week DESC
+            """
+        )
+        rows = cur.fetchall()
+    return [
+        {"cohort_week": r[0], "size": r[1], "d1": r[2], "d7": r[3], "d30": r[4]}
+        for r in rows
+    ]
+
+
+def get_daily_trends(conn, days: int = 30) -> list[dict]:
+    """Daily totals for the last `days` days (inclusive of today).
+
+    Returns rows with `day` (date), `new_users`, `dau` (distinct loggers),
+    `meals` (total meals logged that day). Dense — every day in range is
+    present even if zero.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            f"""
+            WITH days AS (
+              SELECT generate_series(CURRENT_DATE - {int(days) - 1},
+                                     CURRENT_DATE, '1 day')::date AS d
+            )
+            SELECT
+              d.d,
+              (SELECT COUNT(*) FROM users u
+                WHERE u.created_at IS NOT NULL
+                  AND u.created_at::date = d.d) AS new_users,
+              (SELECT COUNT(DISTINCT m.user_id) FROM meals m
+                WHERE m.created_at IS NOT NULL
+                  AND m.created_at::date = d.d) AS dau,
+              (SELECT COUNT(*) FROM meals m
+                WHERE m.created_at IS NOT NULL
+                  AND m.created_at::date = d.d) AS meals
+            FROM days d
+            ORDER BY d.d
+            """
+        )
+        rows = cur.fetchall()
+    return [
+        {"day": r[0], "new_users": r[1], "dau": r[2], "meals": r[3]}
+        for r in rows
+    ]
+
+
+# Canonical onboarding-step order. Used to render a left-to-right funnel that
+# shows how many users currently sit at each step (and so how many dropped off
+# between each pair). Mirrors the FSM in `api/webhook.py`.
+ONBOARDING_STEPS = (
+    "awaiting_lang_confirm",
+    "awaiting_age",
+    "awaiting_sex",
+    "awaiting_weight",
+    "awaiting_height",
+    "awaiting_gym",
+    "awaiting_goal",
+    "awaiting_target_weight",
+    "awaiting_confirm",
+    "awaiting_tz",
+    "awaiting_tz_custom",
+    "awaiting_custom_cal",
+    "done",
+)
+
+
+def get_onboarding_funnel(conn) -> list[tuple[str, int]]:
+    """Count of users currently at each `onboarding_step`, in canonical order.
+
+    Returns a list of `(step_name, count)` tuples covering every step in
+    `ONBOARDING_STEPS` (zero for any step with no users), so the admin
+    funnel always renders a stable left-to-right shape.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT onboarding_step, COUNT(*) FROM user_profiles GROUP BY onboarding_step"
+        )
+        counts = {row[0]: row[1] for row in cur.fetchall()}
+    return [(step, int(counts.get(step, 0))) for step in ONBOARDING_STEPS]
+
+
+def get_user_breakdowns(conn) -> dict[str, list[tuple[str, int]]]:
+    """Distribution of users across lang / tz / sex / goal for Overview cards.
+
+    Returns `{dim: [(value, count), …]}` sorted by count desc. Empty strings
+    and NULLs collapse to '—'.
+    """
+    out: dict[str, list[tuple[str, int]]] = {}
+    with conn.cursor() as cur:
+        for dim in ("lang", "tz", "sex", "goal"):
+            cur.execute(
+                f"""
+                SELECT COALESCE(NULLIF({dim}, ''), '—') AS v, COUNT(*) AS c
+                FROM user_profiles
+                GROUP BY v
+                ORDER BY c DESC
+                """
+            )
+            out[dim] = [(r[0], int(r[1])) for r in cur.fetchall()]
+    return out
+
+
+def record_cron_run(conn, cron_name: str, status: str,
+                    result: Optional[dict] = None, error: Optional[str] = None) -> None:
+    """Append one row to `cron_runs` describing this invocation.
+
+    Called from each cron's `finally:` block so the admin dashboard can show
+    the latest run timestamp + status + result counts per cron. Best-effort —
+    callers should swallow exceptions from this so cron-status logging never
+    masks the real run outcome.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO cron_runs (cron_name, finished_at, status, result_json, error)
+            VALUES (%s, now(), %s, %s, %s)
+            """,
+            (cron_name, status, json.dumps(result) if result is not None else None, error),
+        )
+    conn.commit()
+
+
+def get_latest_cron_runs(conn) -> list[dict]:
+    """One most-recent row per `cron_name`, ordered alphabetically by name.
+
+    Returns dicts with `cron_name`, `started_at`, `finished_at`, `status`,
+    `result_json` (parsed dict or None), `error`.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT DISTINCT ON (cron_name)
+              cron_name, started_at, finished_at, status, result_json, error
+            FROM cron_runs
+            ORDER BY cron_name, started_at DESC
+            """
+        )
+        rows = cur.fetchall()
+    out = []
+    for r in rows:
+        result = None
+        if r[4]:
+            try:
+                result = json.loads(r[4])
+            except Exception:
+                result = None
+        out.append({
+            "cron_name":   r[0],
+            "started_at":  r[1],
+            "finished_at": r[2],
+            "status":      r[3],
+            "result":      result,
+            "error":       r[5],
+        })
+    return out

@@ -27,6 +27,7 @@ from lib.database import (
     get_conn,
     init_db,
     get_users_due_weekly_checkin,
+    record_cron_run,
     set_awaiting_input,
     mark_weekly_checkin_sent,
     get_profile,
@@ -76,6 +77,9 @@ def run_weekly_checkin() -> dict:
     sent = 0
     recaps_sent = 0
     errors = []
+    status = "ok"
+    err_repr: str | None = None
+    result: dict = {"ok": True}
     try:
         init_db(conn)
         user_ids = get_users_due_weekly_checkin(conn, min_days_since_last=6)
@@ -109,19 +113,30 @@ def run_weekly_checkin() -> dict:
             except Exception as e:
                 errors.append({"user_id": user_id, "error": str(e)})
                 error("weekly_checkin_user_failed", exc=e, user_id=user_id)
+
+        result = {
+            "ok": True,
+            "sent": sent,
+            "recaps_sent": recaps_sent,
+            "errors": errors,
+            "ran_at": datetime.now(timezone.utc).isoformat(),
+        }
+    except Exception as exc:
+        status = "error"
+        err_repr = repr(exc)
+        raise
     finally:
+        try:
+            record_cron_run(conn, "cron_weekly_weight_checkin", status,
+                            result if status == "ok" else None, err_repr)
+        except Exception:
+            pass  # never let cron-status logging mask the real run outcome
         try:
             conn.close()
         except Exception:
             pass
 
-    return {
-        "ok": True,
-        "sent": sent,
-        "recaps_sent": recaps_sent,
-        "errors": errors,
-        "ran_at": datetime.now(timezone.utc).isoformat(),
-    }
+    return result
 
 
 def _send_weekly_recap_for(conn, user_id: int) -> bool:

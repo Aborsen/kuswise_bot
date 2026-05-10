@@ -401,6 +401,20 @@ the labels in front of each `:` MUST be rendered in {language}:
 No fluff. Minimal emojis."""
 
 
+# ---------- AI cost estimation (F-14 admin dashboard) ----------
+# Approximate USD per call for each action tracked in `usage_quota`.
+# Numbers are derived from published OpenAI pricing × typical token/audio sizes
+# for each action; treat as estimates, not invoices. Tweak when pricing shifts.
+COST_RATES = {
+    "meal_analysis":    0.005,   # GPT-4o vision photo
+    "voice_transcribe": 0.003,   # Whisper, ~30s typical voice note
+    "ask":              0.001,   # GPT-4o-mini chat turn
+    "suggest":          0.001,   # GPT-4o-mini recipe suggest
+    "menu_ocr":         0.008,   # GPT-4o vision multi-photo menu
+    "plan_generate":    0.010,   # GPT-4o full-week plan
+}
+
+
 def goal_context(goal: str) -> str:
     return {
         "lose": "fat loss while preserving muscle (moderate deficit, ~500 kcal below maintenance)",

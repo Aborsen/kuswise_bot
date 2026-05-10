@@ -38,6 +38,7 @@ from lib.database import (
     mark_nudge_sent,
     get_today_log,
     get_meals_for_day,
+    record_cron_run,
     save_recommendation,
     mark_summary_sent,
     set_nudge_optout,
@@ -107,6 +108,9 @@ def run_daily_summary() -> dict:
     sent_nudge = 0
     skipped_blocked = 0
     errors: list[dict] = []
+    status = "ok"
+    err_repr: str | None = None
+    result: dict = {"ok": True}
     try:
         init_db(conn)
 
@@ -156,17 +160,28 @@ def run_daily_summary() -> dict:
             except Exception as e:
                 errors.append({"user_id": uid, "branch": "nudge", "error": str(e)})
                 error("nudge_user_failed", exc=e, user_id=uid)
+
+        result = {
+            "ok": True,
+            "sent_summary": sent_summary,
+            "sent_nudge": sent_nudge,
+            "skipped_blocked": skipped_blocked,
+            "errors": errors,
+            "ran_at": datetime.now(timezone.utc).isoformat(),
+        }
+    except Exception as exc:
+        status = "error"
+        err_repr = repr(exc)
+        raise
     finally:
+        try:
+            record_cron_run(conn, "cron_daily_summary", status,
+                            result if status == "ok" else None, err_repr)
+        except Exception:
+            pass  # never let cron-status logging mask the real run outcome
         try:
             conn.close()
         except Exception:
             pass
 
-    return {
-        "ok": True,
-        "sent_summary": sent_summary,
-        "sent_nudge": sent_nudge,
-        "skipped_blocked": skipped_blocked,
-        "errors": errors,
-        "ran_at": datetime.now(timezone.utc).isoformat(),
-    }
+    return result

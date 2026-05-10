@@ -1723,6 +1723,130 @@ def test_profile_columns_include_nudge_fields():
     assert "last_nudge_sent_at" in db._ALLOWED_PROFILE_FIELDS
 
 
+# ---------- F-14: admin analytics helpers ----------
+
+class _AdminCursor:
+    """Records every (sql, params) and returns whatever the conn pre-staged."""
+    def __init__(self, conn):
+        self.conn = conn
+    def __enter__(self):
+        return self
+    def __exit__(self, *exc):
+        return False
+    def execute(self, sql, params=None):
+        self.conn.calls.append((sql, params))
+        self.conn._last_sql = sql
+    def fetchall(self):
+        return self.conn.rows
+    def fetchone(self):
+        return self.conn.rows[0] if self.conn.rows else None
+
+
+class _AdminConn:
+    def __init__(self, rows=None):
+        self.calls = []
+        self.rows = rows or []
+        self.commits = 0
+        self._last_sql = ""
+    def cursor(self):
+        return _AdminCursor(self)
+    def commit(self):
+        self.commits += 1
+
+
+def test_get_retention_cohorts_sql_shape():
+    """Cohort query must group by signup week and gate on d1/d7/d30 windows."""
+    conn = _AdminConn(rows=[("2026-05-04", 7, 5, 0, 0)])
+    out = db.get_retention_cohorts(conn, weeks=12)
+    sql, _ = conn.calls[0]
+    # Cohort week + the three retention windows must all be present.
+    assert "DATE_TRUNC('week'" in sql
+    assert "INTERVAL '12 weeks'" in sql
+    assert "INTERVAL '2 days'" in sql   # D1 slack
+    assert "INTERVAL '8 days'" in sql   # D7 slack
+    assert "INTERVAL '31 days'" in sql  # D30 slack
+    assert out == [{"cohort_week": "2026-05-04", "size": 7,
+                    "d1": 5, "d7": 0, "d30": 0}]
+
+
+def test_get_daily_trends_dense_and_sorted():
+    """Trends query must use generate_series and sort ascending by day."""
+    conn = _AdminConn(rows=[("2026-05-09", 0, 2, 5), ("2026-05-10", 2, 4, 24)])
+    out = db.get_daily_trends(conn, days=30)
+    sql, _ = conn.calls[0]
+    assert "generate_series" in sql
+    assert "CURRENT_DATE - 29" in sql
+    assert "ORDER BY d.d" in sql
+    assert out[0]["day"] < out[1]["day"]
+    assert out[1]["meals"] == 24
+
+
+def test_get_onboarding_funnel_canonical_order():
+    """Funnel always returns every step in canonical order, zero-filled."""
+    # Simulate DB returning only 2 of the 13 steps.
+    conn = _AdminConn(rows=[("done", 15), ("awaiting_age", 3)])
+    out = db.get_onboarding_funnel(conn)
+    steps = [s for s, _ in out]
+    assert steps == list(db.ONBOARDING_STEPS)
+    counts = dict(out)
+    assert counts["done"] == 15
+    assert counts["awaiting_age"] == 3
+    assert counts["awaiting_sex"] == 0  # zero-filled
+
+
+def test_get_user_breakdowns_four_dims():
+    """Breakdowns query each dim once, return dict keyed by dim name."""
+    conn = _AdminConn(rows=[("uk", 12), ("en", 4)])
+    out = db.get_user_breakdowns(conn)
+    assert set(out.keys()) == {"lang", "tz", "sex", "goal"}
+    # Four separate queries (one per dim).
+    assert len(conn.calls) == 4
+    # All four queries hit user_profiles.
+    for sql, _ in conn.calls:
+        assert "FROM user_profiles" in sql
+
+
+def test_record_cron_run_inserts_with_finished_now():
+    """record_cron_run writes a row with status, JSON result, and now() ts."""
+    conn = _AdminConn()
+    db.record_cron_run(conn, "cron_daily_summary", "ok",
+                       result={"sent_summary": 3, "sent_nudge": 7})
+    assert conn.commits == 1
+    sql, params = conn.calls[0]
+    assert "INSERT INTO cron_runs" in sql
+    assert "finished_at" in sql and "now()" in sql
+    # cron_name, status, json, error.
+    assert params[0] == "cron_daily_summary"
+    assert params[1] == "ok"
+    assert '"sent_summary": 3' in params[2]
+    assert params[3] is None
+
+
+def test_get_latest_cron_runs_distinct_per_name():
+    """One row per cron via DISTINCT ON; result JSON parsed back to dict."""
+    conn = _AdminConn(rows=[
+        ("cron_daily_summary", "2026-05-10", "2026-05-10", "ok",
+         '{"sent_nudge": 7}', None),
+    ])
+    out = db.get_latest_cron_runs(conn)
+    sql, _ = conn.calls[0]
+    assert "DISTINCT ON (cron_name)" in sql
+    assert out[0]["result"] == {"sent_nudge": 7}
+    assert out[0]["status"] == "ok"
+
+
+def test_cost_rates_constant_covers_tracked_actions():
+    """All actions tracked by usage_quota have a USD estimate in COST_RATES."""
+    from lib.config import COST_RATES
+    assert set(COST_RATES.keys()) >= {
+        "meal_analysis", "voice_transcribe", "ask",
+        "suggest", "menu_ocr", "plan_generate",
+    }
+    # Sanity bounds — anything outside 0.0001–1.0 is a typo.
+    for action, rate in COST_RATES.items():
+        assert 0.0001 <= rate <= 1.0, f"{action} = {rate} is out of range"
+
+
 # ---------- dashboard sprint 1 helpers ----------
 
 def test_get_latest_recommendation_select_shape():

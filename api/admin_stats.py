@@ -346,14 +346,14 @@ def build_html(nonce: str = "") -> str:
                    COUNT(m.id) AS meals, MAX(m.created_at) AS last_meal,
                    p.age, p.sex, p.weight_kg, p.height_cm,
                    p.gym_per_week, p.goal, p.daily_calorie_target,
-                   p.target_weight_kg
+                   p.target_weight_kg, p.lang, p.tz
             FROM users u
             LEFT JOIN meals m ON m.user_id = u.user_id
             LEFT JOIN user_profiles p ON p.user_id = u.user_id
             GROUP BY u.user_id, u.username, u.created_at,
                      p.age, p.sex, p.weight_kg, p.height_cm,
                      p.gym_per_week, p.goal, p.daily_calorie_target,
-                     p.target_weight_kg
+                     p.target_weight_kg, p.lang, p.tz
             ORDER BY meals DESC, u.created_at DESC
             LIMIT %s
             """,
@@ -402,7 +402,7 @@ def build_html(nonce: str = "") -> str:
     user_tbody = ""
     for r in user_rows:
         (uid, uname, joined, meals, last, age, sex, weight, height,
-         gym, goal, cal_target, target_weight) = r
+         gym, goal, cal_target, target_weight, lang, tz) = r
         adh = adherence_map.get(uid)
         adh_cell = f"{adh}%" if adh is not None else "—"
         adh_color = ""
@@ -417,6 +417,8 @@ def build_html(nonce: str = "") -> str:
             tw_cell = f"{target_weight}"
         else:
             tw_cell = "—"
+        lang_cell = (lang or "").upper() or "—"
+        tz_cell = tz or "—"
         user_tbody += (
             f'<tr data-uid="{_esc(uid)}">'
             f'<td class="clickable">{_esc(uid)}</td>'
@@ -434,6 +436,8 @@ def build_html(nonce: str = "") -> str:
             f"<td class='num clickable' style='{adh_color}'>{adh_cell}</td>"
             f"<td class='clickable'>{_esc((last or '—')[:10])}</td>"
             f"<td class='clickable'>{_esc((joined or '')[:10])}</td>"
+            f"<td class='clickable'>{_esc(lang_cell)}</td>"
+            f"<td class='clickable'>{_esc(tz_cell)}</td>"
             f'<td><button type="button" class="btn-del btn-del-user" data-uid="{_esc(uid)}" title="Видалити користувача">🗑</button></td>'
             f"</tr>\n"
         )
@@ -480,7 +484,7 @@ def build_html(nonce: str = "") -> str:
     user_modal_data = {}
     for r in user_rows:
         (uid, uname, joined, meals, last, age, sex, weight, height,
-         gym, goal, cal_target, target_weight) = r
+         gym, goal, cal_target, target_weight, lang, tz) = r
         user_modal_data[str(uid)] = {
             "uid": uid, "uname": uname or "—",
             "joined": str(joined or "")[:10],
@@ -494,6 +498,8 @@ def build_html(nonce: str = "") -> str:
             "target_weight": target_weight,
             "avg_cal": avg_cal_map.get(uid),
             "adherence": adherence_map.get(uid),
+            "lang": (lang or "").upper() or "—",
+            "tz": tz or "—",
         }
     user_modal_json = json.dumps(user_modal_data, ensure_ascii=False, default=str)
 
@@ -743,6 +749,8 @@ def build_html(nonce: str = "") -> str:
   <th data-col="12" data-type="num">Адгер% <span class="arrow">▲</span></th>
   <th data-col="13" data-type="str">Остання страва <span class="arrow">▲</span></th>
   <th data-col="14" data-type="str">Приєднався <span class="arrow">▲</span></th>
+  <th data-col="15" data-type="str">Мова <span class="arrow">▲</span></th>
+  <th data-col="16" data-type="str">Часовий пояс <span class="arrow">▲</span></th>
   <th class="no-sort">Дія</th>
 </tr></thead>
 <tbody>{user_tbody}</tbody>
@@ -993,6 +1001,8 @@ function showUserModal(row) {{
     ['Цільова вага', d.target_weight ? d.target_weight + ' кг' : '—'],
     ['ккал/день (ціль)', d.cal_target ? d.cal_target + ' ккал' : '—'],
     ['Сер. ккал/день', d.avg_cal != null ? d.avg_cal + ' ккал' : '—'],
+    ['Мова', d.lang],
+    ['Часовий пояс', d.tz],
   ];
   document.getElementById('modalGrid').innerHTML = fields.map(([label, val]) =>
     `<div class="modal-field"><div class="mf-label">${{label}}</div><div class="mf-val">${{val ?? '—'}}</div></div>`

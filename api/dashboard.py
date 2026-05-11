@@ -95,6 +95,7 @@ _DASHBOARD_JS_KEYS = (
     "dash.streak_singular", "dash.streak_few", "dash.streak_many",
     "dash.unit_kcal", "dash.unit_g", "dash.unit_kg", "dash.unit_l",
     "dash.unit_cm",
+    "dash.meal_macro_p", "dash.meal_macro_c", "dash.meal_macro_f",
     "dash.coach_title_with_date", "dash.warn_chip", "dash.warn_detail_label",
     "dash.cal_bars_axis", "dash.weight_chart_empty",
 )
@@ -1191,6 +1192,11 @@ _DASHBOARD_HTML = r"""<!DOCTYPE html>
   .meal-desc { overflow: hidden; text-overflow: ellipsis; }
   .meal-kcal { font-variant-numeric: tabular-nums; font-weight: 600; }
   .meal-pct { color: var(--hint); font-size: 0.82em; font-variant-numeric: tabular-nums; }
+  .meal-macros {
+    color: var(--hint); font-size: 0.82em;
+    font-variant-numeric: tabular-nums;
+    margin-top: 3px;
+  }
 
   /* ---------- Profile tab ---------- */
   .id-grid {
@@ -1885,8 +1891,14 @@ _DASHBOARD_HTML = r"""<!DOCTYPE html>
                  '<b>' + esc(L.warn_detail_label) + ':</b> ' +
                  warns.map(esc).join(', ') + '</div>';
       }
+      var macrosLine =
+        L.meal_macro_p + ' ' + Math.round(m.protein_g || 0) + L.unit_g + ' · ' +
+        L.meal_macro_c + ' ' + Math.round(m.carbs_g   || 0) + L.unit_g + ' · ' +
+        L.meal_macro_f + ' ' + Math.round(m.fat_g     || 0) + L.unit_g;
       return '<div class="meal-row">' +
-             '<div class="meal-desc">' + esc(m.description) + chip + '</div>' +
+             '<div class="meal-desc">' + esc(m.description) + chip +
+               '<div class="meal-macros">' + macrosLine + '</div>' +
+             '</div>' +
              '<div class="meal-kcal">' + Math.round(m.calories) + ' ' + L.unit_kcal + '</div>' +
              '<div class="meal-pct">' + pct + ' %</div>' +
              '</div>' + detail;

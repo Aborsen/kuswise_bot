@@ -1833,6 +1833,81 @@ def test_upsert_user_source_empty_clears_source_seen_at():
     assert params[4] is None       # source_seen_at not stamped
 
 
+class _PendingAnalysisConn:
+    """Cursor that returns a single configurable row for `get_pending_analysis`
+    and records DELETEs so we can assert the corrupt-row was dropped."""
+    def __init__(self, row):
+        self._row = row
+        self.deletes = []
+        self.commits = 0
+    def cursor(self):
+        return _PendingAnalysisCursor(self)
+    def commit(self):
+        self.commits += 1
+
+
+class _PendingAnalysisCursor:
+    def __init__(self, conn):
+        self.conn = conn
+        self._is_delete = False
+    def __enter__(self):
+        return self
+    def __exit__(self, *exc):
+        return False
+    def execute(self, sql, params=None):
+        if sql.lstrip().upper().startswith("DELETE"):
+            self._is_delete = True
+            self.conn.deletes.append((sql, params))
+    def fetchone(self):
+        return self.conn._row
+
+
+def test_get_pending_analysis_corrupt_json_drops_row_returns_none():
+    """A malformed `analysis_json` must not crash the meal-logging flow.
+    The row gets dropped (so the user isn't permanently stuck) and the
+    function returns None instead of raising."""
+    # row layout: id, meal_type, analysis_json, photo_file_id, text_description,
+    #             raw_response, awaiting_manual, created_at, candidates_json,
+    #             replaces_meal_id
+    bad_row = (42, "lunch", "{not valid json", "ph", None,
+               "raw", False, "2026-05-12T10:00:00+00:00", None, None)
+    conn = _PendingAnalysisConn(bad_row)
+    out = db.get_pending_analysis(conn, user_id=1234)
+    assert out is None, "corrupt JSON must NOT raise — must return None"
+    # The corrupt row should have been deleted by id (not user_id) so the
+    # specific bad row vanishes without nuking unrelated pending state.
+    assert len(conn.deletes) == 1
+    sql, params = conn.deletes[0]
+    assert "DELETE FROM pending_analyses" in sql
+    assert "WHERE id = %s" in sql
+    assert params == (42,)
+    assert conn.commits == 1
+
+
+def test_get_pending_analysis_returns_none_when_row_missing():
+    """When there is no pending row at all, the function returns None
+    without attempting any DELETE / commit."""
+    conn = _PendingAnalysisConn(None)
+    out = db.get_pending_analysis(conn, user_id=1234)
+    assert out is None
+    assert conn.deletes == []
+    assert conn.commits == 0
+
+
+def test_text_input_states_constant_covers_dispatcher_guards():
+    """`_TEXT_INPUT_STATES` in webhook.py is the canonical list of states
+    whose photo-arrival should clear the prompt. Must match the set of
+    awaiting_input_type values whose dispatcher guards already use the
+    `not text.startswith('/')` escape pattern (commit 0e46a66)."""
+    import importlib
+    wh = importlib.import_module("api.webhook")
+    assert wh._TEXT_INPUT_STATES == frozenset({
+        "weight", "water_target", "target_weight", "weekly_delta",
+        "barcode_grams", "barcode_manual", "timezone",
+        "health_allergens", "health_conditions",
+    })
+
+
 def test_get_user_breakdowns_five_dims_incl_source():
     """Breakdowns query each dim once + the source dim against `users`."""
     conn = _AdminConn(rows=[("uk", 12), ("en", 4)])

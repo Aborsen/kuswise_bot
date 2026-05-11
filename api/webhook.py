@@ -365,6 +365,20 @@ class handler(BaseHTTPRequestHandler):
 _VALID_GYM_FREQ = {"0", "1-2", "3-4", "5-6", "7"}
 _VALID_GOALS = {"lose", "maintain", "gain"}
 
+# Awaiting-input states whose user-side expectation is *text*. When a photo
+# arrives in any of these states, we treat it as an implicit abandonment of
+# the prompt and clear the state (otherwise the next text reply gets trapped
+# by the input handler — same Sergey-family trap as commit 0e46a66). Keep
+# this in sync with the dispatcher's `awaiting_input_type` branches at the
+# top of `do_POST`. Photo-expecting states (menu_photo / fridge_ingredients
+# / plan_pantry) intentionally NOT in this set — they're handled by their
+# own specific branches earlier in the dispatch order.
+_TEXT_INPUT_STATES = frozenset({
+    "weight", "water_target", "target_weight", "weekly_delta",
+    "barcode_grams", "barcode_manual", "timezone",
+    "health_allergens", "health_conditions",
+})
+
 
 # ---------- Main dispatcher ----------
 
@@ -476,6 +490,22 @@ def process_update(update: dict) -> None:
         if message.get("photo") and _is_reply_to_ask_prompt(message):
             handle_ask_photo(conn, message, profile)
             return
+
+        # Photo arriving while the user is in a text-input state is an
+        # implicit "abandon the prompt" signal. Clear `awaiting_input_type`
+        # so the user's next plain-text message isn't trapped by the input
+        # handler — same Sergey-family bug we fixed in commit 0e46a66 but
+        # for the photo path. Photo-expecting states (`menu_photo`,
+        # `fridge_ingredients`, `plan_pantry`) are handled by the more
+        # specific branches above and never reach this point.
+        if (
+            message.get("photo")
+            and user_id
+            and profile
+            and profile.get("awaiting_input_type") in _TEXT_INPUT_STATES
+        ):
+            set_awaiting_input(conn, user_id, None)
+            # fall through to handle_photo below — the photo is a legit meal log
 
         if message.get("photo"):
             handle_photo(conn, message)

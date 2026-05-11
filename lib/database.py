@@ -645,7 +645,13 @@ def save_pending_analysis(
 
 
 def get_pending_analysis(conn, user_id: int) -> Optional[dict]:
-    """Non-destructive read of the user's pending analysis."""
+    """Non-destructive read of the user's pending analysis.
+
+    Defensive against a corrupt `analysis_json` row: if the JSON can't be
+    parsed (NULL, malformed, truncated write) we drop the row and return
+    None instead of raising. Without this guard one corrupt pending row
+    would block all meal-logging for that user until manual intervention.
+    """
     with conn.cursor() as cur:
         cur.execute(
             """SELECT id, meal_type, analysis_json, photo_file_id, text_description,
@@ -663,10 +669,23 @@ def get_pending_analysis(conn, user_id: int) -> Optional[dict]:
             candidates = json.loads(row[8]) or []
         except (TypeError, ValueError):
             candidates = []
+    try:
+        analysis_value = json.loads(row[2]) if row[2] else {}
+    except (TypeError, ValueError):
+        # Drop the corrupt row in a fresh cursor and surface to Sentry.
+        # Returning None puts the user back in a clean state — they can
+        # re-send the meal photo / text without admin intervention.
+        from lib.log import error as _log_error
+        _log_error("pending_analysis_corrupt_json",
+                   user_id=user_id, row_id=row[0])
+        with conn.cursor() as cur_drop:
+            cur_drop.execute("DELETE FROM pending_analyses WHERE id = %s", (row[0],))
+        conn.commit()
+        return None
     return {
         "id": row[0],
         "meal_type": row[1],
-        "analysis": json.loads(row[2]),
+        "analysis": analysis_value,
         "photo_file_id": row[3],
         "text_description": row[4],
         "raw_response": row[5],

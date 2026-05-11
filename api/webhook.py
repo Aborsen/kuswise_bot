@@ -523,7 +523,7 @@ def process_update(update: dict) -> None:
             user_id
             and profile
             and profile.get("awaiting_input_type") == "weight"
-            and text.lower().strip() != "/cancel"
+            and not text.startswith("/")
         ):
             handle_weight_input(conn, chat_id, user_id, first_name, text, profile)
             return
@@ -533,7 +533,7 @@ def process_update(update: dict) -> None:
             user_id
             and profile
             and profile.get("awaiting_input_type") == "water_target"
-            and text.lower().strip() != "/cancel"
+            and not text.startswith("/")
         ):
             handle_water_target_input(conn, chat_id, user_id, text)
             return
@@ -543,7 +543,7 @@ def process_update(update: dict) -> None:
             user_id
             and profile
             and profile.get("awaiting_input_type") == "target_weight"
-            and text.lower().strip() != "/cancel"
+            and not text.startswith("/")
         ):
             handle_target_weight_input(conn, chat_id, user_id, text, profile)
             return
@@ -553,7 +553,7 @@ def process_update(update: dict) -> None:
             user_id
             and profile
             and profile.get("awaiting_input_type") == "weekly_delta"
-            and text.lower().strip() != "/cancel"
+            and not text.startswith("/")
         ):
             handle_weekly_delta_input(conn, chat_id, user_id, text, profile)
             return
@@ -563,7 +563,7 @@ def process_update(update: dict) -> None:
             user_id
             and profile
             and profile.get("awaiting_input_type") == "barcode_grams"
-            and text.lower().strip() != "/cancel"
+            and not text.startswith("/")
         ):
             handle_barcode_grams_input(conn, chat_id, user_id, first_name, text, profile)
             return
@@ -573,7 +573,7 @@ def process_update(update: dict) -> None:
             user_id
             and profile
             and profile.get("awaiting_input_type") == "barcode_manual"
-            and text.lower().strip() != "/cancel"
+            and not text.startswith("/")
         ):
             handle_barcode_manual_input(conn, chat_id, user_id, text, profile)
             return
@@ -583,7 +583,7 @@ def process_update(update: dict) -> None:
             user_id
             and profile
             and profile.get("awaiting_input_type") == "plan_pantry"
-            and text.lower().strip() != "/cancel"
+            and not text.startswith("/")
         ):
             handle_plan_pantry_input(conn, chat_id, user_id, text, profile)
             return
@@ -593,7 +593,7 @@ def process_update(update: dict) -> None:
             user_id
             and profile
             and profile.get("awaiting_input_type") == "fridge_ingredients"
-            and text.lower().strip() != "/cancel"
+            and not text.startswith("/")
         ):
             handle_fridge_input(conn, chat_id, user_id, text, profile)
             return
@@ -634,19 +634,23 @@ def process_update(update: dict) -> None:
             return
 
         # Free-text IANA timezone from /timezone → Other zone.
+        # Slash commands escape to the command dispatcher below.
         if (
             user_id
             and profile
             and profile.get("awaiting_input_type") == "timezone"
+            and not text.startswith("/")
         ):
             handle_timezone_input(conn, chat_id, user_id, text)
             return
 
         # Free-text health profile input (allergens / conditions) from /health.
+        # Slash commands escape to the command dispatcher below.
         if (
             user_id
             and profile
             and profile.get("awaiting_input_type") in ("health_allergens", "health_conditions")
+            and not text.startswith("/")
         ):
             handle_health_input(conn, chat_id, user_id, text, profile["awaiting_input_type"])
             return

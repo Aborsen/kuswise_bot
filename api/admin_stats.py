@@ -20,6 +20,7 @@ from lib.database import (
     delete_meal_admin,
     delete_user_all_data,
     get_ai_cost_estimate,
+    get_attribution_breakdown,
     get_conn,
     get_daily_trends,
     get_latest_cron_runs,
@@ -496,6 +497,10 @@ def build_html(nonce: str = "") -> str:
             user_activity = get_user_activity_30d(conn)
         except Exception:
             user_activity = {}
+        try:
+            attribution = get_attribution_breakdown(conn)
+        except Exception:
+            attribution = []
         # Single bulk fetch for the Analytics tab. `username` is the public
         # Telegram @handle (often empty); `first_name` is the display name.
         # `_uname()` below picks `@handle` → `first_name` → numeric id, in
@@ -757,6 +762,60 @@ def build_html(nonce: str = "") -> str:
         if first_name:
             return first_name
         return f"{uid}"
+
+    # --- F-15 §: attribution drill-down (Analytics tab) ---
+    def _quality_color(p: float) -> str:
+        if p >= 75: return "#4caf50"
+        if p >= 25: return "#ff9800"
+        return "#e94560"
+
+    attribution_rows = ""
+    for r in attribution:
+        _total = r["total"]
+        _done_pct = round(r["done_count"] / _total * 100) if _total else 0
+        _log_pct  = round(r["logged_count"] / _total * 100) if _total else 0
+        # Compact "uk N · en N" with empties dropped so a single-locale
+        # source doesn't render "uk 0 · en 1".
+        _locale_parts = []
+        if r["uk_count"]: _locale_parts.append(f"uk {r['uk_count']}")
+        if r["en_count"]: _locale_parts.append(f"en {r['en_count']}")
+        _locale_str = " · ".join(_locale_parts) or "—"
+        _done_color = _quality_color(_done_pct)
+        _log_color  = _quality_color(_log_pct)
+        # Tint the source label so 'organic' visually differs from tagged links.
+        _source_color = "#888" if r["source"] == "organic" else "#e94560"
+        attribution_rows += (
+            f"<tr>"
+            f"<td style='color:{_source_color};font-family:monospace;font-size:0.9em'>"
+            f"{_esc(r['source'])}</td>"
+            f"<td style='text-align:center;font-variant-numeric:tabular-nums;font-weight:600'>"
+            f"{_total}</td>"
+            f"<td style='font-size:0.85em;color:#888'>{_esc(_locale_str)}</td>"
+            f"<td style='text-align:center;color:{_done_color};font-variant-numeric:tabular-nums'>"
+            f"{_done_pct}%</td>"
+            f"<td style='text-align:center;color:{_log_color};font-variant-numeric:tabular-nums'>"
+            f"{_log_pct}%</td>"
+            f"</tr>"
+        )
+    attribution_html = (
+        f"<h2>🎯 Атрибуція</h2>"
+        f"<div style='max-width:780px'><table style='width:auto;min-width:640px'>"
+        f"<thead><tr>"
+        f"<th style='text-align:left'>Джерело</th>"
+        f"<th style='text-align:center'>Юзери</th>"
+        f"<th style='text-align:left'>Мова</th>"
+        f"<th style='text-align:center'>Онбординг ✓</th>"
+        f"<th style='text-align:center'>1-й прийом 🍽️</th>"
+        f"</tr></thead>"
+        f"<tbody>{attribution_rows or '<tr><td colspan=5 style=color:#666>Немає даних.</td></tr>'}</tbody>"
+        f"</table></div>"
+        f"<p style='color:#666;font-size:0.78em;margin-top:0;margin-bottom:20px'>"
+        f"Якість трафіку по джерелах. <b>Онбординг ✓</b> — частка користувачів, "
+        f"які дійшли до <code>onboarding_step='done'</code>. "
+        f"<b>1-й прийом 🍽️</b> — частка, яка залогувала ≥1 страву. "
+        f"<code>organic</code> = прийшли без тегованого посилання. "
+        f"Кольори: 🟢 ≥75%, 🟠 25–74%, 🔴 &lt;25%.</p>"
+    )
 
     # --- F-14 §4: nudge effectiveness ---
     _ne_pct = nudge_eff["pct"]
@@ -1236,6 +1295,7 @@ def build_html(nonce: str = "") -> str:
 {retention_html}
 {trends_html}
 {onboarding_html}
+{attribution_html}
 {nudge_eff_html}
 {ai_cost_html}
 {weight_html}

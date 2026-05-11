@@ -1894,6 +1894,35 @@ def test_get_pending_analysis_returns_none_when_row_missing():
     assert conn.commits == 0
 
 
+def test_get_attribution_breakdown_shape():
+    """Per-source quality breakdown joins users + user_profiles + EXISTS-meals,
+    counts via FILTER, ordered by total DESC then source ASC."""
+    conn = _AdminConn(rows=[
+        ("organic", 14, 11, 3, 14, 11),
+        ("site_calc_continue_uk", 1, 0, 1, 1, 0),
+    ])
+    out = db.get_attribution_breakdown(conn)
+    sql, _ = conn.calls[0]
+    # Two-table join + meal-existence subquery.
+    assert "FROM users u" in sql
+    assert "LEFT JOIN user_profiles p" in sql
+    assert "FROM meals m" in sql and "EXISTS" in sql
+    # Locale + onboarding + completion filters.
+    assert "FILTER (WHERE p.lang = 'uk')" in sql
+    assert "FILTER (WHERE p.lang = 'en')" in sql
+    assert "FILTER (WHERE p.onboarding_step = 'done')" in sql
+    # Empty source collapses to 'organic'; stable ordering.
+    assert "'organic'" in sql
+    assert "ORDER BY total DESC, source" in sql
+    # Row → dict shape with ints.
+    assert out[0] == {
+        "source": "organic", "total": 14,
+        "uk_count": 11, "en_count": 3,
+        "done_count": 14, "logged_count": 11,
+    }
+    assert out[1]["source"] == "site_calc_continue_uk"
+
+
 def test_text_input_states_constant_covers_dispatcher_guards():
     """`_TEXT_INPUT_STATES` in webhook.py is the canonical list of states
     whose photo-arrival should clear the prompt. Must match the set of

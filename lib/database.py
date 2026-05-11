@@ -2287,6 +2287,48 @@ def get_user_activity_30d(conn, days: int = 30) -> dict[int, list[int]]:
     return out
 
 
+def get_attribution_breakdown(conn) -> list[dict]:
+    """F-15 attribution drill-down for the admin Analytics tab.
+
+    Returns one dict per distinct `source` value with quality metrics:
+    `{source, total, uk_count, en_count, done_count, logged_count}`.
+    Caller derives onboarding-completion % and first-meal % from those
+    counts. Empty `source` (organic) collapses to the literal 'organic'.
+    Ordered by total descending so the busiest acquisition surfaces
+    surface first; ties broken alphabetically for stable rendering.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT
+              COALESCE(NULLIF(u.source, ''), 'organic') AS source,
+              COUNT(*) AS total,
+              COUNT(*) FILTER (WHERE p.lang = 'uk') AS uk_count,
+              COUNT(*) FILTER (WHERE p.lang = 'en') AS en_count,
+              COUNT(*) FILTER (WHERE p.onboarding_step = 'done') AS done_count,
+              COUNT(*) FILTER (WHERE EXISTS (
+                SELECT 1 FROM meals m WHERE m.user_id = u.user_id
+              )) AS logged_count
+            FROM users u
+            LEFT JOIN user_profiles p ON p.user_id = u.user_id
+            GROUP BY 1
+            ORDER BY total DESC, source
+            """
+        )
+        rows = cur.fetchall()
+    return [
+        {
+            "source":       r[0],
+            "total":        int(r[1] or 0),
+            "uk_count":     int(r[2] or 0),
+            "en_count":     int(r[3] or 0),
+            "done_count":   int(r[4] or 0),
+            "logged_count": int(r[5] or 0),
+        }
+        for r in rows
+    ]
+
+
 def get_nudge_effectiveness(conn, days: int = 30) -> dict:
     """Crude conversion: of users with `last_nudge_sent_at` in the last `days`,
     how many logged a meal within 24h after that stamp?

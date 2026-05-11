@@ -410,11 +410,12 @@ def build_html(nonce: str = "") -> str:
                    p.age, p.sex, p.weight_kg, p.height_cm,
                    p.gym_per_week, p.goal, p.daily_calorie_target,
                    p.target_weight_kg, p.lang, p.tz,
-                   COALESCE(u.first_name, '')
+                   COALESCE(u.first_name, ''),
+                   COALESCE(u.source, '')
             FROM users u
             LEFT JOIN meals m ON m.user_id = u.user_id
             LEFT JOIN user_profiles p ON p.user_id = u.user_id
-            GROUP BY u.user_id, u.username, u.first_name, u.created_at,
+            GROUP BY u.user_id, u.username, u.first_name, u.source, u.created_at,
                      p.age, p.sex, p.weight_kg, p.height_cm,
                      p.gym_per_week, p.goal, p.daily_calorie_target,
                      p.target_weight_kg, p.lang, p.tz
@@ -524,7 +525,7 @@ def build_html(nonce: str = "") -> str:
     user_tbody = ""
     for r in user_rows:
         (uid, uname, joined, meals, last, age, sex, weight, height,
-         gym, goal, cal_target, target_weight, lang, tz, first_name) = r
+         gym, goal, cal_target, target_weight, lang, tz, first_name, source) = r
         # Show `@handle` when the user has a real Telegram username;
         # otherwise fall back to their display name. The dash for "no
         # handle AND no display name" mirrors the rest of the table.
@@ -569,6 +570,7 @@ def build_html(nonce: str = "") -> str:
             f"<td class='clickable'>{_esc((joined or '')[:10])}</td>"
             f"<td class='clickable'>{_esc(lang_cell)}</td>"
             f"<td class='clickable'>{_esc(tz_cell)}</td>"
+            f"<td class='clickable'>{_esc(source) if source else '—'}</td>"
             f"<td>{spark_html}</td>"
             f'<td><button type="button" class="btn-del btn-del-user" data-uid="{_esc(uid)}" title="Видалити користувача">🗑</button></td>'
             f"</tr>\n"
@@ -621,8 +623,10 @@ def build_html(nonce: str = "") -> str:
         )
 
     # --- F-14: breakdown cards (Overview tab footer) ---
-    _DIM_LABELS = {"lang": "Мова", "tz": "Часовий пояс", "sex": "Стать", "goal": "Мета"}
-    _DIM_COLORS = {"lang": "#9c27b0", "tz": "#0288d1", "sex": "#e94560", "goal": "#4caf50"}
+    _DIM_LABELS = {"lang": "Мова", "tz": "Часовий пояс", "sex": "Стать",
+                   "goal": "Мета", "source": "Джерело"}
+    _DIM_COLORS = {"lang": "#9c27b0", "tz": "#0288d1", "sex": "#e94560",
+                   "goal": "#4caf50", "source": "#ff9800"}
     _SEX_LABEL = {"male": "♂ Чол", "female": "♀ Жін"}
     _GOAL_LABEL = {"lose": "🔥 Схуднути", "maintain": "⚖️ Підтримка", "gain": "💪 Набір"}
 
@@ -633,7 +637,7 @@ def build_html(nonce: str = "") -> str:
         return val or "—"
 
     breakdown_cards_html = ""
-    for dim in ("lang", "tz", "sex", "goal"):
+    for dim in ("source", "lang", "tz", "sex", "goal"):
         items = user_breakdowns.get(dim, [])
         if not items:
             continue
@@ -940,7 +944,7 @@ def build_html(nonce: str = "") -> str:
     user_modal_data = {}
     for r in user_rows:
         (uid, uname, joined, meals, last, age, sex, weight, height,
-         gym, goal, cal_target, target_weight, lang, tz, first_name) = r
+         gym, goal, cal_target, target_weight, lang, tz, first_name, source) = r
         # Modal title: prefer @handle, then first_name, then numeric id.
         # JS uses `uname` as the heading so it must already include the
         # right prefix.
@@ -1217,6 +1221,7 @@ def build_html(nonce: str = "") -> str:
   <th data-col="14" data-type="str">Приєднався <span class="arrow">▲</span></th>
   <th data-col="15" data-type="str">Мова <span class="arrow">▲</span></th>
   <th data-col="16" data-type="str">Часовий пояс <span class="arrow">▲</span></th>
+  <th data-col="17" data-type="str" title="Звідки користувач прийшов (із параметра /start)">Джерело <span class="arrow">▲</span></th>
   <th class="no-sort" title="Логи за 30 днів">📈 30д</th>
   <th class="no-sort">Дія</th>
 </tr></thead>

@@ -397,6 +397,19 @@ def process_update(update: dict) -> None:
         username = user.get("username") or ""
         first_name = user.get("first_name") or ""
 
+        # F-15 attribution: parse the deep-link payload from `/start <token>`
+        # so we can attribute the signup to the surface that sent them
+        # (site banner, IG bio, partner, QR, etc.). Sanitise to Telegram's
+        # allowed `[A-Za-z0-9_-]{1,64}` set + truncate. Empty / typed
+        # `/start` falls through to source="" (organic). First-write-wins
+        # is enforced inside upsert_user so repeat-tappers stay attributed
+        # to their first arrival surface.
+        _msg_text = (message.get("text") or "").strip()
+        source = ""
+        if _msg_text.startswith("/start") and len(_msg_text) > 6:
+            _raw = _msg_text[6:].strip()
+            source = "".join(c for c in _raw if c.isalnum() or c in "_-")[:64]
+
         if not _is_allowed(user_id):
             chat_id = message.get("chat", {}).get("id")
             if chat_id:
@@ -407,7 +420,7 @@ def process_update(update: dict) -> None:
             return
 
         if user_id:
-            upsert_user(conn, user_id, username, first_name)
+            upsert_user(conn, user_id, username, first_name, source)
 
         chat_id = message["chat"]["id"]
 

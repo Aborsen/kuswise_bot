@@ -60,6 +60,18 @@ def init_db(conn=None, force: bool = False) -> None:
         cur.execute(
             "ALTER TABLE users ADD COLUMN IF NOT EXISTS first_name TEXT NOT NULL DEFAULT ''"
         )
+        # F-15 attribution: token captured from Telegram's `/start <token>`
+        # deep-link parameter (`t.me/<bot>?start=<token>`). Empty = organic
+        # / typed /start. First-write-wins — never overwritten on later
+        # /start tapps so repeat-clickers stay attributed to their first
+        # arrival surface. `source_seen_at` records when that first-touch
+        # landed.
+        cur.execute(
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT ''"
+        )
+        cur.execute(
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS source_seen_at TEXT"
+        )
         cur.execute("""
             CREATE TABLE IF NOT EXISTS daily_logs (
                 id BIGSERIAL PRIMARY KEY,
@@ -383,23 +395,32 @@ def init_db(conn=None, force: bool = False) -> None:
 # ---------- Users ----------
 
 def upsert_user(conn, user_id: int, username: Optional[str],
-                first_name: Optional[str] = "") -> None:
+                first_name: Optional[str] = "",
+                source: Optional[str] = "") -> None:
     """Insert or refresh a `users` row.
 
     `username` must be the bare Telegram @handle (no leading "@"), or empty
     string for users without a public handle. `first_name` is the display
-    name. Conflicts UPDATE both columns so admin reads stay fresh when a
-    user later sets / changes their handle or display name (the old
-    `DO NOTHING` froze whichever value landed first).
+    name. `source` is the sanitised `/start <token>` deep-link parameter
+    (F-15 attribution); callers should pre-sanitise to `[A-Za-z0-9_-]{0,64}`.
+
+    Conflicts UPDATE `username` and `first_name` so admin reads stay fresh
+    when a user later sets / changes their handle or display name. `source`
+    is deliberately NOT updated on conflict — first attribution wins; a
+    repeat-tapper of a different tagged link keeps their original source.
+    `source_seen_at` is set only on the INSERT path for the same reason.
     """
+    src = (source or "").strip()
     with conn.cursor() as cur:
         cur.execute(
-            """INSERT INTO users (user_id, username, first_name, created_at)
-               VALUES (%s, %s, %s, %s)
+            """INSERT INTO users (user_id, username, first_name, source,
+                                  source_seen_at, created_at)
+               VALUES (%s, %s, %s, %s, %s, %s)
                ON CONFLICT (user_id) DO UPDATE SET
                    username   = EXCLUDED.username,
                    first_name = EXCLUDED.first_name""",
-            (user_id, username or "", first_name or "", _now_iso()),
+            (user_id, username or "", first_name or "", src,
+             _now_iso() if src else None, _now_iso()),
         )
     conn.commit()
 
@@ -2161,10 +2182,12 @@ def get_onboarding_funnel(conn) -> list[tuple[str, int]]:
 
 
 def get_user_breakdowns(conn) -> dict[str, list[tuple[str, int]]]:
-    """Distribution of users across lang / tz / sex / goal for Overview cards.
+    """Distribution of users across lang / tz / sex / goal / source for
+    Overview cards.
 
     Returns `{dim: [(value, count), …]}` sorted by count desc. Empty strings
-    and NULLs collapse to '—'.
+    and NULLs collapse to '—'. `source` lives on the `users` table (F-15
+    attribution); the four profile dims live on `user_profiles`.
     """
     out: dict[str, list[tuple[str, int]]] = {}
     with conn.cursor() as cur:
@@ -2178,6 +2201,17 @@ def get_user_breakdowns(conn) -> dict[str, list[tuple[str, int]]]:
                 """
             )
             out[dim] = [(r[0], int(r[1])) for r in cur.fetchall()]
+        # source lives on `users`, not `user_profiles`. Empty source
+        # collapses to the human-friendly label 'organic'.
+        cur.execute(
+            """
+            SELECT COALESCE(NULLIF(source, ''), 'organic') AS v, COUNT(*) AS c
+            FROM users
+            GROUP BY v
+            ORDER BY c DESC
+            """
+        )
+        out["source"] = [(r[0], int(r[1])) for r in cur.fetchall()]
     return out
 
 

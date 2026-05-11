@@ -1801,16 +1801,50 @@ def test_get_onboarding_funnel_canonical_order():
     assert counts["awaiting_sex"] == 0  # zero-filled
 
 
-def test_get_user_breakdowns_four_dims():
-    """Breakdowns query each dim once, return dict keyed by dim name."""
+def test_upsert_user_source_first_write_wins():
+    """`source` is written on INSERT but NOT in ON CONFLICT DO UPDATE,
+    so a repeat-tapper of a tagged link keeps their first attribution."""
+    conn = _AdminConn()
+    db.upsert_user(conn, 999, "alice", "Alice", source="site_banner_home")
+    assert conn.commits == 1
+    sql, params = conn.calls[0]
+    # source is in the INSERT column list and goes into VALUES.
+    assert "INSERT INTO users" in sql
+    assert "source" in sql and "source_seen_at" in sql
+    # source must NOT appear in the conflict-update set.
+    update_clause = sql.split("ON CONFLICT")[1]
+    assert "source" not in update_clause, (
+        "ON CONFLICT must not overwrite source — first attribution wins"
+    )
+    assert "username" in update_clause and "first_name" in update_clause
+    # Params: user_id, username, first_name, source, source_seen_at, created_at.
+    assert params[0] == 999
+    assert params[3] == "site_banner_home"
+    # source_seen_at gets a timestamp when source is non-empty.
+    assert params[4] is not None and "T" in params[4]
+
+
+def test_upsert_user_source_empty_clears_source_seen_at():
+    """An organic /start (no token) writes source='' and source_seen_at=None."""
+    conn = _AdminConn()
+    db.upsert_user(conn, 1000, "bob", "Bob")  # no source arg → default ""
+    _, params = conn.calls[0]
+    assert params[3] == ""        # source
+    assert params[4] is None       # source_seen_at not stamped
+
+
+def test_get_user_breakdowns_five_dims_incl_source():
+    """Breakdowns query each dim once + the source dim against `users`."""
     conn = _AdminConn(rows=[("uk", 12), ("en", 4)])
     out = db.get_user_breakdowns(conn)
-    assert set(out.keys()) == {"lang", "tz", "sex", "goal"}
-    # Four separate queries (one per dim).
-    assert len(conn.calls) == 4
-    # All four queries hit user_profiles.
-    for sql, _ in conn.calls:
+    assert set(out.keys()) == {"lang", "tz", "sex", "goal", "source"}
+    # Five separate queries (one per dim).
+    assert len(conn.calls) == 5
+    # First 4 hit user_profiles, the 5th (source) hits the `users` table.
+    for sql, _ in conn.calls[:4]:
         assert "FROM user_profiles" in sql
+    assert "FROM users" in conn.calls[4][0]
+    assert "'organic'" in conn.calls[4][0]  # empty-source label
 
 
 def test_record_cron_run_inserts_with_finished_now():

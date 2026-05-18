@@ -1782,6 +1782,53 @@ def test_get_users_due_weekly_checkin_filters_blocked_at():
     assert "blocked_at IS NULL" in sql
 
 
+def test_get_users_due_morning_greeting_filters_and_shape():
+    """Per-user-local morning greeting query: filters on opt-out + blocked,
+    matches local hour 8, dedups against last_morning_sent_at."""
+    conn = _NudgeConn(rows=[
+        (501, "uk", "done"),
+        (502, "en", "awaiting_age"),
+    ])
+    out = db.get_users_due_morning_greeting(conn)
+    sql, params = conn.calls[0]
+    # All three notification gates.
+    assert "COALESCE(up.nudge_optout, 0) = 0" in sql
+    assert "up.blocked_at IS NULL" in sql
+    # Per-user-tz hour filter + dedup.
+    assert "EXTRACT(HOUR FROM (NOW() AT TIME ZONE up.tz))" in sql
+    assert "up.last_morning_sent_at IS NULL" in sql
+    assert "(up.last_morning_sent_at::timestamptz AT TIME ZONE up.tz)::date" in sql
+    # Default morning_hour is 8.
+    assert params == (8,)
+    # Row → dict shape with onboarding_step so caller can pick the right
+    # message variant (greeting_done vs greeting_mid_onboarding).
+    assert out == [
+        {"user_id": 501, "lang": "uk", "onboarding_step": "done"},
+        {"user_id": 502, "lang": "en", "onboarding_step": "awaiting_age"},
+    ]
+
+
+def test_get_users_due_morning_greeting_honors_custom_hour():
+    """`morning_hour=N` propagates to the SQL parameter."""
+    conn = _NudgeConn(rows=[])
+    db.get_users_due_morning_greeting(conn, morning_hour=10)
+    _, params = conn.calls[0]
+    assert params == (10,)
+
+
+def test_mark_morning_sent_updates_with_iso_timestamp():
+    """Mirrors mark_nudge_sent — stamps last_morning_sent_at to NOW iso."""
+    conn = _NudgeConn()
+    db.mark_morning_sent(conn, user_id=42)
+    assert conn.commits == 1
+    sql, params = conn.calls[0]
+    assert "UPDATE user_profiles" in sql
+    assert "last_morning_sent_at = %s" in sql
+    assert params[-1] == 42
+    ts = params[0]
+    assert "T" in ts and "+00:00" in ts
+
+
 def test_set_nudge_optout_writes_int_flag():
     conn = _NudgeConn()
     db.set_nudge_optout(conn, user_id=42, optout=True)

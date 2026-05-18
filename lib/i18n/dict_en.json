@@ -25,6 +25,8 @@
   "onboarding.need_button": "Please use the button below. 👇",
   "onboarding.done": "🎉 All set, <b>{name}</b>!\n\nYour daily targets:\n🎯 <b>{cal} kcal</b> · 💧 <b>{water} ml</b>\n\nNow it's your turn. 📸 Snap a photo of your next meal (or describe it in text, e.g. «<i>scrambled eggs with tomatoes and coffee</i>»), and I'll start counting for you.\n\n💡 All commands — /help",
   "onboarding.tz_default_applied": "⏰ I set your timezone to <b>Europe/Kyiv</b> by default so you're not stuck mid-flow. If you live elsewhere — change it via /timezone.",
+  "morning.greeting_done":             "🌞 Good morning! What's for breakfast today? Snap a photo or describe it — I'll count it for you. 📸",
+  "morning.greeting_mid_onboarding":   "🌞 Good morning! Just a couple of steps left to wrap up setup — tap /start to finish. Takes a minute.",
   "onboarding.required": "Let's get to know each other first 👋 Tap /start — I'll ask a few questions and calculate your target.",
   "onboarding.default_name": "friend",
 

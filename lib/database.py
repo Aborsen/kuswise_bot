@@ -1611,6 +1611,52 @@ def set_blocked(conn, user_id: int, blocked: bool) -> None:
     conn.commit()
 
 
+def get_users_due_morning_greeting(conn, morning_hour: int = 8) -> list[dict]:
+    """Users due the daily morning greeting right now.
+
+    Per-user timing: a user matches when their local clock is in
+    `morning_hour` (default 8) AND `last_morning_sent_at` is older than
+    user-local today. Opt-outs (`nudge_optout=1` or `blocked_at IS NOT
+    NULL`) excluded. Onboarding-incomplete users ARE included — they
+    get a "come back and finish" variant from the caller.
+
+    Designed for an hourly cron firing at :30 UTC; each user matches
+    exactly one UTC fire per day (their local 8:30).
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT up.user_id, COALESCE(up.lang, 'en') AS lang,
+                   up.onboarding_step
+            FROM user_profiles up
+            WHERE COALESCE(up.nudge_optout, 0) = 0
+              AND up.blocked_at IS NULL
+              AND EXTRACT(HOUR FROM (NOW() AT TIME ZONE up.tz))::int = %s
+              AND (
+                  up.last_morning_sent_at IS NULL
+                  OR (up.last_morning_sent_at::timestamptz AT TIME ZONE up.tz)::date
+                     < (NOW() AT TIME ZONE up.tz)::date
+              )
+            ORDER BY up.user_id
+            """,
+            (morning_hour,),
+        )
+        rows = cur.fetchall()
+    return [{"user_id": r[0], "lang": r[1], "onboarding_step": r[2]}
+            for r in rows]
+
+
+def mark_morning_sent(conn, user_id: int) -> None:
+    """Stamp `last_morning_sent_at = now()` so today's greeting is gated."""
+    with conn.cursor() as cur:
+        cur.execute(
+            "UPDATE user_profiles SET last_morning_sent_at = %s, updated_at = %s "
+            "WHERE user_id = %s",
+            (_now_iso(), _now_iso(), user_id),
+        )
+    conn.commit()
+
+
 def finalize_stuck_tz_users(conn, max_age_hours: int = 12) -> list[dict]:
     """Find users stranded on `awaiting_tz` or `awaiting_tz_custom` for
     longer than `max_age_hours` and force-finalize them. `tz` is left at

@@ -1594,6 +1594,10 @@ def test_btn_label_dispatcher_accepts_both_locales_and_legacy():
     """F-2b Chunk 5: Bilingual reply-keyboard dispatcher accepts UA + EN labels
     plus legacy pre-F-2b UA labels. The 1-hour Telegram cache means a UA user
     with a stale keyboard tapping the old label must still dispatch correctly."""
+    # Reset cache: this test re-imports the module to dodge the persisted
+    # function attribute populated by earlier tests in the same run.
+    import importlib
+    importlib.reload(fm)
     # Both locales' "favorites" labels resolve to the same command:
     assert fm.button_text_to_command(fm.btn_label("fav", locale="uk")) == "/fav"
     assert fm.button_text_to_command(fm.btn_label("fav", locale="en")) == "/fav"
@@ -1607,6 +1611,50 @@ def test_btn_label_dispatcher_accepts_both_locales_and_legacy():
     assert fm.btn_label("scan", locale="uk") in labels
     assert fm.btn_label("scan", locale="en") in labels
     assert "🔢 Сканер" in labels
+
+
+def test_meals_button_routes_to_today_after_merge():
+    """F-16 merge: the 'meals' button label (now '📋 Today' / '📋 Сьогодні')
+    routes to /today, not /meals. /meals stays a typed alias dispatched
+    by the webhook itself, not the button cache."""
+    import importlib
+    importlib.reload(fm)
+    # Current renamed label dispatches to /today (both locales).
+    assert fm.button_text_to_command(fm.btn_label("meals", locale="uk")) == "/today"
+    assert fm.button_text_to_command(fm.btn_label("meals", locale="en")) == "/today"
+    # Legacy pre-merge labels also dispatch to /today so users with
+    # cached keyboards on their phones don't tap into a dead button.
+    assert fm.button_text_to_command("📋 Мої страви") == "/today"
+    assert fm.button_text_to_command("📋 My meals") == "/today"
+    # menu_button_labels() includes the legacy entries.
+    labels = fm.menu_button_labels()
+    assert "📋 Мої страви" in labels
+    assert "📋 My meals" in labels
+
+
+def test_format_meals_list_without_header_args_suppresses_daily_totals():
+    """F-16 merge depends on `format_meals_list` skipping its compact
+    daily-total header when called without `log`/`daily_cal_target`/
+    `macros`. The combined `/today` handler relies on this so the
+    full progress card below isn't duplicated."""
+    from lib.formatters import format_meals_list
+    meals = [{
+        "id": 1, "meal_type": "breakfast", "description": "вівсянка",
+        "calories": 320, "protein_g": 12, "carbs_g": 55, "fat_g": 6,
+        "fiber_g": 4, "sugar_g": 8,
+    }]
+    out_no_header = format_meals_list(meals, locale="en")
+    out_with_header = format_meals_list(
+        meals, log={"calories": 320, "protein": 12, "carbs": 55, "fat": 6},
+        daily_cal_target=2000, macros={"protein": 100, "carbs": 250, "fat": 70},
+        locale="en",
+    )
+    # The "Day total" line only appears when the optional args are passed.
+    # Without them, the compact header is suppressed entirely.
+    assert "320" in out_no_header  # meal kcal still present
+    assert "Day total" not in out_no_header or "/ 2000" not in out_no_header
+    # The with-header version contains the daily-target reference.
+    assert "2000" in out_with_header
 
 
 def test_render_recap_png_returns_pngsignature_bytes():

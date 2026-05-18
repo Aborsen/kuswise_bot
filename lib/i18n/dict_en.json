@@ -396,7 +396,7 @@
   "btn.recent":    "🕘 Recent",
   "btn.scanner":   "📸 Scanner",
   "btn.yesterday": "📆 Yesterday",
-  "btn.meals":     "📋 My meals",
+  "btn.meals":     "📋 Today",
   "btn.dashboard": "📱 Dashboard",
   "btn.scan":      "🔢 Barcode",
   "btn.menu_ocr":  "📋 Scan menu",
@@ -788,7 +788,7 @@
   "alternates.row":     "{digit} <b>{name}</b> · {kcal} {kcal_unit} · {p_short}{p} {f_short}{f} {c_short}{c} · ~{conf}%",
 
   "cmd.start":        "🚀 Start or update profile",
-  "cmd.today":        "📊 Today's progress",
+  "cmd.today":        "📊 Today: meals + progress",
   "cmd.yesterday":    "📆 Yesterday's summary",
   "cmd.history":      "📈 Last 7 days history",
   "cmd.streak":       "🔥 Streak and freeze tokens",

@@ -2941,18 +2941,48 @@ def handle_command(conn, message: dict, text: str, first_name: str | None, profi
         send_message(chat_id, format_profile(profile, locale=i18n_mod.locale_of(profile)), reply_markup=profile_edit_keyboard(locale=i18n_mod.locale_of(profile)))
         return
 
-    if cmd == "/today":
+    if cmd == "/today" or cmd == "/meals":
+        # Combined view (formerly split between /meals and /today): the
+        # user gets today's meal list (with per-meal edit/delete inline
+        # buttons) followed by the rich progress card (calorie bar,
+        # macros, streak, quip). `/meals` stays as a typed alias for
+        # backwards compat and slash-menu autocomplete.
         log = get_today_log(conn, user_id)
+        meals = get_meals_for_day(conn, user_id, log["date"])
         streak_row = None
         try:
             streak_row = get_streak(conn, user_id)
-        except Exception as _streak_exc:  # don't block /today on streak issues
+        except Exception as _streak_exc:  # don't block the view on streak issues
             error("streak_fetch_failed", exc=_streak_exc, user_id=user_id)
-        send_message(
-            chat_id,
-            format_today_progress(log, cal_target, first_name, profile=profile, streak=streak_row),
-            reply_markup=main_menu_keyboard(locale=i18n_mod.locale_of(profile)),
+
+        progress_card = format_today_progress(
+            log, cal_target, first_name, profile=profile, streak=streak_row,
         )
+        locale = i18n_mod.locale_of(profile)
+        if meals:
+            # Build meal list WITHOUT the compact daily-totals header —
+            # the progress card below already covers that ground in
+            # richer detail, so omitting the args avoids a duplicate.
+            meal_list = format_meals_list(meals, locale=locale)
+            macros = macro_gram_targets_from_profile(
+                (profile or {}).get("weight_kg"),
+                (profile or {}).get("goal") or "maintain",
+            )
+            # The meals list keyboard powers per-meal edit/delete from
+            # inside this combined message, matching the old /meals UX.
+            send_message(
+                chat_id,
+                meal_list + "\n\n" + progress_card,
+                reply_markup=meals_list_keyboard(meals, locale=locale),
+            )
+        else:
+            # No meals yet today — show just the progress card with the
+            # persistent reply keyboard for quick navigation elsewhere.
+            send_message(
+                chat_id,
+                progress_card,
+                reply_markup=main_menu_keyboard(locale=locale),
+            )
         return
 
     if cmd == "/streak":
@@ -3055,23 +3085,6 @@ def handle_command(conn, message: dict, text: str, first_name: str | None, profi
         log = get_log_for_date(conn, user_id, y)
         meals = get_meals_for_day(conn, user_id, y)
         send_message(chat_id, format_yesterday(log, meals, cal_target, first_name, profile=profile), reply_markup=main_menu_keyboard(locale=i18n_mod.locale_of(profile)))
-        return
-
-    if cmd == "/meals":
-        log = get_today_log(conn, user_id)
-        meals = get_meals_for_day(conn, user_id, log["date"])
-        if not meals:
-            send_message(chat_id, _t("meals_mgmt.no_meals", profile))
-            return
-        macros = macro_gram_targets_from_profile(
-            (profile or {}).get("weight_kg"),
-            (profile or {}).get("goal") or "maintain",
-        )
-        send_message(
-            chat_id,
-            format_meals_list(meals, log=log, daily_cal_target=cal_target, macros=macros, locale=i18n_mod.locale_of(profile)),
-            reply_markup=meals_list_keyboard(meals, locale=i18n_mod.locale_of(profile)),
-        )
         return
 
     if cmd == "/history":

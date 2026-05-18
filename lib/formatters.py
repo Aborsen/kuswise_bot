@@ -1162,6 +1162,11 @@ def btn_label(name: str, locale: str = "en") -> str:
 _LEGACY_BTN_LABELS: tuple[str, ...] = (
     "🔢 Сканер",  # noqa: i18n
     "📋 Меню",  # noqa: i18n
+    # F-16 button rename: the EN/UK "My meals" labels became
+    # the EN/UK "Today" labels when /meals + /today merged into a
+    # single combined view. Stale keyboards still dispatch to /today.
+    "📋 Мої страви",  # noqa: i18n — pre-merge UA label
+    "📋 My meals",  # noqa: i18n — pre-merge EN label
 )
 
 
@@ -1192,8 +1197,11 @@ def button_text_to_command(text: str) -> str | None:
         # Scanner merge: "scanner" button (📸 Scanner) opens /scan, which
         # surfaces the combined chooser (Mini App / manual / menu OCR / cancel).
         # "recent" mapping kept so stale keyboards still dispatch.
+        # F-16 merge: the "meals" button label now routes to /today,
+        # which renders both today's meal list AND the daily progress
+        # card in one combined message. /meals stays as a typed alias.
         name_to_cmd = {
-            "ask": "/ai", "fav": "/fav", "meals": "/meals",
+            "ask": "/ai", "fav": "/fav", "meals": "/today",
             "profile": "/profile", "suggest": "/suggest_meal",
             "scan": "/scan", "menu_ocr": "/menu",
             "today": "/today", "yesterday": "/yesterday",
@@ -1203,9 +1211,13 @@ def button_text_to_command(text: str) -> str | None:
         for name, cmd in name_to_cmd.items():
             for locale in ("uk", "en"):
                 cache[btn_label(name, locale=locale)] = cmd
-        # Legacy labels mapped explicitly.
+        # Legacy labels mapped explicitly. Both the pre-F-16 meals labels
+        # and the older pre-F-2b labels remain in the cache so stale
+        # cached keyboards on users' phones still dispatch correctly.
         cache["🔢 Сканер"] = "/scan"  # noqa: i18n
         cache["📋 Меню"] = "/menu"  # noqa: i18n
+        cache["📋 Мої страви"] = "/today"  # noqa: i18n — pre-merge UA
+        cache["📋 My meals"] = "/today"  # noqa: i18n — pre-merge EN
         button_text_to_command._cache = cache
     return cache.get(text)
 

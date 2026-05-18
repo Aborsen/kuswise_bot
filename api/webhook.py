@@ -1225,7 +1225,11 @@ def handle_timezone_callback(conn, cb: dict, profile: dict) -> None:
     update_profile(conn, user_id, tz=tz_value)
     set_awaiting_input(conn, user_id, None)
     answer_callback_query(cb_id, _t("toast.saved_check", profile))
-    send_message(chat_id, _t("timezone.saved", profile, tz=tz_value))
+    send_message(
+        chat_id,
+        _t("timezone.saved", profile, tz=tz_value),
+        reply_markup=main_menu_keyboard(locale=i18n_mod.locale_of(profile)),
+    )
 
 
 def handle_timezone_input(conn, chat_id: int, user_id: int, text: str) -> None:
@@ -1234,14 +1238,22 @@ def handle_timezone_input(conn, chat_id: int, user_id: int, text: str) -> None:
     cleaned = text.strip()
     if cleaned.lower() in ("/cancel", "cancel"):
         set_awaiting_input(conn, user_id, None)
-        send_message(chat_id, _t("timezone.cancelled", profile))
+        send_message(
+            chat_id,
+            _t("timezone.cancelled", profile),
+            reply_markup=main_menu_keyboard(locale=i18n_mod.locale_of(profile)),
+        )
         return
     if not is_valid_tz(cleaned):
         send_message(chat_id, _t("onboarding.tz_invalid", profile))
         return
     update_profile(conn, user_id, tz=cleaned)
     set_awaiting_input(conn, user_id, None)
-    send_message(chat_id, _t("timezone.saved", profile, tz=cleaned))
+    send_message(
+        chat_id,
+        _t("timezone.saved", profile, tz=cleaned),
+        reply_markup=main_menu_keyboard(locale=i18n_mod.locale_of(profile)),
+    )
 
 
 # ---------- Health profile (F-1) ----------
@@ -1447,7 +1459,11 @@ def handle_health_input(conn, chat_id: int, user_id: int, text: str, kind: str) 
     cleaned = text.strip()
     if cleaned.lower() in ("/cancel", "cancel"):
         set_awaiting_input(conn, user_id, None)
-        send_message(chat_id, _t("health.cancelled", profile))
+        send_message(
+            chat_id,
+            _t("health.cancelled", profile),
+            reply_markup=main_menu_keyboard(locale=i18n_mod.locale_of(profile)),
+        )
         return
 
     is_allergens = kind == "health_allergens"
@@ -2437,7 +2453,10 @@ def _send_plan_day(chat_id: int, plan_id: int, plan: dict, day_idx: int, locale:
     body = format_meal_plan_day(day, day_idx, locale)
     if day_idx == 0 and plan.get("notes"):
         body = i18n_mod.t("plan.header_notes", locale, notes=plan["notes"]) + body
-    send_message(chat_id, body, reply_markup=plan_day_keyboard(plan_id, day_idx, day, locale=i18n_mod.locale_of(profile)))
+    # The `locale` parameter is already in scope; the previous code referenced
+    # an undefined `profile` here which crashed every /plan day render with
+    # NameError. Use the parameter directly.
+    send_message(chat_id, body, reply_markup=plan_day_keyboard(plan_id, day_idx, day, locale=locale))
 
 
 def handle_plan_pantry_input(
@@ -3186,7 +3205,11 @@ def handle_command(conn, message: dict, text: str, first_name: str | None, profi
         currently_off = bool((profile or {}).get("nudge_optout"))
         set_nudge_optout(conn, user_id, not currently_off)
         key = "nudge.opted_in" if currently_off else "nudge.opted_out"
-        send_message(chat_id, _t(key, profile))
+        send_message(
+            chat_id,
+            _t(key, profile),
+            reply_markup=main_menu_keyboard(locale=i18n_mod.locale_of(profile)),
+        )
         return
 
     if cmd == "/ai":

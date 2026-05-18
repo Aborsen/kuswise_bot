@@ -2114,6 +2114,25 @@ def test_get_attribution_breakdown_shape():
     assert out[1]["source"] == "site_calc_continue_uk"
 
 
+def test_send_plan_day_uses_locale_not_undefined_profile():
+    """Regression: `_send_plan_day` previously referenced an undefined
+    `profile` symbol (NameError) which crashed every /plan day render.
+    Source-grep guards against the regression — the function must use
+    the `locale` parameter directly, not `i18n_mod.locale_of(profile)`."""
+    import os
+    here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    src = open(os.path.join(here, "api", "webhook.py")).read()
+    block = src.split("def _send_plan_day", 1)[1].split("\ndef ", 1)[0]
+    assert "locale=locale" in block, (
+        "_send_plan_day must pass `locale=locale` (its parameter) to "
+        "plan_day_keyboard. Found mismatched signature."
+    )
+    assert "locale_of(profile)" not in block, (
+        "_send_plan_day must NOT reference `profile` — it's not in scope. "
+        "Use the `locale` parameter instead."
+    )
+
+
 def test_text_input_states_constant_covers_dispatcher_guards():
     """`_TEXT_INPUT_STATES` in webhook.py is the canonical list of states
     whose photo-arrival should clear the prompt. Must match the set of

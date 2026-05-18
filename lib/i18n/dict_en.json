@@ -23,7 +23,8 @@
   "onboarding.custom_cal_prompt": "Enter your own calorie target (whole number, 1000–6000):",
   "onboarding.custom_cal_range": "Calories should be between 1000 and 6000. Try again. 🙂",
   "onboarding.need_button": "Please use the button below. 👇",
-  "onboarding.done": "🎉 All set, <b>{name}</b>!\n\nYour daily targets:\n🎯 <b>{cal} kcal</b> · 💧 <b>{water} ml</b>\n\nNow it's your turn. 📸 Snap a photo of your next meal (or describe it in text, e.g. «<i>scrambled eggs with tomatoes and coffee</i>»), and I'll start counting for you.",
+  "onboarding.done": "🎉 All set, <b>{name}</b>!\n\nYour daily targets:\n🎯 <b>{cal} kcal</b> · 💧 <b>{water} ml</b>\n\nNow it's your turn. 📸 Snap a photo of your next meal (or describe it in text, e.g. «<i>scrambled eggs with tomatoes and coffee</i>»), and I'll start counting for you.\n\n💡 All commands — /help",
+  "onboarding.tz_default_applied": "⏰ I set your timezone to <b>Europe/Kyiv</b> by default so you're not stuck mid-flow. If you live elsewhere — change it via /timezone.",
   "onboarding.required": "Let's get to know each other first 👋 Tap /start — I'll ask a few questions and calculate your target.",
   "onboarding.default_name": "friend",
 

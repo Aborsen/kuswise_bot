@@ -238,6 +238,19 @@ def init_db(conn=None, force: bool = False) -> None:
         cur.execute(
             "ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS nudge_optout INTEGER NOT NULL DEFAULT 0"
         )
+        # F-16: `blocked_at` is stamped when Telegram returns 400/403 on send
+        # (user blocked the bot). Distinct from `nudge_optout` which tracks
+        # explicit user muting via `/quiet` or the legacy 🔕 button. Both
+        # gates are checked when building any notification cohort. NULL =
+        # not blocked; auto-cleared when the user messages the bot again.
+        cur.execute(
+            "ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS blocked_at TEXT"
+        )
+        # F-16: `last_morning_sent_at` mirrors `last_nudge_sent_at` for the
+        # daily 8:30-local good-morning cron. Per-user-local-day dedup.
+        cur.execute(
+            "ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS last_morning_sent_at TEXT"
+        )
         cur.execute("""
             CREATE TABLE IF NOT EXISTS weight_history (
                 id BIGSERIAL PRIMARY KEY,
@@ -434,6 +447,7 @@ PROFILE_COLUMNS = [
     "awaiting_input_type", "weekly_checkin_sent_at", "target_weight_kg",
     "tz", "lang", "weekly_delta_kg", "lang_confirmed_at",
     "last_nudge_sent_at", "nudge_optout",
+    "blocked_at", "last_morning_sent_at",
 ]
 
 
@@ -474,6 +488,7 @@ _ALLOWED_PROFILE_FIELDS = {
     "awaiting_input_type", "weekly_checkin_sent_at", "target_weight_kg",
     "tz", "lang", "weekly_delta_kg", "lang_confirmed_at",
     "last_nudge_sent_at", "nudge_optout",
+    "blocked_at", "last_morning_sent_at",
 }
 
 
@@ -1125,6 +1140,7 @@ def get_users_needing_summary(conn, summary_hour: int = 22) -> list[tuple[int, s
                FROM daily_logs dl
                JOIN user_profiles up ON up.user_id = dl.user_id
                WHERE up.onboarding_step = 'done'
+                 AND up.blocked_at IS NULL
                  AND EXTRACT(HOUR FROM (NOW() AT TIME ZONE up.tz))::int = %s
                  AND dl.date = TO_CHAR(NOW() AT TIME ZONE up.tz, 'YYYY-MM-DD')
                  AND dl.summary_sent = 0
@@ -1504,6 +1520,7 @@ def get_users_due_weekly_checkin(conn, min_days_since_last: int = 6) -> list[int
         cur.execute(
             """SELECT user_id FROM user_profiles
                WHERE onboarding_step = 'done'
+                 AND blocked_at IS NULL
                  AND (weekly_checkin_sent_at IS NULL
                       OR weekly_checkin_sent_at < %s)""",
             (cutoff,),
@@ -1534,6 +1551,7 @@ def get_users_to_nudge(conn, summary_hour: int = 22) -> list[dict]:
             WHERE up.onboarding_step = 'done'
               AND up.daily_calorie_target IS NOT NULL
               AND COALESCE(up.nudge_optout, 0) = 0
+              AND up.blocked_at IS NULL
               AND EXTRACT(HOUR FROM (NOW() AT TIME ZONE up.tz))::int = %s
               AND NOT EXISTS (
                   SELECT 1 FROM meals m
@@ -1573,6 +1591,57 @@ def set_nudge_optout(conn, user_id: int, optout: bool) -> None:
             (1 if optout else 0, _now_iso(), user_id),
         )
     conn.commit()
+
+
+def set_blocked(conn, user_id: int, blocked: bool) -> None:
+    """Stamp / clear `blocked_at` when Telegram tells us the user blocked
+    the bot (or when they message us again, indicating unblock).
+
+    Distinct from `nudge_optout`: nudge_optout means the user explicitly
+    muted via `/quiet` or the legacy 🔕 button; blocked_at means Telegram
+    returned 400/403 on a send attempt. Both gate all notification cohorts.
+    """
+    val = _now_iso() if blocked else None
+    with conn.cursor() as cur:
+        cur.execute(
+            "UPDATE user_profiles SET blocked_at = %s, updated_at = %s "
+            "WHERE user_id = %s",
+            (val, _now_iso(), user_id),
+        )
+    conn.commit()
+
+
+def finalize_stuck_tz_users(conn, max_age_hours: int = 12) -> list[dict]:
+    """Find users stranded on `awaiting_tz` or `awaiting_tz_custom` for
+    longer than `max_age_hours` and force-finalize them. `tz` is left at
+    the existing value (defaults to `Europe/Kyiv` via the schema).
+
+    Returns a list of `{user_id, lang}` dicts so the cron caller can send
+    each freed user a "we set you to Kyiv by default" notice.
+
+    Called from the midnight reset cron — addresses the
+    `awaiting_tz_custom` bottleneck where a user taps "Other zone" but
+    never types an IANA name, leaving them stranded.
+    """
+    cutoff = (datetime.now(timezone.utc) - timedelta(hours=max_age_hours)).isoformat()
+    with conn.cursor() as cur:
+        cur.execute(
+            """SELECT up.user_id, COALESCE(up.lang, 'en') AS lang
+               FROM user_profiles up
+               WHERE up.onboarding_step IN ('awaiting_tz', 'awaiting_tz_custom')
+                 AND up.updated_at < %s""",
+            (cutoff,),
+        )
+        stuck = cur.fetchall()
+        if stuck:
+            cur.execute(
+                """UPDATE user_profiles
+                   SET onboarding_step = 'done', updated_at = %s
+                   WHERE user_id = ANY(%s)""",
+                (_now_iso(), [r[0] for r in stuck]),
+            )
+        conn.commit()
+    return [{"user_id": r[0], "lang": r[1]} for r in stuck]
 
 
 # ---------- Usage quota (per-user daily rate limit) ----------
@@ -2231,6 +2300,23 @@ def get_user_breakdowns(conn) -> dict[str, list[tuple[str, int]]]:
             """
         )
         out["source"] = [(r[0], int(r[1])) for r in cur.fetchall()]
+        # F-16 status: derived per-user state. Precedence blocked > quiet
+        # > active so a user with both flags counts only as blocked.
+        cur.execute(
+            """
+            SELECT
+                CASE
+                    WHEN blocked_at IS NOT NULL          THEN 'blocked'
+                    WHEN COALESCE(nudge_optout, 0) = 1   THEN 'quiet'
+                    ELSE                                      'active'
+                END AS v,
+                COUNT(*) AS c
+            FROM user_profiles
+            GROUP BY v
+            ORDER BY c DESC
+            """
+        )
+        out["status"] = [(r[0], int(r[1])) for r in cur.fetchall()]
     return out
 
 

@@ -505,10 +505,14 @@ def test_onboarding_done_format_kwargs():
     # Targets inlined into the body.
     assert "2400 kcal" in en and "2500 ml"  in en
     assert "2400 ккал" in uk and "2500 мл"  in uk
-    # Activation CTA (photo affordance) lives at the end of the message.
+    # Activation CTA (photo affordance) lives mid-message; /help footer
+    # is the very last line (F-16 added it for command discovery).
     assert "📸" in en and "📸" in uk
-    assert en.rstrip().endswith("counting for you.")
-    assert uk.rstrip().endswith("рахувати за тебе.")
+    assert "counting for you." in en
+    assert "рахувати за тебе." in uk
+    assert "/help" in en and "/help" in uk
+    assert en.rstrip().endswith("/help")
+    assert uk.rstrip().endswith("/help")
 
 
 def test_onboarding_default_name_is_locale_specific():
@@ -1708,6 +1712,76 @@ def test_mark_nudge_sent_updates_with_iso_timestamp():
     assert "T" in ts and "+00:00" in ts
 
 
+def test_set_blocked_stamps_or_clears_timestamp():
+    """`set_blocked` writes an ISO timestamp on True, NULL on False."""
+    conn = _NudgeConn()
+    db.set_blocked(conn, user_id=42, blocked=True)
+    db.set_blocked(conn, user_id=42, blocked=False)
+    assert conn.commits == 2
+    sql_set, params_set = conn.calls[0]
+    sql_clr, params_clr = conn.calls[1]
+    assert "UPDATE user_profiles" in sql_set
+    assert "blocked_at = %s" in sql_set
+    # True → ISO timestamp string in the first slot.
+    assert isinstance(params_set[0], str) and "T" in params_set[0]
+    # False → NULL.
+    assert params_clr[0] is None
+    assert params_set[-1] == 42 and params_clr[-1] == 42
+
+
+def test_finalize_stuck_tz_users_targets_both_tz_steps():
+    """Sweep finalizes users on `awaiting_tz` OR `awaiting_tz_custom`
+    older than the cutoff, leaving tz at the schema default (Europe/Kyiv)."""
+    conn = _NudgeConn(rows=[(555, "uk"), (777, "en")])
+    out = db.finalize_stuck_tz_users(conn, max_age_hours=12)
+    # Two queries: the SELECT to find stuck users, then an UPDATE.
+    assert len(conn.calls) == 2
+    sql_select, _ = conn.calls[0]
+    sql_update, params_update = conn.calls[1]
+    # Both tz steps are in the WHERE clause.
+    assert "awaiting_tz" in sql_select and "awaiting_tz_custom" in sql_select
+    # Update writes step='done' and only touches the user_ids we found.
+    assert "onboarding_step = 'done'" in sql_update
+    assert "WHERE user_id = ANY(%s)" in sql_update
+    # The returned rows are the stuck ones, suitable for the cron caller
+    # to send each freed user a notice.
+    assert out == [{"user_id": 555, "lang": "uk"},
+                   {"user_id": 777, "lang": "en"}]
+
+
+def test_finalize_stuck_tz_users_no_update_when_empty():
+    """When no users are stuck, we don't issue a wasteful empty UPDATE."""
+    conn = _NudgeConn(rows=[])
+    out = db.finalize_stuck_tz_users(conn)
+    assert out == []
+    # Only the SELECT ran; no UPDATE.
+    assert len(conn.calls) == 1
+
+
+def test_get_users_to_nudge_filters_blocked_at():
+    """F-16: blocked-by-Telegram users excluded from nudge cohort."""
+    conn = _NudgeConn(rows=[])
+    db.get_users_to_nudge(conn)
+    sql, _ = conn.calls[0]
+    assert "blocked_at IS NULL" in sql
+
+
+def test_get_users_needing_summary_filters_blocked_at():
+    """F-16: blocked-by-Telegram users excluded from end-of-day summary."""
+    conn = _NudgeConn(rows=[])
+    db.get_users_needing_summary(conn)
+    sql, _ = conn.calls[0]
+    assert "blocked_at IS NULL" in sql
+
+
+def test_get_users_due_weekly_checkin_filters_blocked_at():
+    """F-16: blocked-by-Telegram users excluded from Monday weight prompt."""
+    conn = _NudgeConn(rows=[])
+    db.get_users_due_weekly_checkin(conn)
+    sql, _ = conn.calls[0]
+    assert "blocked_at IS NULL" in sql
+
+
 def test_set_nudge_optout_writes_int_flag():
     conn = _NudgeConn()
     db.set_nudge_optout(conn, user_id=42, optout=True)
@@ -1937,18 +2011,27 @@ def test_text_input_states_constant_covers_dispatcher_guards():
     })
 
 
-def test_get_user_breakdowns_five_dims_incl_source():
-    """Breakdowns query each dim once + the source dim against `users`."""
+def test_get_user_breakdowns_six_dims_incl_source_and_status():
+    """Breakdowns query each dim once + the source dim against `users` +
+    the F-16 status dim derived from `blocked_at` / `nudge_optout`."""
     conn = _AdminConn(rows=[("uk", 12), ("en", 4)])
     out = db.get_user_breakdowns(conn)
-    assert set(out.keys()) == {"lang", "tz", "sex", "goal", "source"}
-    # Five separate queries (one per dim).
-    assert len(conn.calls) == 5
-    # First 4 hit user_profiles, the 5th (source) hits the `users` table.
+    assert set(out.keys()) == {"lang", "tz", "sex", "goal", "source", "status"}
+    # Six separate queries (one per dim).
+    assert len(conn.calls) == 6
+    # First 4 hit user_profiles (lang, tz, sex, goal).
     for sql, _ in conn.calls[:4]:
         assert "FROM user_profiles" in sql
+    # 5th hits `users` table for source.
     assert "FROM users" in conn.calls[4][0]
-    assert "'organic'" in conn.calls[4][0]  # empty-source label
+    assert "'organic'" in conn.calls[4][0]
+    # 6th is the derived status query — back on user_profiles, joins
+    # `blocked_at` / `nudge_optout` precedence into a single CASE.
+    status_sql = conn.calls[5][0]
+    assert "FROM user_profiles" in status_sql
+    assert "blocked_at IS NOT NULL" in status_sql
+    assert "nudge_optout" in status_sql
+    assert "'blocked'" in status_sql and "'quiet'" in status_sql and "'active'" in status_sql
 
 
 def test_record_cron_run_inserts_with_finished_now():

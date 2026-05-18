@@ -41,11 +41,11 @@ from lib.database import (
     record_cron_run,
     save_recommendation,
     mark_summary_sent,
-    set_nudge_optout,
+    set_blocked,
     get_profile,
     profile_is_complete,
 )
-from lib.telegram_helpers import send_message, nudge_optout_keyboard
+from lib.telegram_helpers import send_message
 from lib.openai_nutrition import generate_daily_summary
 from lib import i18n as i18n_mod
 from lib.log import setup_sentry, http_handler, error
@@ -88,15 +88,18 @@ class handler(BaseHTTPRequestHandler):
 
 
 def _send_with_autoptout(conn, user_id: int, text: str, reply_markup=None) -> str:
-    """Send a Telegram message and auto-opt-out on 400/403.
+    """Send a Telegram message and auto-mark-blocked on 400/403.
 
-    Returns "sent", "blocked" (auto-opted-out), or "failed".
+    Returns "sent", "blocked" (Telegram reports bot is blocked or chat
+    gone — `blocked_at` stamped), or "failed". The semantic shifted with
+    F-16: we now distinguish "Telegram refused" (blocked_at) from "user
+    chose to mute" (nudge_optout). Both gate notification cohorts.
     """
     resp = send_message(user_id, text, reply_markup=reply_markup) if reply_markup is not None \
         else send_message(user_id, text)
     if isinstance(resp, dict) and resp.get("ok") is False:
         if resp.get("error_code") in (400, 403):
-            set_nudge_optout(conn, user_id, True)
+            set_blocked(conn, user_id, True)
             return "blocked"
         return "failed"
     return "sent"
@@ -147,9 +150,12 @@ def run_daily_summary() -> dict:
                     continue
                 lang = i18n_mod.locale_of(profile)
                 text = i18n_mod.t("nudge.daily_zero", locale=lang)
-                outcome = _send_with_autoptout(
-                    conn, uid, text, reply_markup=nudge_optout_keyboard(locale=lang),
-                )
+                # F-16: removed the inline 🔕 "Mute nudges" keyboard so users
+                # don't silence the bot with a single accidental tap. /quiet
+                # text command still works as a hidden escape hatch; users
+                # who actually block the bot get caught by the 400/403
+                # `_send_with_autoptout` branch and end up in blocked_at.
+                outcome = _send_with_autoptout(conn, uid, text)
                 if outcome == "blocked":
                     skipped_blocked += 1
                     continue

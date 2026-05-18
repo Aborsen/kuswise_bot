@@ -440,6 +440,14 @@ def process_update(update: dict) -> None:
 
         # Onboarding takes precedence over everything except explicit /start reset.
         profile = get_profile(conn, user_id) if user_id else None
+        # F-16: auto-clear blocked_at on inbound message. If we'd previously
+        # marked them blocked (TG 400/403 on a send) but they're messaging
+        # us now, they've unblocked the bot — flip the flag so they re-enter
+        # notification cohorts on the next cron fire.
+        if user_id and profile and profile.get("blocked_at"):
+            from lib.database import set_blocked
+            set_blocked(conn, user_id, False)
+            profile["blocked_at"] = None
         text = (message.get("text") or "").strip()
         is_start = text.lower().startswith("/start")
 

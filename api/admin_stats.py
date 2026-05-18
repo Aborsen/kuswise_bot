@@ -412,14 +412,16 @@ def build_html(nonce: str = "") -> str:
                    p.gym_per_week, p.goal, p.daily_calorie_target,
                    p.target_weight_kg, p.lang, p.tz,
                    COALESCE(u.first_name, ''),
-                   COALESCE(u.source, '')
+                   COALESCE(u.source, ''),
+                   p.blocked_at, COALESCE(p.nudge_optout, 0) AS optout
             FROM users u
             LEFT JOIN meals m ON m.user_id = u.user_id
             LEFT JOIN user_profiles p ON p.user_id = u.user_id
             GROUP BY u.user_id, u.username, u.first_name, u.source, u.created_at,
                      p.age, p.sex, p.weight_kg, p.height_cm,
                      p.gym_per_week, p.goal, p.daily_calorie_target,
-                     p.target_weight_kg, p.lang, p.tz
+                     p.target_weight_kg, p.lang, p.tz,
+                     p.blocked_at, p.nudge_optout
             ORDER BY meals DESC, u.created_at DESC
             LIMIT %s
             """,
@@ -530,7 +532,15 @@ def build_html(nonce: str = "") -> str:
     user_tbody = ""
     for r in user_rows:
         (uid, uname, joined, meals, last, age, sex, weight, height,
-         gym, goal, cal_target, target_weight, lang, tz, first_name, source) = r
+         gym, goal, cal_target, target_weight, lang, tz, first_name, source,
+         blocked_at, nudge_optout) = r
+        # F-16 Status — strict precedence: blocked > quiet > active.
+        if blocked_at:
+            status_cell = "<span style='color:#e94560;font-weight:600' title='Telegram returned 400/403'>🚫 blocked</span>"
+        elif nudge_optout:
+            status_cell = "<span style='color:#ff9800' title='User muted via /quiet or legacy button'>🔕 quiet</span>"
+        else:
+            status_cell = "<span style='color:#4caf50'>✓</span>"
         # Show `@handle` when the user has a real Telegram username;
         # otherwise fall back to their display name. The dash for "no
         # handle AND no display name" mirrors the rest of the table.
@@ -576,6 +586,7 @@ def build_html(nonce: str = "") -> str:
             f"<td class='clickable'>{_esc(lang_cell)}</td>"
             f"<td class='clickable'>{_esc(tz_cell)}</td>"
             f"<td class='clickable'>{_esc(source) if source else '—'}</td>"
+            f"<td>{status_cell}</td>"
             f"<td>{spark_html}</td>"
             f'<td><button type="button" class="btn-del btn-del-user" data-uid="{_esc(uid)}" title="Видалити користувача">🗑</button></td>'
             f"</tr>\n"
@@ -629,20 +640,22 @@ def build_html(nonce: str = "") -> str:
 
     # --- F-14: breakdown cards (Overview tab footer) ---
     _DIM_LABELS = {"lang": "Мова", "tz": "Часовий пояс", "sex": "Стать",
-                   "goal": "Мета", "source": "Джерело"}
+                   "goal": "Мета", "source": "Джерело", "status": "Стан"}
     _DIM_COLORS = {"lang": "#9c27b0", "tz": "#0288d1", "sex": "#e94560",
-                   "goal": "#4caf50", "source": "#ff9800"}
+                   "goal": "#4caf50", "source": "#ff9800", "status": "#607d8b"}
     _SEX_LABEL = {"male": "♂ Чол", "female": "♀ Жін"}
     _GOAL_LABEL = {"lose": "🔥 Схуднути", "maintain": "⚖️ Підтримка", "gain": "💪 Набір"}
+    _STATUS_LABEL = {"active": "✓ active", "quiet": "🔕 quiet", "blocked": "🚫 blocked"}
 
     def _humanise(dim: str, val: str) -> str:
-        if dim == "sex":  return _SEX_LABEL.get(val, val)
-        if dim == "goal": return _GOAL_LABEL.get(val, val)
-        if dim == "lang": return (val or "").upper() or "—"
+        if dim == "sex":    return _SEX_LABEL.get(val, val)
+        if dim == "goal":   return _GOAL_LABEL.get(val, val)
+        if dim == "lang":   return (val or "").upper() or "—"
+        if dim == "status": return _STATUS_LABEL.get(val, val)
         return val or "—"
 
     breakdown_cards_html = ""
-    for dim in ("source", "lang", "tz", "sex", "goal"):
+    for dim in ("status", "source", "lang", "tz", "sex", "goal"):
         items = user_breakdowns.get(dim, [])
         if not items:
             continue
@@ -1003,7 +1016,8 @@ def build_html(nonce: str = "") -> str:
     user_modal_data = {}
     for r in user_rows:
         (uid, uname, joined, meals, last, age, sex, weight, height,
-         gym, goal, cal_target, target_weight, lang, tz, first_name, source) = r
+         gym, goal, cal_target, target_weight, lang, tz, first_name, source,
+         blocked_at, nudge_optout) = r
         # Modal title: prefer @handle, then first_name, then numeric id.
         # JS uses `uname` as the heading so it must already include the
         # right prefix.
@@ -1281,6 +1295,7 @@ def build_html(nonce: str = "") -> str:
   <th data-col="15" data-type="str">Мова <span class="arrow">▲</span></th>
   <th data-col="16" data-type="str">Часовий пояс <span class="arrow">▲</span></th>
   <th data-col="17" data-type="str" title="Звідки користувач прийшов (із параметра /start)">Джерело <span class="arrow">▲</span></th>
+  <th data-col="18" data-type="str" title="Активність: ✓ активний, 🔕 muted via /quiet, 🚫 blocked-by-Telegram">Стан <span class="arrow">▲</span></th>
   <th class="no-sort" title="Логи за 30 днів">📈 30д</th>
   <th class="no-sort">Дія</th>
 </tr></thead>

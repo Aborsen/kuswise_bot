@@ -17,12 +17,15 @@ from lib.database import (
     cleanup_old_quotas,
     cleanup_old_menu_ocr_results,
     cleanup_old_meal_plans,
+    finalize_stuck_tz_users,
     get_conn,
     init_db,
     mark_all_previous_summaries_sent,
     record_cron_run,
     reset_monthly_freezes,
 )
+from lib.telegram_helpers import send_message
+from lib import i18n as i18n_mod
 from lib.log import setup_sentry, http_handler, error
 
 setup_sentry("cron_midnight_reset")
@@ -84,7 +87,27 @@ def run_midnight_reset() -> dict:
         # Kyiv user at 02:00 local on Feb 1 gets the refill ~24h later.
         if datetime.now(timezone.utc).day == 1:
             reset_monthly_freezes(conn)
-        result = {"ok": True, "ran_at": datetime.now(timezone.utc).isoformat()}
+        # F-16: safety net for users stranded mid-tz-step. Anyone stuck on
+        # `awaiting_tz` or `awaiting_tz_custom` for >12h gets force-finalized
+        # with the schema default (`Europe/Kyiv`). They can change via
+        # `/timezone` later. Each freed user is notified.
+        freed = finalize_stuck_tz_users(conn, max_age_hours=12)
+        tz_unstuck_notified = 0
+        for u in freed:
+            try:
+                send_message(
+                    u["user_id"],
+                    i18n_mod.t("onboarding.tz_default_applied", locale=u["lang"]),
+                )
+                tz_unstuck_notified += 1
+            except Exception as exc:
+                error("tz_unstuck_notify_failed", exc=exc, user_id=u["user_id"])
+        result = {
+            "ok": True,
+            "ran_at": datetime.now(timezone.utc).isoformat(),
+            "tz_unstuck": len(freed),
+            "tz_unstuck_notified": tz_unstuck_notified,
+        }
     except Exception as exc:
         status = "error"
         err = repr(exc)

@@ -28,7 +28,6 @@ COMMAND_NAMES: tuple[str, ...] = (
     "menu",
     "plan",
     "suggest_meal",
-    "meals",
     "fav",
     "recent",
     "water",

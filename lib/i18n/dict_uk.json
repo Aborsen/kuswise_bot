@@ -531,6 +531,8 @@
   "dash.meal_macro_p":           "Б",
   "dash.meal_macro_c":           "В",
   "dash.meal_macro_f":           "Ж",
+  "dash.meal_macro_fi":          "К",
+  "dash.meal_macro_su":          "Ц",
   "dash.macro_protein":          "🥩 Білок",
   "dash.macro_carbs":            "🍞 Вуглеводи",
   "dash.macro_fat":              "🥑 Жири",

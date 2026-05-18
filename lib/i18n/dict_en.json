@@ -531,6 +531,8 @@
   "dash.meal_macro_p":           "P",
   "dash.meal_macro_c":           "C",
   "dash.meal_macro_f":           "F",
+  "dash.meal_macro_fi":          "Fi",
+  "dash.meal_macro_su":          "Su",
   "dash.macro_protein":          "🥩 Protein",
   "dash.macro_carbs":            "🍞 Carbs",
   "dash.macro_fat":              "🥑 Fat",

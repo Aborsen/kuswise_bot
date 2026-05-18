@@ -96,6 +96,7 @@ _DASHBOARD_JS_KEYS = (
     "dash.unit_kcal", "dash.unit_g", "dash.unit_kg", "dash.unit_l",
     "dash.unit_cm",
     "dash.meal_macro_p", "dash.meal_macro_c", "dash.meal_macro_f",
+    "dash.meal_macro_fi", "dash.meal_macro_su",
     "dash.coach_title_with_date", "dash.warn_chip", "dash.warn_detail_label",
     "dash.cal_bars_axis", "dash.weight_chart_empty",
 )
@@ -292,6 +293,8 @@ def _meal_to_json(m: dict) -> dict:
         "protein_g": round(m.get("protein_g") or 0),
         "carbs_g": round(m.get("carbs_g") or 0),
         "fat_g": round(m.get("fat_g") or 0),
+        "fiber_g": round(m.get("fiber_g") or 0),
+        "sugar_g": round(m.get("sugar_g") or 0),
         "allergen_warnings": list(m.get("allergen_warnings") or []),
         "crohn_warnings": list(m.get("crohn_warnings") or []),
     }
@@ -1894,7 +1897,9 @@ _DASHBOARD_HTML = r"""<!DOCTYPE html>
       var macrosLine =
         L.meal_macro_p + ' ' + Math.round(m.protein_g || 0) + L.unit_g + ' · ' +
         L.meal_macro_c + ' ' + Math.round(m.carbs_g   || 0) + L.unit_g + ' · ' +
-        L.meal_macro_f + ' ' + Math.round(m.fat_g     || 0) + L.unit_g;
+        L.meal_macro_f + ' ' + Math.round(m.fat_g     || 0) + L.unit_g + ' · ' +
+        L.meal_macro_fi + ' ' + Math.round(m.fiber_g || 0) + L.unit_g + ' · ' +
+        L.meal_macro_su + ' ' + Math.round(m.sugar_g || 0) + L.unit_g;
       return '<div class="meal-row">' +
              '<div class="meal-desc">' + esc(m.description) + chip +
                '<div class="meal-macros">' + macrosLine + '</div>' +

@@ -1632,6 +1632,28 @@ def test_meals_button_routes_to_today_after_merge():
     assert "📋 My meals" in labels
 
 
+def test_format_today_progress_renders_fiber_sugar_bars():
+    """F-16 follow-up: fiber and sugar each get a target value + a
+    progress bar in `format_today_progress`, matching the visual
+    treatment of protein/carbs/fat."""
+    from lib.formatters import format_today_progress
+    log = {"calories": 1500, "protein": 100, "carbs": 180, "fat": 50,
+           "fiber": 28, "sugar": 40, "meal_count": 3}
+    profile = {"lang": "en", "weight_kg": 70, "goal": "maintain"}
+    out = format_today_progress(log, daily_cal_target=2000, profile=profile)
+    # Fiber: target 28g for 2000 kcal (14g per 1000); current 28 → 100%.
+    assert "28g / 28g" in out
+    # Sugar: limit 25g for 2000 kcal (WHO conditional 5% / 4);
+    # current 40 → 160% (user is over the limit).
+    assert "40g / 25g" in out
+    # Both should have a progress bar (full-block char) immediately after
+    # their respective lines, like the other macros.
+    fiber_section = out.split("Fiber")[1].split("Sugar")[0]
+    sugar_section = out.split("Sugar")[1].split("━━━")[0]
+    assert "█" in fiber_section
+    assert "█" in sugar_section
+
+
 def test_format_meals_list_without_header_args_suppresses_daily_totals():
     """F-16 merge depends on `format_meals_list` skipping its compact
     daily-total header when called without `log`/`daily_cal_target`/

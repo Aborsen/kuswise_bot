@@ -622,6 +622,7 @@ def format_today_progress(
 ) -> str:
     from lib.i18n import t
     from lib.datehelpers import format_date_long
+    from lib.config import fiber_target_g, sugar_limit_g
 
     locale = (profile or {}).get("lang") or "en"
     if locale not in ("en", "uk"):
@@ -638,6 +639,8 @@ def format_today_progress(
     f = log.get("fat", 0)
     fib = log.get("fiber", 0)
     sug = log.get("sugar", 0)
+    fib_target = fiber_target_g(daily_cal_target)  # 14g per 1000 kcal
+    sug_target = sugar_limit_g(daily_cal_target)   # WHO 5% of cal_target / 4
     meals = log.get("meal_count", 0)
     remaining = max(0, daily_cal_target - cal)
     name = _name_or_default(first_name)
@@ -673,8 +676,10 @@ def format_today_progress(
         f"   {_bar(c, macros['carbs'])}\n"
         f"{t('today.fat_line', locale, cur=round(f), target=macros['fat'], pct=_pct(f, macros['fat']), g=g)}\n"
         f"   {_bar(f, macros['fat'])}\n"
-        f"{t('today.fiber_line', locale, cur=round(fib), g=g)}\n"
-        f"{t('today.sugar_line', locale, cur=round(sug), g=g)}\n"
+        f"{t('today.fiber_line', locale, cur=round(fib), target=fib_target, pct=_pct(fib, fib_target), g=g)}\n"
+        f"   {_bar(fib, fib_target)}\n"
+        f"{t('today.sugar_line', locale, cur=round(sug), target=sug_target, pct=_pct(sug, sug_target), g=g)}\n"
+        f"   {_bar(sug, sug_target)}\n"
         f"{sep}\n"
         f"{t('today.meal_count', locale, n=meals)}\n"
         f"{t('today.remaining', locale, n=round(remaining), kcal_unit=kcal_unit)}\n\n"

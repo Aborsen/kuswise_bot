@@ -76,6 +76,37 @@ def calorie_target_from_profile(weight_kg: float | None, goal: str | None) -> in
     return int(round(m["protein"] * 4 + m["carbs"] * 4 + m["fat"] * 9))
 
 
+def fiber_target_g(cal_target: int | None = None) -> int:
+    """Daily fiber target in grams. AHA / DGA recommendation is 14g per
+    1000 kcal — scales with the user's calorie target so an active user
+    on 3000 kcal sees ~42g vs ~28g for a 2000 kcal diet. Falls back to a
+    generic 2000 kcal baseline when `cal_target` is unset."""
+    cal = int(cal_target or 2000)
+    return int(round(cal * 14 / 1000))
+
+
+def sugar_limit_g(cal_target: int | None = None) -> int:
+    """Daily added-sugar limit in grams.
+
+    Uses WHO's **conditional** (stricter) recommendation of <5% of total
+    energy intake from free/added sugars — which converges with the
+    widely-cited AHA values (~36 g/day men, ~25 g/day women on typical
+    calorie targets). With 4 kcal per gram of sugar, that's
+    `cal_target * 0.05 / 4`:
+
+      * 2000 kcal → 25 g
+      * 2400 kcal → 30 g
+      * 2925 kcal → 36 g
+      * 3000 kcal → 38 g
+
+    Conceptually a CEILING (not a target to hit) — bars in the daily
+    progress card use the same visual style as the macro bars so users
+    see "where they stand vs the limit".
+    """
+    cal = int(cal_target or 2000)
+    return int(round(cal * 0.05 / 4))
+
+
 def macro_gram_targets(
     daily_cal_target: int | None = None,
     weight_kg: float | None = None,

@@ -381,8 +381,8 @@ _TEXT_INPUT_STATES = frozenset({
 
 
 def _restore_main_menu(chat_id: int, locale: str) -> None:
-    """Send a tiny "👌" carrying main_menu_keyboard so the persistent
-    reply keyboard is refreshed.
+    """Send a short "what's next?" prompt carrying main_menu_keyboard
+    so the persistent reply keyboard is refreshed.
 
     Used after flows that end with an inline-keyboard message (e.g. the
     meal-saved confirmation with ⭐ / ✏️ / 🗑 inline buttons). Telegram
@@ -391,10 +391,14 @@ def _restore_main_menu(chat_id: int, locale: str) -> None:
     Telegram mobile client typically collapses the persistent reply
     keyboard when the user taps 📎 to send a photo — without this
     follow-up, users came out of the meal-save flow with no visible
-    reply keyboard until they /start. Body is a single emoji so the
-    chatter cost is negligible.
+    reply keyboard until they /start. The body doubles as a friendly
+    nudge inviting the user to pick their next action.
     """
-    send_message(chat_id, "👌", reply_markup=main_menu_keyboard(locale=locale))
+    send_message(
+        chat_id,
+        i18n_mod.t("main_menu.what_next", locale=locale),
+        reply_markup=main_menu_keyboard(locale=locale),
+    )
 
 
 # ---------- Main dispatcher ----------

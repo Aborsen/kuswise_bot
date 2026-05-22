@@ -2114,6 +2114,43 @@ def test_get_attribution_breakdown_shape():
     assert out[1]["source"] == "site_calc_continue_uk"
 
 
+def test_restore_main_menu_helper_used_after_every_meal_save():
+    """Regression: every saved-meal send must be followed by a
+    `_restore_main_menu` call. The meal-saved message uses an inline
+    keyboard (⭐ / ✏️ / 🗑), so without the follow-up the persistent
+    reply keyboard (often collapsed by Telegram during photo upload)
+    never gets refreshed.
+    """
+    import os
+    here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    src = open(os.path.join(here, "api", "webhook.py")).read()
+    # Helper exists.
+    assert "def _restore_main_menu" in src, "helper not defined"
+    # Every block that attaches `meal_logged_actions_keyboard` as a
+    # reply_markup must be followed within ~20 lines by a call to
+    # `_restore_main_menu` — except the favorite-toggle callback,
+    # which uses editMessageReplyMarkup (no new message → no refresh
+    # needed). The toggle site is identifiable because it's inside
+    # `handle_meal_manage_callback` and uses `is_fav=target_state`.
+    chunks = src.split("meal_logged_actions_keyboard(meal_id")
+    # First chunk is preamble; remaining chunks each start AT a usage.
+    save_sites = 0
+    save_sites_with_refresh = 0
+    for chunk in chunks[1:]:
+        window = chunk[:600]
+        # Favorite-toggle callback uses `is_fav=target_state`, not False.
+        if "is_fav=target_state" in window[:100]:
+            continue
+        save_sites += 1
+        if "_restore_main_menu" in window:
+            save_sites_with_refresh += 1
+    assert save_sites >= 2, f"expected ≥2 meal-save sites, found {save_sites}"
+    assert save_sites == save_sites_with_refresh, (
+        f"{save_sites - save_sites_with_refresh} meal-save sites are "
+        f"missing a `_restore_main_menu` follow-up"
+    )
+
+
 def test_send_plan_day_uses_locale_not_undefined_profile():
     """Regression: `_send_plan_day` previously referenced an undefined
     `profile` symbol (NameError) which crashed every /plan day render.

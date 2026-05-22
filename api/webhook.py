@@ -380,6 +380,23 @@ _TEXT_INPUT_STATES = frozenset({
 })
 
 
+def _restore_main_menu(chat_id: int, locale: str) -> None:
+    """Send a tiny "👌" carrying main_menu_keyboard so the persistent
+    reply keyboard is refreshed.
+
+    Used after flows that end with an inline-keyboard message (e.g. the
+    meal-saved confirmation with ⭐ / ✏️ / 🗑 inline buttons). Telegram
+    allows only one reply_markup per message, so we can't simultaneously
+    attach the inline action keyboard AND main_menu_keyboard. The
+    Telegram mobile client typically collapses the persistent reply
+    keyboard when the user taps 📎 to send a photo — without this
+    follow-up, users came out of the meal-save flow with no visible
+    reply keyboard until they /start. Body is a single emoji so the
+    chatter cost is negligible.
+    """
+    send_message(chat_id, "👌", reply_markup=main_menu_keyboard(locale=locale))
+
+
 # ---------- Main dispatcher ----------
 
 def process_update(update: dict) -> None:
@@ -1893,6 +1910,10 @@ def handle_moderation_callback(conn, cb: dict, profile: dict) -> None:
             format_meal_logged(pending["meal_type"], analysis, today_log, cal_target, first_name, locale=i18n_mod.locale_of(profile), health_profile=health_profile),
             reply_markup=meal_logged_actions_keyboard(meal_id, is_fav=False, locale=i18n_mod.locale_of(profile)),
         )
+        # Persistent reply keyboard often collapses during photo upload
+        # — restore it with a tiny follow-up so the user doesn't have to
+        # /start to get the 6-button menu back.
+        _restore_main_menu(chat_id, locale=i18n_mod.locale_of(profile))
 
     elif action == "recalc":
         answer_callback_query(cb_id, _t("toast.recalculating", profile))
@@ -2157,6 +2178,9 @@ def _save_barcode_meal(
         format_meal_logged(pending["meal_type"], analysis, today_log, cal_target, first_name, locale=i18n_mod.locale_of(profile), health_profile=health_profile),
         reply_markup=meal_logged_actions_keyboard(meal_id, is_fav=False, locale=i18n_mod.locale_of(profile)),
     )
+    # Restore the persistent reply keyboard that Telegram's photo-upload
+    # UI typically collapses (same rationale as the photo-Accept branch).
+    _restore_main_menu(chat_id, locale=i18n_mod.locale_of(profile))
 
 
 def handle_barcode_callback(conn, cb: dict, profile: dict) -> None:

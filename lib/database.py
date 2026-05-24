@@ -251,6 +251,19 @@ def init_db(conn=None, force: bool = False) -> None:
         cur.execute(
             "ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS last_morning_sent_at TEXT"
         )
+        # F-17: never-logger activation funnel state machine.
+        # NULL / ''         → no activation message sent yet (day 0–1 cohort)
+        # 'demo'            → day-2 first-meal demo card sent
+        # 'd4_followup'     → day-4 lighter follow-up sent
+        # 'd7_final'        → day-7 final softer message sent
+        # 'auto_quieted'    → set to this when day-9 midnight sweep flipped
+        #                     nudge_optout=1 (marker only; nudge_optout is
+        #                     the gate enforced elsewhere)
+        # The column stays NULL forever for users who log their first meal
+        # before day 2 — they bypass the funnel entirely.
+        cur.execute(
+            "ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS activation_step TEXT"
+        )
         cur.execute("""
             CREATE TABLE IF NOT EXISTS weight_history (
                 id BIGSERIAL PRIMARY KEY,
@@ -447,7 +460,7 @@ PROFILE_COLUMNS = [
     "awaiting_input_type", "weekly_checkin_sent_at", "target_weight_kg",
     "tz", "lang", "weekly_delta_kg", "lang_confirmed_at",
     "last_nudge_sent_at", "nudge_optout",
-    "blocked_at", "last_morning_sent_at",
+    "blocked_at", "last_morning_sent_at", "activation_step",
 ]
 
 
@@ -488,7 +501,7 @@ _ALLOWED_PROFILE_FIELDS = {
     "awaiting_input_type", "weekly_checkin_sent_at", "target_weight_kg",
     "tz", "lang", "weekly_delta_kg", "lang_confirmed_at",
     "last_nudge_sent_at", "nudge_optout",
-    "blocked_at", "last_morning_sent_at",
+    "blocked_at", "last_morning_sent_at", "activation_step",
 }
 
 
@@ -1644,6 +1657,182 @@ def get_users_due_morning_greeting(conn, morning_hour: int = 8) -> list[dict]:
         rows = cur.fetchall()
     return [{"user_id": r[0], "lang": r[1], "onboarding_step": r[2]}
             for r in rows]
+
+
+# ---------- F-17: never-logger activation funnel ----------
+#
+# State machine on `user_profiles.activation_step`:
+#
+#     NULL / ''         day 0–1     no message sent yet
+#     'demo'            day 2+      first-meal demo card sent
+#     'd4_followup'     day 4+      lighter "still no log?" sent
+#     'd7_final'        day 7+      final softer "no pressure" sent
+#     'auto_quieted'    day 9+      nudge_optout=1, no more pings
+#
+# Each `get_users_for_<step>` helper returns the cohort eligible to
+# *transition into* that state on the next morning cron fire. All of
+# them gate on local-hour=8 + dedup against `last_morning_sent_at`, so
+# integrating into `cron_good_morning` is just a branch above the
+# existing greeting logic.
+#
+# Critical safety: every cohort gate filters `NOT EXISTS (... FROM
+# meals)`. The moment a user logs their first meal anywhere, they drop
+# out of every funnel cohort. Engaged users are never touched.
+
+
+def _activation_base_filters() -> str:
+    """The shared WHERE clauses used by every activation-funnel cohort:
+    profile complete + opt-out gates + per-user-tz morning hour + dedup
+    against today's morning send + lifetime zero meals.
+
+    Returned as a SQL fragment for in-place interpolation. Trusted-input
+    only — no user-supplied values land here."""
+    return """
+        up.onboarding_step = 'done'
+        AND COALESCE(up.nudge_optout, 0) = 0
+        AND up.blocked_at IS NULL
+        AND EXTRACT(HOUR FROM (NOW() AT TIME ZONE up.tz))::int = %s
+        AND (
+            up.last_morning_sent_at IS NULL
+            OR (up.last_morning_sent_at::timestamptz AT TIME ZONE up.tz)::date
+               < (NOW() AT TIME ZONE up.tz)::date
+        )
+        AND NOT EXISTS (
+            SELECT 1 FROM meals m WHERE m.user_id = up.user_id
+        )
+    """
+
+
+def get_users_for_first_meal_demo(conn, morning_hour: int = 8) -> list[dict]:
+    """Day 2+ never-loggers due the activation demo card.
+
+    Cohort: profile done, 0 lifetime meals, signed up ≥24h ago,
+    `activation_step` not yet set. Returns one dict per user with the
+    fields the caller needs to render the personalised demo:
+    `{user_id, lang, first_name, daily_calorie_target}`.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            f"""
+            SELECT up.user_id, COALESCE(up.lang, 'en') AS lang,
+                   COALESCE(u.first_name, '') AS first_name,
+                   COALESCE(up.daily_calorie_target, 2000) AS cal
+            FROM user_profiles up
+            JOIN users u ON u.user_id = up.user_id
+            WHERE {_activation_base_filters()}
+              AND COALESCE(up.activation_step, '') = ''
+              AND u.created_at IS NOT NULL
+              AND (NOW() AT TIME ZONE 'UTC') - u.created_at::timestamptz
+                  >= INTERVAL '24 hours'
+            ORDER BY up.user_id
+            """,
+            (morning_hour,),
+        )
+        rows = cur.fetchall()
+    return [
+        {"user_id": r[0], "lang": r[1], "first_name": r[2], "cal": int(r[3])}
+        for r in rows
+    ]
+
+
+def get_users_for_d4_followup(conn, morning_hour: int = 8) -> list[dict]:
+    """Day 4+ never-loggers who got the demo but still haven't logged.
+
+    Cohort: same base filters, plus `activation_step = 'demo'` and
+    signed up ≥3 days ago. Sent the lighter "still no log?" follow-up.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            f"""
+            SELECT up.user_id, COALESCE(up.lang, 'en') AS lang,
+                   COALESCE(u.first_name, '') AS first_name
+            FROM user_profiles up
+            JOIN users u ON u.user_id = up.user_id
+            WHERE {_activation_base_filters()}
+              AND up.activation_step = 'demo'
+              AND u.created_at IS NOT NULL
+              AND (NOW() AT TIME ZONE 'UTC') - u.created_at::timestamptz
+                  >= INTERVAL '3 days'
+            ORDER BY up.user_id
+            """,
+            (morning_hour,),
+        )
+        rows = cur.fetchall()
+    return [{"user_id": r[0], "lang": r[1], "first_name": r[2]} for r in rows]
+
+
+def get_users_for_d7_final(conn, morning_hour: int = 8) -> list[dict]:
+    """Day 7+ never-loggers who got the follow-up but still haven't logged.
+
+    Final softer message before the day-9 auto-quiet sweep.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            f"""
+            SELECT up.user_id, COALESCE(up.lang, 'en') AS lang,
+                   COALESCE(u.first_name, '') AS first_name
+            FROM user_profiles up
+            JOIN users u ON u.user_id = up.user_id
+            WHERE {_activation_base_filters()}
+              AND up.activation_step = 'd4_followup'
+              AND u.created_at IS NOT NULL
+              AND (NOW() AT TIME ZONE 'UTC') - u.created_at::timestamptz
+                  >= INTERVAL '6 days'
+            ORDER BY up.user_id
+            """,
+            (morning_hour,),
+        )
+        rows = cur.fetchall()
+    return [{"user_id": r[0], "lang": r[1], "first_name": r[2]} for r in rows]
+
+
+def get_users_to_auto_quiet(conn, days: int = 9) -> list[dict]:
+    """Never-loggers who signed up ≥`days` days ago and still haven't
+    logged a meal. Called from the midnight cron — silences them via
+    `nudge_optout=1` so they don't keep getting pinged forever.
+
+    Does NOT gate on `activation_step` — even if the morning cron never
+    fired (missed Vercel delivery, etc.), 0 meals on day 9 is the
+    universal signal to stop. Returns `[{user_id, lang}]` so the caller
+    can send a one-line "no more pings" notice.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            f"""
+            SELECT up.user_id, COALESCE(up.lang, 'en') AS lang
+            FROM user_profiles up
+            JOIN users u ON u.user_id = up.user_id
+            WHERE up.onboarding_step = 'done'
+              AND COALESCE(up.nudge_optout, 0) = 0
+              AND up.blocked_at IS NULL
+              AND COALESCE(up.activation_step, '') != 'auto_quieted'
+              AND u.created_at IS NOT NULL
+              AND (NOW() AT TIME ZONE 'UTC') - u.created_at::timestamptz
+                  >= INTERVAL '{int(days)} days'
+              AND NOT EXISTS (
+                  SELECT 1 FROM meals m WHERE m.user_id = up.user_id
+              )
+            ORDER BY up.user_id
+            """
+        )
+        rows = cur.fetchall()
+    return [{"user_id": r[0], "lang": r[1]} for r in rows]
+
+
+def set_activation_step(conn, user_id: int, step: str) -> None:
+    """Advance the F-17 activation-funnel state machine for a user.
+
+    Valid steps: 'demo' / 'd4_followup' / 'd7_final' / 'auto_quieted'.
+    Caller decides which step to advance to based on the cohort it
+    fetched the user from.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            "UPDATE user_profiles SET activation_step = %s, updated_at = %s "
+            "WHERE user_id = %s",
+            (step, _now_iso(), user_id),
+        )
+    conn.commit()
 
 
 def mark_morning_sent(conn, user_id: int) -> None:

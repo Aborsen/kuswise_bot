@@ -27,6 +27,10 @@
   "onboarding.tz_default_applied": "⏰ I set your timezone to <b>Europe/Kyiv</b> by default so you're not stuck mid-flow. If you live elsewhere — change it via /timezone.",
   "morning.greeting_done":             "🌞 Good morning! What's for breakfast today? Snap a photo or describe it — I'll count it for you. 📸",
   "morning.greeting_mid_onboarding":   "🌞 Good morning! Just a couple of steps left to wrap up setup — tap /start to finish. Takes a minute.",
+  "morning.first_meal_demo_full":      "👋 <b>{name}</b>, you set everything up but I haven't seen a meal yet. Here's what I send back when you log a photo:\n\n📸 <b>Greek yogurt with berries and walnuts</b>\n\n🥣 Ingredients:\n• Greek yogurt 5% (150 g) — 90 kcal\n• Berries (50 g) — 28 kcal\n• Walnuts (15 g) — 98 kcal\n\n🎯 <b>~216 kcal</b>\n   Protein: 12 g · Fat: 11 g · Carbs: 16 g\n\n🩸 Glycemic index: <b>low</b>\n\n—\n\n🍳 Try it right now — snap a photo of your breakfast or just describe it (e.g. «<i>oatmeal and coffee</i>»). It takes a second and your daily targets (<b>{cal} kcal</b>) start filling up.",
+  "morning.first_meal_followup_d4":    "☝️ Hey! I know life is busy — quick reminder: one meal (photo or text) and the dashboard comes alive. Want to try today?",
+  "morning.first_meal_followup_d7":    "🙌 This is my last reminder — if you've changed your mind, that's fine, I won't keep pinging you. But if you change your mind back — just send a photo of any meal and we'll pick up where we left off.",
+  "morning.auto_quieted_notice":       "🔕 I'll stop reminding you. If you ever want to come back — send /quiet or just drop a photo of a meal, and I'll be here.",
   "onboarding.required": "Let's get to know each other first 👋 Tap /start — I'll ask a few questions and calculate your target.",
   "onboarding.default_name": "friend",
 

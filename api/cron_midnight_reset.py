@@ -19,10 +19,13 @@ from lib.database import (
     cleanup_old_meal_plans,
     finalize_stuck_tz_users,
     get_conn,
+    get_users_to_auto_quiet,
     init_db,
     mark_all_previous_summaries_sent,
     record_cron_run,
     reset_monthly_freezes,
+    set_activation_step,
+    set_nudge_optout,
 )
 from lib.telegram_helpers import send_message
 from lib import i18n as i18n_mod
@@ -102,11 +105,31 @@ def run_midnight_reset() -> dict:
                 tz_unstuck_notified += 1
             except Exception as exc:
                 error("tz_unstuck_notify_failed", exc=exc, user_id=u["user_id"])
+        # F-17 activation funnel safety net: any user who completed
+        # onboarding ≥9 days ago and never logged a meal gets silenced
+        # to avoid the Lyubov-style "10 daily nudges → mute" pattern.
+        # Cohort SQL strictly gates `NOT EXISTS (... FROM meals)` so an
+        # active logger is never touched.
+        to_quiet = get_users_to_auto_quiet(conn, days=9)
+        auto_quieted_notified = 0
+        for u in to_quiet:
+            try:
+                set_nudge_optout(conn, u["user_id"], True)
+                set_activation_step(conn, u["user_id"], "auto_quieted")
+                send_message(
+                    u["user_id"],
+                    i18n_mod.t("morning.auto_quieted_notice", locale=u["lang"]),
+                )
+                auto_quieted_notified += 1
+            except Exception as exc:
+                error("auto_quiet_notify_failed", exc=exc, user_id=u["user_id"])
         result = {
             "ok": True,
             "ran_at": datetime.now(timezone.utc).isoformat(),
             "tz_unstuck": len(freed),
             "tz_unstuck_notified": tz_unstuck_notified,
+            "auto_quieted": len(to_quiet),
+            "auto_quieted_notified": auto_quieted_notified,
         }
     except Exception as exc:
         status = "error"

@@ -38,8 +38,12 @@ from lib.database import (
     get_conn,
     init_db,
     get_users_due_morning_greeting,
+    get_users_for_first_meal_demo,
+    get_users_for_d4_followup,
+    get_users_for_d7_final,
     mark_morning_sent,
     record_cron_run,
+    set_activation_step,
     set_blocked,
     get_profile,
 )
@@ -97,9 +101,51 @@ def _send_with_autoblock(conn, user_id: int, text: str) -> str:
     return "sent"
 
 
+def _process_activation_cohort(
+    conn,
+    cohort: list[dict],
+    i18n_key: str,
+    new_step: str,
+    counters: dict,
+    extra_format_kwargs: callable | None = None,
+) -> None:
+    """Send the activation-funnel message to one cohort, stamp the new
+    `activation_step` + `last_morning_sent_at` on each successful send.
+
+    `cohort`: result of one of `get_users_for_first_meal_demo` /
+              `get_users_for_d4_followup` / `get_users_for_d7_final`.
+    `i18n_key`: the `morning.first_meal_*` key to render per user.
+    `new_step`: state to transition the user into on success.
+    `extra_format_kwargs`: callable taking a cohort dict, returning the
+              extra kwargs for `i18n_mod.t()` (used by the demo card to
+              inject `name` and `cal`). None → no extra kwargs.
+    `counters`: mutable dict; bumps `activation_sent` / `skipped_blocked` /
+              `errors` in place so the surrounding `run_good_morning`
+              report aggregates correctly.
+    """
+    for u in cohort:
+        uid = u["user_id"]
+        try:
+            kwargs = extra_format_kwargs(u) if extra_format_kwargs else {}
+            text = i18n_mod.t(i18n_key, locale=u["lang"], **kwargs)
+            outcome = _send_with_autoblock(conn, uid, text)
+            if outcome == "blocked":
+                counters["skipped_blocked"] += 1
+                continue
+            if outcome == "sent":
+                set_activation_step(conn, uid, new_step)
+                mark_morning_sent(conn, uid)
+                counters["activation_sent"] += 1
+            time.sleep(_SEND_DELAY_S)
+        except Exception as e:
+            counters["errors"].append({"user_id": uid, "stage": new_step, "error": str(e)})
+            error("morning_activation_failed", exc=e, user_id=uid, stage=new_step)
+
+
 def run_good_morning() -> dict:
     conn = get_conn()
     sent = 0
+    activation_sent = 0
     skipped_blocked = 0
     errors: list[dict] = []
     status = "ok"
@@ -107,6 +153,47 @@ def run_good_morning() -> dict:
     result: dict = {"ok": True}
     try:
         init_db(conn)
+
+        # F-17 activation funnel — handle never-loggers BEFORE the
+        # standard greeting iteration. Each successful send stamps
+        # `last_morning_sent_at` which excludes the user from the
+        # standard `get_users_due_morning_greeting` query below.
+        # The cohort SQL filters on `NOT EXISTS (... FROM meals)` so
+        # any user with ≥1 lifetime meal is never touched here.
+        counters = {
+            "activation_sent": activation_sent,
+            "skipped_blocked": skipped_blocked,
+            "errors": errors,
+        }
+
+        # Day 2+: first-meal demo card with personalised closing line.
+        _process_activation_cohort(
+            conn, get_users_for_first_meal_demo(conn),
+            "morning.first_meal_demo_full", "demo", counters,
+            extra_format_kwargs=lambda u: {
+                "name": u["first_name"] or "—",
+                "cal":  u["cal"],
+            },
+        )
+        # Day 4+: lighter follow-up.
+        _process_activation_cohort(
+            conn, get_users_for_d4_followup(conn),
+            "morning.first_meal_followup_d4", "d4_followup", counters,
+        )
+        # Day 7+: final softer message.
+        _process_activation_cohort(
+            conn, get_users_for_d7_final(conn),
+            "morning.first_meal_followup_d7", "d7_final", counters,
+        )
+
+        # Re-snap counters back to local scope for the result dict.
+        activation_sent = counters["activation_sent"]
+        skipped_blocked = counters["skipped_blocked"]
+
+        # Standard morning greeting — engaged users + mid-onboarding +
+        # never-loggers in their first 24 hours (the activation cohorts
+        # all gate on ≥24h since signup). Users who got an activation
+        # message above are excluded by `last_morning_sent_at` dedup.
         for u in get_users_due_morning_greeting(conn):
             uid = u["user_id"]
             try:
@@ -130,6 +217,7 @@ def run_good_morning() -> dict:
         result = {
             "ok": True,
             "sent": sent,
+            "activation_sent": activation_sent,
             "skipped_blocked": skipped_blocked,
             "errors": errors,
             "ran_at": datetime.now(timezone.utc).isoformat(),

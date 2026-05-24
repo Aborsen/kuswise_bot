@@ -1912,6 +1912,90 @@ def test_get_users_due_morning_greeting_honors_custom_hour():
     assert params == (10,)
 
 
+def test_get_users_for_first_meal_demo_filters():
+    """Day-2 demo cohort SQL must enforce every safety gate: profile done,
+    no opt-out, no block, no prior activation step, no lifetime meals,
+    ≥24h since signup, local hour matches."""
+    conn = _NudgeConn(rows=[
+        (701, "uk", "Olena", 1850),
+        (702, "en", "Mark",  2100),
+    ])
+    out = db.get_users_for_first_meal_demo(conn, morning_hour=8)
+    sql, params = conn.calls[0]
+    # All critical gates present.
+    assert "onboarding_step = 'done'" in sql
+    assert "COALESCE(up.nudge_optout, 0) = 0" in sql
+    assert "up.blocked_at IS NULL" in sql
+    assert "COALESCE(up.activation_step, '') = ''" in sql
+    assert "NOT EXISTS" in sql and "FROM meals m" in sql
+    assert "EXTRACT(HOUR FROM (NOW() AT TIME ZONE up.tz))" in sql
+    assert "INTERVAL '24 hours'" in sql
+    assert "last_morning_sent_at" in sql  # dedup
+    # Single param: the morning_hour.
+    assert params == (8,)
+    # Row shape: caller needs name + cal for the personalised demo.
+    assert out == [
+        {"user_id": 701, "lang": "uk", "first_name": "Olena", "cal": 1850},
+        {"user_id": 702, "lang": "en", "first_name": "Mark",  "cal": 2100},
+    ]
+
+
+def test_get_users_for_d4_followup_gates_on_demo_state():
+    """Day-4 follow-up cohort: must already be in 'demo' state and ≥3 days old."""
+    conn = _NudgeConn(rows=[(801, "uk", "Iryna")])
+    out = db.get_users_for_d4_followup(conn, morning_hour=8)
+    sql, _ = conn.calls[0]
+    assert "up.activation_step = 'demo'" in sql
+    assert "INTERVAL '3 days'" in sql
+    assert "NOT EXISTS" in sql and "FROM meals m" in sql
+    assert out == [{"user_id": 801, "lang": "uk", "first_name": "Iryna"}]
+
+
+def test_get_users_for_d7_final_gates_on_d4_state():
+    """Day-7 final cohort: must already be in 'd4_followup' state and ≥6 days old."""
+    conn = _NudgeConn(rows=[])
+    db.get_users_for_d7_final(conn, morning_hour=8)
+    sql, _ = conn.calls[0]
+    assert "up.activation_step = 'd4_followup'" in sql
+    assert "INTERVAL '6 days'" in sql
+    assert "NOT EXISTS" in sql and "FROM meals m" in sql
+
+
+def test_get_users_to_auto_quiet_safety_net():
+    """Day-9 auto-quiet cohort: gates on age ≥9d + no lifetime meals.
+    Does NOT gate on activation_step — even users who never got any
+    activation message (cron missed fires) get silenced after 9 days
+    if they never engaged. Active loggers are excluded by NOT EXISTS."""
+    conn = _NudgeConn(rows=[(901, "uk"), (902, "en")])
+    out = db.get_users_to_auto_quiet(conn, days=9)
+    sql, _ = conn.calls[0]
+    assert "onboarding_step = 'done'" in sql
+    assert "COALESCE(up.nudge_optout, 0) = 0" in sql
+    assert "up.blocked_at IS NULL" in sql
+    # CRITICAL — protects active loggers from accidental silencing.
+    assert "NOT EXISTS" in sql and "FROM meals m" in sql
+    assert "INTERVAL '9 days'" in sql
+    # Don't double-quiet a user who's already been auto-quieted in a
+    # prior run (would re-send the notice unnecessarily).
+    assert "'auto_quieted'" in sql
+    assert out == [
+        {"user_id": 901, "lang": "uk"},
+        {"user_id": 902, "lang": "en"},
+    ]
+
+
+def test_set_activation_step_writes_step_and_updated_at():
+    """Helper writes the new activation state + bumps updated_at."""
+    conn = _NudgeConn()
+    db.set_activation_step(conn, user_id=42, step="demo")
+    assert conn.commits == 1
+    sql, params = conn.calls[0]
+    assert "UPDATE user_profiles" in sql
+    assert "SET activation_step = %s" in sql
+    assert params[0] == "demo"
+    assert params[-1] == 42
+
+
 def test_mark_morning_sent_updates_with_iso_timestamp():
     """Mirrors mark_nudge_sent — stamps last_morning_sent_at to NOW iso."""
     conn = _NudgeConn()

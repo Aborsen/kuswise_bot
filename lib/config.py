@@ -42,6 +42,16 @@ MACRO_PER_KG = {
     "lose":     {"protein": 2.0, "fat": 0.8, "carbs": 2.5},
 }
 
+# Hard floor on daily fat intake regardless of bodyweight × goal coefficient.
+# The 0.8 g/kg "lose" multiplier produces unrealistically low fat targets for
+# light users (e.g. 40 kg × 0.8 = 32 g) — well below the essential-fatty-acid
+# minimum (~30 g) and the floor at which hormonal / absorption issues start
+# appearing in practice. 40 g is a conservative baseline that covers
+# essential needs without being so high it overrides reasonable formula
+# output for normal-weight users. Only effective for users under ~50 kg
+# on "lose"; everyone heavier sits above the floor naturally.
+MIN_FAT_G = 40
+
 
 # Defense-in-depth bounds for body weight (kg). Onboarding already validates
 # 30-300 at input, but bad data can drift in via DB rewrites, so clamp at
@@ -60,13 +70,20 @@ def _clamp_weight(weight_kg: float | None) -> float:
 
 
 def macro_gram_targets_from_profile(weight_kg: float | None, goal: str | None) -> dict:
-    """Grams of protein / carbs / fat for a user, given weight × goal."""
+    """Grams of protein / carbs / fat for a user, given weight × goal.
+
+    Fat is floored at `MIN_FAT_G` (40 g) to cover essential needs even for
+    very light users on the "lose" goal — `40 kg × 0.8 g/kg = 32 g` was
+    below the hormonal / essential-fatty-acid baseline. The downstream
+    `calorie_target_from_profile` re-uses this dict, so the floor
+    propagates correctly to the total kcal target.
+    """
     per = MACRO_PER_KG.get(goal or "maintain", MACRO_PER_KG["maintain"])
     w = _clamp_weight(weight_kg)
     return {
         "protein": round(w * per["protein"]),
         "carbs":   round(w * per["carbs"]),
-        "fat":     round(w * per["fat"]),
+        "fat":     max(MIN_FAT_G, round(w * per["fat"])),
     }
 
 

@@ -45,6 +45,33 @@ def test_macro_targets_unknown_goal_falls_back_to_maintain():
     assert m["protein"] == 140   # 70 * 2.0 (maintain)
 
 
+def test_macro_targets_fat_floor_for_light_user_on_lose():
+    """Light users on `lose` would otherwise get unrealistically low fat:
+    `40 × 0.8 = 32 g`. The MIN_FAT_G floor (40 g) protects essential
+    fatty-acid needs. Protein and carbs are NOT floored — only fat."""
+    m = cfg.macro_gram_targets_from_profile(40, "lose")
+    assert m["fat"] == 40                  # floor kicks in: 32 → 40
+    assert m["protein"] == 80              # 40 × 2.0, unchanged
+    assert m["carbs"] == 100               # 40 × 2.5, unchanged
+    # Calorie target reflects the bumped fat value.
+    # 80 P × 4 + 100 C × 4 + 40 F × 9 = 320 + 400 + 360 = 1080
+    assert cfg.calorie_target_from_profile(40, "lose") == 1080
+
+
+def test_macro_targets_fat_floor_does_not_lower_normal_user():
+    """Normal-weight users sit above the floor naturally — verify the
+    floor doesn't accidentally cap their fat target."""
+    m = cfg.macro_gram_targets_from_profile(80, "lose")
+    assert m["fat"] == 64                  # 80 × 0.8, above floor
+
+
+def test_macro_targets_fat_floor_at_30kg_minimum_weight():
+    """Edge: at WEIGHT_MIN_KG (30 kg) the floor matters most —
+    30 × 0.8 = 24, well below 40."""
+    m = cfg.macro_gram_targets_from_profile(30, "lose")
+    assert m["fat"] == 40                  # floor
+
+
 def test_profile_summary_line_handles_empty_dict():
     assert cfg.profile_summary_line({}) == "user (no profile)"
 

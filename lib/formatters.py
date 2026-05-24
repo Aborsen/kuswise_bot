@@ -663,23 +663,21 @@ def format_today_progress(
     kcal_unit = t("macro.calories_short", locale)
     sep = "━━━━━━━━━━━━━━━━━━━━━"
 
+    # F-16 follow-up: ASCII bar lines (`   _bar(...)`) removed — they added
+    # visual noise on Telegram without conveying anything the trailing
+    # `(N%)` doesn't already. The text lines (cur / target / %) are the
+    # source of truth for at-a-glance progress on this card.
     return (
         f"{t('today.header', locale, date=date_display)}\n"
         f"{sep}\n"
         f"{t('today.user_line', locale, name=name)}\n"
         f"{streak_block}"
         f"{t('today.cal_line', locale, cur=round(cal), target=daily_cal_target, pct=_pct(cal, daily_cal_target))}\n"
-        f"   {_bar(cal, daily_cal_target)}\n"
         f"{t('today.protein_line', locale, cur=round(p), target=macros['protein'], pct=_pct(p, macros['protein']), g=g)}\n"
-        f"   {_bar(p, macros['protein'])}\n"
         f"{t('today.carbs_line', locale, cur=round(c), target=macros['carbs'], pct=_pct(c, macros['carbs']), g=g)}\n"
-        f"   {_bar(c, macros['carbs'])}\n"
         f"{t('today.fat_line', locale, cur=round(f), target=macros['fat'], pct=_pct(f, macros['fat']), g=g)}\n"
-        f"   {_bar(f, macros['fat'])}\n"
         f"{t('today.fiber_line', locale, cur=round(fib), target=fib_target, pct=_pct(fib, fib_target), g=g)}\n"
-        f"   {_bar(fib, fib_target)}\n"
         f"{t('today.sugar_line', locale, cur=round(sug), target=sug_target, pct=_pct(sug, sug_target), g=g)}\n"
-        f"   {_bar(sug, sug_target)}\n"
         f"{sep}\n"
         f"{t('today.meal_count', locale, n=meals)}\n"
         f"{t('today.remaining', locale, n=round(remaining), kcal_unit=kcal_unit)}\n\n"

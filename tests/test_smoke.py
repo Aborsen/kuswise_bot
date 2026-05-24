@@ -1659,10 +1659,11 @@ def test_meals_button_routes_to_today_after_merge():
     assert "📋 My meals" in labels
 
 
-def test_format_today_progress_renders_fiber_sugar_bars():
-    """F-16 follow-up: fiber and sugar each get a target value + a
-    progress bar in `format_today_progress`, matching the visual
-    treatment of protein/carbs/fat."""
+def test_format_today_progress_renders_fiber_sugar_lines():
+    """F-16: fiber and sugar each get a target value + percentage in
+    `format_today_progress`, matching the textual treatment of
+    protein/carbs/fat. ASCII bars were removed in a follow-up — the
+    cur / target / % numbers are the at-a-glance signal."""
     from lib.formatters import format_today_progress
     log = {"calories": 1500, "protein": 100, "carbs": 180, "fat": 50,
            "fiber": 28, "sugar": 40, "meal_count": 3}
@@ -1673,12 +1674,10 @@ def test_format_today_progress_renders_fiber_sugar_bars():
     # Sugar: limit 25g for 2000 kcal (WHO conditional 5% / 4);
     # current 40 → 160% (user is over the limit).
     assert "40g / 25g" in out
-    # Both should have a progress bar (full-block char) immediately after
-    # their respective lines, like the other macros.
-    fiber_section = out.split("Fiber")[1].split("Sugar")[0]
-    sugar_section = out.split("Sugar")[1].split("━━━")[0]
-    assert "█" in fiber_section
-    assert "█" in sugar_section
+    # ASCII bar blocks deliberately removed — the text "X / Y (Z%)"
+    # carries the same info more cleanly in chat. Regression guard:
+    # no `█` characters anywhere in the rendered card.
+    assert "█" not in out
 
 
 def test_format_meals_list_without_header_args_suppresses_daily_totals():

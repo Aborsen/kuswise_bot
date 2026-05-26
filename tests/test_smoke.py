@@ -2261,6 +2261,37 @@ def test_restore_main_menu_helper_used_after_every_meal_save():
     )
 
 
+def test_all_cron_modules_import_cleanly():
+    """Each cron endpoint must import without raising — Vercel re-imports
+    the module on every cold invocation, so any module-level error
+    (syntax, eager-annotation evaluation, missing symbol, etc.) results
+    in FUNCTION_INVOCATION_FAILED in production. F-17 shipped with
+    `callable | None` (lowercase builtin used as a type) which crashed
+    cron_good_morning on import for ~54 hours before this test existed.
+    Each module imports its handler class, run function, and any
+    module-level helpers. If any reference resolves at the wrong time
+    this test catches it."""
+    import importlib
+    for name in (
+        "cron_daily_summary",
+        "cron_good_morning",
+        "cron_midnight_reset",
+        "cron_weekly_weight_checkin",
+    ):
+        try:
+            mod = importlib.import_module(f"api.{name}")
+        except Exception as e:
+            raise AssertionError(
+                f"api.{name} failed to import: {type(e).__name__}: {e}"
+            ) from e
+        # Every cron module must expose the BaseHTTPRequestHandler subclass
+        # named `handler` (Vercel's Python runtime entry point).
+        assert hasattr(mod, "handler"), (
+            f"api.{name} missing the `handler` class — Vercel won't be "
+            f"able to dispatch invocations"
+        )
+
+
 def test_send_plan_day_uses_locale_not_undefined_profile():
     """Regression: `_send_plan_day` previously referenced an undefined
     `profile` symbol (NameError) which crashed every /plan day render.

@@ -20,6 +20,12 @@ Same auto-block behavior as `cron_daily_summary`: 400/403 from Telegram
 stamps `blocked_at` so the user vanishes from cohorts until they message
 the bot again.
 """
+# Defer annotations to strings at module load — bulletproof against the
+# `callable | None` class of typo (lowercase builtin used as a type) that
+# crashed this module on import during F-17. With deferred annotations,
+# even semantically-wrong text in annotations doesn't crash the runtime;
+# it'd only surface at static-analysis or `typing.get_type_hints()` time.
+from __future__ import annotations
 import hmac
 import json
 import os

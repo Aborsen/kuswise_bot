@@ -20,6 +20,10 @@
     {
       "path": "/api/cron_good_morning",
       "schedule": "30 * * * *"
+    },
+    {
+      "path": "/api/cron_health_monitor",
+      "schedule": "0 9 * * *"
     }
   ]
 }

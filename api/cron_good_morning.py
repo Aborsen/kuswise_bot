@@ -112,8 +112,9 @@ def _process_activation_cohort(
     cohort: list[dict],
     i18n_key: str,
     new_step: str,
+    counter_key: str,
     counters: dict,
-    extra_format_kwargs: callable | None = None,
+    extra_format_kwargs=None,
 ) -> None:
     """Send the activation-funnel message to one cohort, stamp the new
     `activation_step` + `last_morning_sent_at` on each successful send.
@@ -122,10 +123,15 @@ def _process_activation_cohort(
               `get_users_for_d4_followup` / `get_users_for_d7_final`.
     `i18n_key`: the `morning.first_meal_*` key to render per user.
     `new_step`: state to transition the user into on success.
+    `counter_key`: which counter in `counters` to bump on success — one of
+              `activation_sent_demo` / `activation_sent_d4` /
+              `activation_sent_d7`. Per-variant counters keep each stage
+              individually visible in `cron_runs.result_json` so the
+              health monitor can confirm every funnel rung is firing.
     `extra_format_kwargs`: callable taking a cohort dict, returning the
               extra kwargs for `i18n_mod.t()` (used by the demo card to
               inject `name` and `cal`). None → no extra kwargs.
-    `counters`: mutable dict; bumps `activation_sent` / `skipped_blocked` /
+    `counters`: mutable dict; bumps `<counter_key>` / `skipped_blocked` /
               `errors` in place so the surrounding `run_good_morning`
               report aggregates correctly.
     """
@@ -141,7 +147,7 @@ def _process_activation_cohort(
             if outcome == "sent":
                 set_activation_step(conn, uid, new_step)
                 mark_morning_sent(conn, uid)
-                counters["activation_sent"] += 1
+                counters[counter_key] += 1
             time.sleep(_SEND_DELAY_S)
         except Exception as e:
             counters["errors"].append({"user_id": uid, "stage": new_step, "error": str(e)})
@@ -151,7 +157,6 @@ def _process_activation_cohort(
 def run_good_morning() -> dict:
     conn = get_conn()
     sent = 0
-    activation_sent = 0
     skipped_blocked = 0
     errors: list[dict] = []
     status = "ok"
@@ -166,16 +171,24 @@ def run_good_morning() -> dict:
         # standard `get_users_due_morning_greeting` query below.
         # The cohort SQL filters on `NOT EXISTS (... FROM meals)` so
         # any user with ≥1 lifetime meal is never touched here.
+        #
+        # Per-variant counters (demo / d4 / d7) live in this dict so each
+        # funnel rung is individually visible in `cron_runs.result_json`
+        # — the health monitor cross-references each rung against the
+        # corresponding cohort gate to confirm the funnel is processing.
         counters = {
-            "activation_sent": activation_sent,
-            "skipped_blocked": skipped_blocked,
-            "errors": errors,
+            "activation_sent_demo": 0,
+            "activation_sent_d4":   0,
+            "activation_sent_d7":   0,
+            "skipped_blocked":      skipped_blocked,
+            "errors":               errors,
         }
 
         # Day 2+: first-meal demo card with personalised closing line.
         _process_activation_cohort(
             conn, get_users_for_first_meal_demo(conn),
-            "morning.first_meal_demo_full", "demo", counters,
+            "morning.first_meal_demo_full", "demo",
+            "activation_sent_demo", counters,
             extra_format_kwargs=lambda u: {
                 "name": u["first_name"] or "—",
                 "cal":  u["cal"],
@@ -184,16 +197,17 @@ def run_good_morning() -> dict:
         # Day 4+: lighter follow-up.
         _process_activation_cohort(
             conn, get_users_for_d4_followup(conn),
-            "morning.first_meal_followup_d4", "d4_followup", counters,
+            "morning.first_meal_followup_d4", "d4_followup",
+            "activation_sent_d4", counters,
         )
         # Day 7+: final softer message.
         _process_activation_cohort(
             conn, get_users_for_d7_final(conn),
-            "morning.first_meal_followup_d7", "d7_final", counters,
+            "morning.first_meal_followup_d7", "d7_final",
+            "activation_sent_d7", counters,
         )
 
         # Re-snap counters back to local scope for the result dict.
-        activation_sent = counters["activation_sent"]
         skipped_blocked = counters["skipped_blocked"]
 
         # Standard morning greeting — engaged users + mid-onboarding +
@@ -223,7 +237,9 @@ def run_good_morning() -> dict:
         result = {
             "ok": True,
             "sent": sent,
-            "activation_sent": activation_sent,
+            "activation_sent_demo": counters["activation_sent_demo"],
+            "activation_sent_d4":   counters["activation_sent_d4"],
+            "activation_sent_d7":   counters["activation_sent_d7"],
             "skipped_blocked": skipped_blocked,
             "errors": errors,
             "ran_at": datetime.now(timezone.utc).isoformat(),

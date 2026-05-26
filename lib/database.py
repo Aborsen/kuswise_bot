@@ -2838,3 +2838,297 @@ def get_latest_cron_runs(conn) -> list[dict]:
             "error":       r[5],
         })
     return out
+
+
+# ---------- Daily health monitor helpers ----------
+# Each helper below returns plain Python primitives so the monitor can compose
+# them without any DB-specific knowledge of its own. The monitor module
+# decides what counts as "alert" vs "ok" — these only return facts.
+
+
+def count_cron_runs_24h(conn, cron_name: str) -> int:
+    """How many `cron_runs` rows for ``cron_name`` finished in the last 24h.
+
+    Counts only finished invocations (``finished_at`` set) — the monitor
+    treats unfinished rows as inflight rather than as fires that landed.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT COUNT(*)
+            FROM cron_runs
+            WHERE cron_name = %s
+              AND finished_at IS NOT NULL
+              AND finished_at >= NOW() - INTERVAL '24 hours'
+            """,
+            (cron_name,),
+        )
+        row = cur.fetchone()
+    return int(row[0] or 0)
+
+
+def get_cron_errors_24h(conn) -> list[dict]:
+    """Every `cron_runs` row in the last 24h whose cron itself errored
+    (``status = 'error'`` or non-empty ``error`` column).
+
+    Returns `[{cron_name, finished_at, error}]` ordered newest first.
+    The health monitor pages a one-line alert per row.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT cron_name, finished_at, error
+            FROM cron_runs
+            WHERE finished_at IS NOT NULL
+              AND finished_at >= NOW() - INTERVAL '24 hours'
+              AND (status = 'error' OR (error IS NOT NULL AND error <> ''))
+            ORDER BY finished_at DESC
+            """
+        )
+        rows = cur.fetchall()
+    return [{"cron_name": r[0], "finished_at": r[1], "error": r[2]} for r in rows]
+
+
+def get_user_errors_in_cron_runs_24h(conn) -> list[dict]:
+    """Surface per-user errors that the crons swallowed into
+    ``result_json.errors``.
+
+    Crons keep running through per-user failures (so one bad row doesn't
+    abort the whole cohort) and append `{user_id, error, ...}` records
+    into the ``errors`` array in their `result_json`. This helper unpacks
+    those across all 24h runs so the health monitor can see them.
+
+    Returns `[{cron_name, finished_at, errors_count, sample}]` with one
+    row per cron run that had any per-user errors. ``sample`` is the
+    first error dict from that run (used to render a one-line hint).
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT cron_name, finished_at, result_json
+            FROM cron_runs
+            WHERE finished_at IS NOT NULL
+              AND finished_at >= NOW() - INTERVAL '24 hours'
+              AND status = 'ok'
+              AND result_json IS NOT NULL
+            ORDER BY finished_at DESC
+            """
+        )
+        rows = cur.fetchall()
+    out: list[dict] = []
+    for cron_name, finished_at, result_json in rows:
+        try:
+            parsed = json.loads(result_json) if result_json else {}
+        except Exception:
+            continue
+        errs = parsed.get("errors") or []
+        if not isinstance(errs, list) or not errs:
+            continue
+        sample = errs[0] if isinstance(errs[0], dict) else {"error": str(errs[0])}
+        out.append({
+            "cron_name":     cron_name,
+            "finished_at":   finished_at,
+            "errors_count":  len(errs),
+            "sample":        sample,
+        })
+    return out
+
+
+def sum_counters_24h(conn, cron_name: str, keys: list[str]) -> dict[str, int]:
+    """Sum each named counter in ``cron_runs.result_json`` across the
+    last 24h of successful runs of ``cron_name``.
+
+    Used by the health monitor to roll per-hour cron output (e.g.
+    `cron_good_morning` runs 24×, each with a small `activation_sent_demo`
+    integer) up to a single daily total per counter.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT result_json
+            FROM cron_runs
+            WHERE cron_name = %s
+              AND finished_at IS NOT NULL
+              AND finished_at >= NOW() - INTERVAL '24 hours'
+              AND status = 'ok'
+              AND result_json IS NOT NULL
+            """,
+            (cron_name,),
+        )
+        rows = cur.fetchall()
+    totals = {k: 0 for k in keys}
+    for (result_json,) in rows:
+        try:
+            parsed = json.loads(result_json) if result_json else {}
+        except Exception:
+            continue
+        for k in keys:
+            v = parsed.get(k)
+            try:
+                totals[k] += int(v or 0)
+            except (TypeError, ValueError):
+                pass
+    return totals
+
+
+def count_users_logged_yesterday_utc(conn) -> int:
+    """Distinct users who logged ≥1 meal where ``created_at::date`` was
+    yesterday (UTC).
+
+    Health monitor cross-references this against the sum of
+    ``sent_summary`` across yesterday's ``cron_daily_summary`` runs to
+    detect "users logged but didn't receive their evening summary". Not
+    timezone-aware on purpose — each cron fire already gates on per-user
+    tz, so the UTC-day comparison is a coarse-grained sanity check, not
+    an exact accounting.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT COUNT(DISTINCT user_id)
+            FROM meals
+            WHERE created_at IS NOT NULL
+              AND created_at::date = (CURRENT_DATE - INTERVAL '1 day')::date
+            """
+        )
+        row = cur.fetchone()
+    return int(row[0] or 0)
+
+
+def count_new_blocks(conn, hours: int = 24) -> int:
+    """Distinct users who had `blocked_at` stamped in the last ``hours``.
+
+    Telegram returning 400/403 stamps `blocked_at` (see
+    ``_send_with_autoblock`` / ``_send_with_autoptout``). A spike vs. the
+    7-day baseline means a recent send annoyed a cohort.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            f"""
+            SELECT COUNT(*)
+            FROM user_profiles
+            WHERE blocked_at IS NOT NULL
+              AND blocked_at::timestamptz >= NOW() - INTERVAL '{int(hours)} hours'
+            """
+        )
+        row = cur.fetchone()
+    return int(row[0] or 0)
+
+
+def avg_daily_blocks(conn, days: int = 7) -> float:
+    """Average new `blocked_at` per day over the last ``days``.
+
+    Used as the baseline for ``count_new_blocks`` — if today's count is
+    more than 2× this, the monitor pages an alert.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            f"""
+            SELECT COUNT(*)::float / {int(days)}
+            FROM user_profiles
+            WHERE blocked_at IS NOT NULL
+              AND blocked_at::timestamptz >= NOW() - INTERVAL '{int(days)} days'
+            """
+        )
+        row = cur.fetchone()
+    return float(row[0] or 0.0)
+
+
+def get_users_stuck_in_activation_step(
+    conn, step: str, min_days: int
+) -> list[int]:
+    """Onboarded never-loggers whose ``activation_step = step`` was set
+    ≥``min_days`` days ago (proxied by ``user_profiles.updated_at``).
+
+    Used by the funnel-progression check — e.g. a user sitting in
+    `'demo'` for >3 days should already have advanced to `'d4_followup'`
+    or logged a meal. Anyone stuck signals the morning cron isn't
+    processing that rung correctly.
+
+    Skips users with ``nudge_optout = 1`` (they explicitly muted) and
+    users with any logged meal (they're no longer in the funnel).
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            f"""
+            SELECT up.user_id
+            FROM user_profiles up
+            WHERE up.activation_step = %s
+              AND COALESCE(up.nudge_optout, 0) = 0
+              AND up.blocked_at IS NULL
+              AND up.updated_at::timestamptz
+                  <= NOW() - INTERVAL '{int(min_days)} days'
+              AND NOT EXISTS (
+                  SELECT 1 FROM meals m WHERE m.user_id = up.user_id
+              )
+            """,
+            (step,),
+        )
+        rows = cur.fetchall()
+    return [int(r[0]) for r in rows]
+
+
+def count_signups_24h(conn) -> dict[str, int]:
+    """Signups in the last 24h, broken into `done` (finished onboarding)
+    vs. `mid` (still in flow). Used in the daily-activity report line.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT
+              COUNT(*) FILTER (WHERE COALESCE(p.onboarding_step, '') = 'done') AS done_count,
+              COUNT(*) FILTER (WHERE COALESCE(p.onboarding_step, '') <> 'done') AS mid_count
+            FROM users u
+            LEFT JOIN user_profiles p ON p.user_id = u.user_id
+            WHERE u.created_at IS NOT NULL
+              AND u.created_at::timestamptz >= NOW() - INTERVAL '24 hours'
+            """
+        )
+        row = cur.fetchone()
+    return {
+        "done": int((row[0] if row else 0) or 0),
+        "mid":  int((row[1] if row else 0) or 0),
+    }
+
+
+def count_meals_and_active_users_24h(conn) -> dict[str, int]:
+    """Total meals logged + distinct active users in the last 24h."""
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT COUNT(*), COUNT(DISTINCT user_id)
+            FROM meals
+            WHERE created_at IS NOT NULL
+              AND created_at::timestamptz >= NOW() - INTERVAL '24 hours'
+            """
+        )
+        row = cur.fetchone()
+    return {
+        "meals":        int((row[0] if row else 0) or 0),
+        "active_users": int((row[1] if row else 0) or 0),
+    }
+
+
+def count_first_meal_logs_today(conn) -> int:
+    """Users whose *first lifetime meal* landed in the last 24h.
+
+    Together with the demo-card counter, this answers "did the F-17
+    activation funnel convert anyone yesterday?" without coupling to
+    any single morning send — first-meal is the only success metric
+    that matters.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT COUNT(*)
+            FROM (
+              SELECT user_id, MIN(created_at::timestamptz) AS first_log
+              FROM meals
+              WHERE created_at IS NOT NULL
+              GROUP BY user_id
+            ) firsts
+            WHERE first_log >= NOW() - INTERVAL '24 hours'
+            """
+        )
+        row = cur.fetchone()
+    return int((row[0] if row else 0) or 0)

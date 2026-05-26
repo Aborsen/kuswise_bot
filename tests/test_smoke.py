@@ -2275,6 +2275,7 @@ def test_all_cron_modules_import_cleanly():
     for name in (
         "cron_daily_summary",
         "cron_good_morning",
+        "cron_health_monitor",
         "cron_midnight_reset",
         "cron_weekly_weight_checkin",
     ):
@@ -2827,3 +2828,238 @@ def test_dashboard_build_streak_line_plural_handling():
     assert "5" in out_uk
     # 12 hits the 11-14 exception → "many" form ("днів" not "дні")
     assert "12" in out_uk
+
+
+# ---------- Daily health monitor (cron_health_monitor) ----------
+
+
+def test_count_cron_runs_24h_gates_on_finished_at_and_name():
+    """Helper must filter by cron_name + last-24h window + finished_at not null."""
+    conn = _AdminConn(rows=[(7,)])
+    out = db.count_cron_runs_24h(conn, "cron_good_morning")
+    assert out == 7
+    sql, params = conn.calls[0]
+    assert "FROM cron_runs" in sql
+    assert "INTERVAL '24 hours'" in sql
+    assert "finished_at IS NOT NULL" in sql
+    assert params == ("cron_good_morning",)
+
+
+def test_get_cron_errors_24h_filters_error_status_or_text():
+    """Must surface rows where status='error' OR error column non-empty."""
+    conn = _AdminConn(rows=[
+        ("cron_good_morning", "2026-05-26T08:00", "boom"),
+    ])
+    out = db.get_cron_errors_24h(conn)
+    sql, _ = conn.calls[0]
+    assert "status = 'error'" in sql
+    assert "error IS NOT NULL" in sql and "error <> ''" in sql
+    assert "INTERVAL '24 hours'" in sql
+    assert out[0]["cron_name"] == "cron_good_morning"
+    assert out[0]["error"] == "boom"
+
+
+def test_get_user_errors_in_cron_runs_24h_unpacks_errors_array():
+    """`result_json.errors` arrays from 24h runs must be flattened into
+    per-cron-run rows with count + first-error sample."""
+    rj = json.dumps({"sent": 5, "errors": [
+        {"user_id": 42, "error": "Telegram 500"},
+        {"user_id": 7, "error": "json parse"},
+    ]})
+    conn = _AdminConn(rows=[
+        ("cron_good_morning", "2026-05-26", rj),
+        ("cron_daily_summary", "2026-05-26", json.dumps({"errors": []})),
+    ])
+    out = db.get_user_errors_in_cron_runs_24h(conn)
+    # Only the row with non-empty errors survives.
+    assert len(out) == 1
+    assert out[0]["cron_name"] == "cron_good_morning"
+    assert out[0]["errors_count"] == 2
+    assert out[0]["sample"]["user_id"] == 42
+
+
+def test_sum_counters_24h_rolls_up_named_keys():
+    """Counter rollup must sum each named key across every successful run."""
+    conn = _AdminConn(rows=[
+        (json.dumps({"sent": 3, "activation_sent_demo": 1}),),
+        (json.dumps({"sent": 2, "activation_sent_demo": 4}),),
+        (json.dumps({"sent": 1}),),  # missing key → treated as 0
+    ])
+    out = db.sum_counters_24h(conn, "cron_good_morning",
+                              ["sent", "activation_sent_demo"])
+    assert out == {"sent": 6, "activation_sent_demo": 5}
+    sql, params = conn.calls[0]
+    assert "cron_name = %s" in sql
+    assert "status = 'ok'" in sql
+    assert params == ("cron_good_morning",)
+
+
+def test_count_users_logged_yesterday_utc_uses_yesterday_date():
+    """SQL must gate `created_at::date = (CURRENT_DATE - 1)`."""
+    conn = _AdminConn(rows=[(12,)])
+    out = db.count_users_logged_yesterday_utc(conn)
+    sql, _ = conn.calls[0]
+    assert "FROM meals" in sql
+    assert "CURRENT_DATE - INTERVAL '1 day'" in sql
+    assert "COUNT(DISTINCT user_id)" in sql
+    assert out == 12
+
+
+def test_count_new_blocks_uses_blocked_at_window():
+    conn = _AdminConn(rows=[(3,)])
+    out = db.count_new_blocks(conn, hours=24)
+    sql, _ = conn.calls[0]
+    assert "FROM user_profiles" in sql
+    assert "blocked_at IS NOT NULL" in sql
+    assert "INTERVAL '24 hours'" in sql
+    assert out == 3
+
+
+def test_avg_daily_blocks_divides_by_days_window():
+    """Baseline is COUNT / days over `days` days."""
+    conn = _AdminConn(rows=[(1.5,)])
+    out = db.avg_daily_blocks(conn, days=7)
+    sql, _ = conn.calls[0]
+    assert "FROM user_profiles" in sql
+    assert "/ 7" in sql
+    assert "INTERVAL '7 days'" in sql
+    assert out == 1.5
+
+
+def test_get_users_stuck_in_activation_step_gates_on_step_age_meals():
+    """Stuck-in-step query must filter step + age + never-logged + not opted-out."""
+    conn = _AdminConn(rows=[(42,), (7,)])
+    out = db.get_users_stuck_in_activation_step(conn, "demo", min_days=3)
+    sql, params = conn.calls[0]
+    assert "activation_step = %s" in sql
+    assert "nudge_optout" in sql
+    assert "blocked_at IS NULL" in sql
+    assert "updated_at" in sql and "INTERVAL '3 days'" in sql
+    assert "FROM meals" in sql  # NOT EXISTS gate
+    assert params == ("demo",)
+    assert out == [42, 7]
+
+
+def test_count_signups_24h_splits_by_done_vs_mid():
+    """FILTER clauses must split done vs. mid-onboarding signups."""
+    conn = _AdminConn(rows=[(12, 2)])
+    out = db.count_signups_24h(conn)
+    sql, _ = conn.calls[0]
+    assert "FROM users" in sql
+    assert "onboarding_step" in sql
+    assert "INTERVAL '24 hours'" in sql
+    assert out == {"done": 12, "mid": 2}
+
+
+def test_count_meals_and_active_users_24h_returns_both_counts():
+    conn = _AdminConn(rows=[(247, 38)])
+    out = db.count_meals_and_active_users_24h(conn)
+    sql, _ = conn.calls[0]
+    assert "FROM meals" in sql
+    assert "COUNT(DISTINCT user_id)" in sql
+    assert "INTERVAL '24 hours'" in sql
+    assert out == {"meals": 247, "active_users": 38}
+
+
+def test_count_first_meal_logs_today_subquery_uses_min_created_at():
+    """Must compute MIN(created_at) per user, then filter by 24h window."""
+    conn = _AdminConn(rows=[(3,)])
+    out = db.count_first_meal_logs_today(conn)
+    sql, _ = conn.calls[0]
+    assert "MIN(created_at" in sql
+    assert "GROUP BY user_id" in sql
+    assert "INTERVAL '24 hours'" in sql
+    assert out == 3
+
+
+def test_cron_health_monitor_imports_cleanly_and_exposes_handler():
+    """The new monitor must import without raising and expose a
+    `handler` class (Vercel entry point). Same shape contract as the
+    other crons — this is the regression net for the F-17 class of bug."""
+    import importlib
+    mod = importlib.import_module("api.cron_health_monitor")
+    assert hasattr(mod, "handler")
+    assert hasattr(mod, "run_health_monitor")
+    assert callable(mod.run_health_monitor)
+
+
+def test_cron_health_monitor_registered_in_vercel_json():
+    """vercel.json must schedule the new cron at 09:00 UTC daily."""
+    import os
+    here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    with open(os.path.join(here, "vercel.json")) as f:
+        cfg_json = json.load(f)
+    paths = {c["path"]: c["schedule"] for c in cfg_json["crons"]}
+    assert paths.get("/api/cron_health_monitor") == "0 9 * * *"
+
+
+def test_cron_good_morning_uses_per_variant_activation_counters():
+    """Source-grep guard: the morning cron must split `activation_sent`
+    into per-variant counters so the health monitor can see each F-17
+    rung individually. Catches re-introduction of the lumped counter."""
+    import os
+    here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    src = open(os.path.join(here, "api", "cron_good_morning.py")).read()
+    # Per-variant counter keys must be present.
+    assert "activation_sent_demo" in src
+    assert "activation_sent_d4"   in src
+    assert "activation_sent_d7"   in src
+    # The lumped counter name must NOT appear as a result-dict key anymore
+    # (only the three per-variant keys above).
+    assert '"activation_sent":' not in src
+
+
+def test_health_monitor_check_cron_firing_alerts_on_low_count(monkeypatch):
+    """The cron-firing check must alert when an hourly cron is <20 fires."""
+    import importlib
+    cm = importlib.import_module("api.cron_health_monitor")
+    counts = {
+        "cron_daily_summary":         24,
+        "cron_good_morning":           5,   # <20 → alert
+        "cron_midnight_reset":         1,
+        "cron_weekly_weight_checkin":  0,
+    }
+    monkeypatch.setattr(cm, "count_cron_runs_24h",
+                        lambda conn, name: counts[name])
+    out = cm._check_cron_firing(conn=None)
+    assert out["ok"] is False
+    assert any("cron_good_morning" in a for a in out["alerts"])
+    # The daily summary and midnight reset lines must still render OK.
+    rendered = "\n".join(out["lines"])
+    assert "✅ daily_summary" in rendered
+    assert "✅ midnight_reset" in rendered
+
+
+def test_health_monitor_check_cron_firing_passes_when_above_floor(monkeypatch):
+    """Healthy fire counts produce no alerts."""
+    import importlib
+    cm = importlib.import_module("api.cron_health_monitor")
+    counts = {
+        "cron_daily_summary":         24,
+        "cron_good_morning":          22,   # ≥20 floor → ok
+        "cron_midnight_reset":         1,
+        "cron_weekly_weight_checkin":  0,
+    }
+    monkeypatch.setattr(cm, "count_cron_runs_24h",
+                        lambda conn, name: counts[name])
+    out = cm._check_cron_firing(conn=None)
+    assert out["ok"] is True
+    assert out["alerts"] == []
+
+
+def test_health_monitor_check_block_spike_requires_breach_and_magnitude(monkeypatch):
+    """Block-spike check ignores 1-vs-0 noise but pages on 5-vs-1.2."""
+    import importlib
+    cm = importlib.import_module("api.cron_health_monitor")
+    monkeypatch.setattr(cm, "count_new_blocks", lambda conn, hours=24: 5)
+    monkeypatch.setattr(cm, "avg_daily_blocks", lambda conn, days=7: 1.2)
+    out = cm._check_block_spike(conn=None)
+    assert out["ok"] is False
+    assert "block spike" in out["alerts"][0]
+
+    # Below the absolute floor → no alert even if multiplier breached.
+    monkeypatch.setattr(cm, "count_new_blocks", lambda conn, hours=24: 1)
+    monkeypatch.setattr(cm, "avg_daily_blocks", lambda conn, days=7: 0.0)
+    out2 = cm._check_block_spike(conn=None)
+    assert out2["ok"] is True
+    assert out2["alerts"] == []

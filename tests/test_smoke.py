@@ -1678,6 +1678,10 @@ def test_format_today_progress_renders_fiber_sugar_lines():
     # carries the same info more cleanly in chat. Regression guard:
     # no `█` characters anywhere in the rendered card.
     assert "█" not in out
+    # 2026-05 follow-up: the two `━━━` rules wrapping the macro block
+    # were also dropped — same noise-vs-signal complaint. Guard against
+    # accidental re-introduction.
+    assert "━" not in out
 
 
 def test_format_meals_list_without_header_args_suppresses_daily_totals():

@@ -661,15 +661,18 @@ def format_today_progress(
 
     g = t("macro.gram_short", locale)
     kcal_unit = t("macro.calories_short", locale)
-    sep = "━━━━━━━━━━━━━━━━━━━━━"
 
     # F-16 follow-up: ASCII bar lines (`   _bar(...)`) removed — they added
     # visual noise on Telegram without conveying anything the trailing
     # `(N%)` doesn't already. The text lines (cur / target / %) are the
     # source of truth for at-a-glance progress on this card.
+    #
+    # 2026-05: the two `━━━` separator rules around the macro block were
+    # also dropped for the same reason — they were stripes of noise the
+    # eye had to step over. Vertical whitespace (one blank line before
+    # the totals block) does the same job more quietly.
     return (
         f"{t('today.header', locale, date=date_display)}\n"
-        f"{sep}\n"
         f"{t('today.user_line', locale, name=name)}\n"
         f"{streak_block}"
         f"{t('today.cal_line', locale, cur=round(cal), target=daily_cal_target, pct=_pct(cal, daily_cal_target))}\n"
@@ -678,7 +681,7 @@ def format_today_progress(
         f"{t('today.fat_line', locale, cur=round(f), target=macros['fat'], pct=_pct(f, macros['fat']), g=g)}\n"
         f"{t('today.fiber_line', locale, cur=round(fib), target=fib_target, pct=_pct(fib, fib_target), g=g)}\n"
         f"{t('today.sugar_line', locale, cur=round(sug), target=sug_target, pct=_pct(sug, sug_target), g=g)}\n"
-        f"{sep}\n"
+        f"\n"
         f"{t('today.meal_count', locale, n=meals)}\n"
         f"{t('today.remaining', locale, n=round(remaining), kcal_unit=kcal_unit)}\n\n"
         f"<i>{quip}</i>"

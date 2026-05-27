@@ -259,6 +259,13 @@ def init_db(conn=None, force: bool = False) -> None:
         cur.execute(
             "ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS admin_notified_at TEXT"
         )
+        # 2026-05: `nudge_mid_flow_sent_at` stamps when a one-off "you're
+        # one step away" kicker was sent to a mid-onboarding user via
+        # a backfill script. Idempotency gate so re-runs of those
+        # scripts don't repeatedly nudge the same users.
+        cur.execute(
+            "ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS nudge_mid_flow_sent_at TEXT"
+        )
         # F-17: never-logger activation funnel state machine.
         # NULL / ''         → no activation message sent yet (day 0–1 cohort)
         # 'demo'            → day-2 first-meal demo card sent
@@ -469,7 +476,7 @@ PROFILE_COLUMNS = [
     "tz", "lang", "weekly_delta_kg", "lang_confirmed_at",
     "last_nudge_sent_at", "nudge_optout",
     "blocked_at", "last_morning_sent_at", "activation_step",
-    "admin_notified_at",
+    "admin_notified_at", "nudge_mid_flow_sent_at",
 ]
 
 
@@ -515,6 +522,9 @@ _ALLOWED_PROFILE_FIELDS = {
     # channel post so finalisation-from-script paths can gate on it and
     # avoid duplicate admin notifications.
     "admin_notified_at",
+    # 2026-05: stamped by the mid-onboarding rescue script after sending
+    # the "one step away" kicker, so re-runs are idempotent.
+    "nudge_mid_flow_sent_at",
 }
 
 

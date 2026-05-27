@@ -3457,6 +3457,69 @@ def test_backfill_finish_onboarding_resolve_target_cal_paths():
     ) is None
 
 
+def test_nudge_mid_flow_sent_at_wired_through_profile_helpers():
+    """`nudge_mid_flow_sent_at` must be wired through both
+    PROFILE_COLUMNS and `_ALLOWED_PROFILE_FIELDS` (same pattern as
+    admin_notified_at — the morning's drift bug taught us this lesson)."""
+    assert "nudge_mid_flow_sent_at" in db.PROFILE_COLUMNS
+    assert "nudge_mid_flow_sent_at" in db._ALLOWED_PROFILE_FIELDS
+
+
+def test_nudge_mid_onboarding_kicker_localized():
+    """The new kicker key must render in both locales — no fallback to
+    the key string."""
+    en = i18n_mod.t("nudge.mid_onboarding_kicker", locale="en")
+    uk = i18n_mod.t("nudge.mid_onboarding_kicker", locale="uk")
+    assert "one step" in en.lower()
+    assert "крок" in uk.lower()
+    # Both should call out finishing/answering.
+    assert "answer" in en.lower() or "finish" in en.lower()
+
+
+def test_backfill_stuck_users_cohort_counts():
+    """The three-cohort script must hardcode exactly the lists the
+    audit identified: 13 lang_confirm + 12 mid_flow + 1 tz_custom."""
+    import importlib
+    mod = importlib.import_module("scripts.backfill_stuck_users_today")
+    assert len(mod._ACTION_A_LANG_CONFIRM) == 13
+    assert len(mod._ACTION_B_MID_FLOW) == 12
+    assert len(mod._ACTION_C_TZ_CUSTOM) == 1
+
+
+def test_backfill_stuck_users_step_prompt_routing():
+    """The Action B prompt-router must return the right i18n key +
+    keyboard for each mid-flow step. Source-grep guard so the routing
+    can't drift silently — Action B sends a message that depends on
+    the step, and getting it wrong sends an irrelevant question."""
+    import importlib
+    mod = importlib.import_module("scripts.backfill_stuck_users_today")
+    # awaiting_age: typed answer, no keyboard.
+    prompt, kb = mod._step_prompt_and_keyboard(
+        {"onboarding_step": "awaiting_age"}, "en")
+    assert "old" in prompt.lower()
+    assert kb is None
+    # awaiting_gym: needs the gym keyboard.
+    prompt, kb = mod._step_prompt_and_keyboard(
+        {"onboarding_step": "awaiting_gym"}, "en")
+    assert "train" in prompt.lower() or "gym" in prompt.lower()
+    assert kb is not None
+    assert "inline_keyboard" in kb
+    # awaiting_target_weight: branches on goal (lose vs gain).
+    prompt_lose, _ = mod._step_prompt_and_keyboard(
+        {"onboarding_step": "awaiting_target_weight", "goal": "lose"}, "en")
+    prompt_gain, _ = mod._step_prompt_and_keyboard(
+        {"onboarding_step": "awaiting_target_weight", "goal": "gain"}, "en")
+    assert prompt_lose != prompt_gain, (
+        "lose/gain target_weight prompts should differ — the user's "
+        "goal context shapes the question wording"
+    )
+    # Unknown step: (None, None) so caller can skip cleanly.
+    prompt, kb = mod._step_prompt_and_keyboard(
+        {"onboarding_step": "awaiting_unknown"}, "en")
+    assert prompt is None
+    assert kb is None
+
+
 def test_admin_notified_at_wired_through_profile_helpers():
     """`admin_notified_at` must be (a) in the SELECT column list so
     `get_profile` returns it, AND (b) in the update whitelist so

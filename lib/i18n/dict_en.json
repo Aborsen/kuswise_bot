@@ -696,6 +696,7 @@
   "toast.nudge_off":              "🔕 Nudges off",
   "main_menu.what_next":          "✨ What's next?",
   "nudge.daily_zero":             "👋 No meals logged today — I'm here when you're ready. If today got busy, you've still got a couple of hours to snap a meal. Otherwise no stress — start fresh tomorrow.\n\n(Tap below or send /quiet to mute these.)",
+  "nudge.mid_onboarding_kicker":  "👋 You're one step away from your daily calorie target — answer the question below 👆 to finish.",
   "nudge.opted_out":              "🔕 Nudges off. Send /quiet again any time to re-enable.",
   "nudge.opted_in":               "🔔 Nudges back on. I'll only ping on days you don't log.",
   "toast.unknown_option":        "Unknown option",

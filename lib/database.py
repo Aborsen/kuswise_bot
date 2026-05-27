@@ -251,6 +251,14 @@ def init_db(conn=None, force: bool = False) -> None:
         cur.execute(
             "ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS last_morning_sent_at TEXT"
         )
+        # 2026-05: `admin_notified_at` stamps when the new-user notification
+        # posted to ADMIN_NOTIFY_CHAT_ID. Gates re-runs of finalisation
+        # scripts so the admin channel never sees a duplicate "new user
+        # joined" post. NULL = never notified (the natural state before
+        # 2026-05-27); non-NULL = posted at that ISO timestamp.
+        cur.execute(
+            "ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS admin_notified_at TEXT"
+        )
         # F-17: never-logger activation funnel state machine.
         # NULL / ''         → no activation message sent yet (day 0–1 cohort)
         # 'demo'            → day-2 first-meal demo card sent

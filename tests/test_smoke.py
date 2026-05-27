@@ -3457,6 +3457,106 @@ def test_backfill_finish_onboarding_resolve_target_cal_paths():
     ) is None
 
 
+def test_admin_notified_at_column_added_to_init_db():
+    """The 2026-05 fix adds an `admin_notified_at` column on
+    user_profiles so finalisation-from-script paths can stamp
+    'admin has been told about this user' once, preventing duplicate
+    admin-channel posts on re-runs. Source-grep guard against the
+    migration being lost."""
+    import os
+    here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    src = open(os.path.join(here, "lib", "database.py")).read()
+    assert "admin_notified_at TEXT" in src
+
+
+def test_notify_admin_new_user_returns_bool_for_caller_to_stamp():
+    """`_notify_admin_new_user` must return True on success and False
+    on failure so `_finalize_onboarding` knows whether to stamp
+    `admin_notified_at`. Source-grep guard against the contract
+    quietly changing back to None."""
+    import os
+    here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    src = open(os.path.join(here, "api", "webhook.py")).read()
+    helper_block = src.split(
+        "def _notify_admin_new_user(", 1
+    )[1].split("\ndef ", 1)[0]
+    # Signature returns bool.
+    assert "-> bool" in helper_block
+    # Both `return True` and `return False` branches must exist.
+    assert "return True" in helper_block
+    assert "return False" in helper_block
+    # Caller stamps only on True.
+    finalize_block = src.split(
+        "def _finalize_onboarding(", 1
+    )[1].split("\ndef ", 1)[0]
+    assert "if _notify_admin_new_user(" in finalize_block
+    assert "admin_notified_at=" in finalize_block
+
+
+def test_backfill_admin_notifications_script_targets_7_user_ids():
+    """The bridge script must hardcode exactly the 7 user_ids that
+    `backfill_finish_onboarding.py` finalised on 2026-05-27 (the
+    closed cohort whose admin notifications never fired). Anyone
+    newer goes through the normal `_finalize_onboarding` path."""
+    import importlib
+    mod = importlib.import_module("scripts.backfill_admin_notifications")
+    assert len(mod._BACKFILL_USER_IDS) == 7
+    # Same 7 user_ids the finish-line backfill processed.
+    assert set(mod._BACKFILL_USER_IDS) == {
+        636601703, 669699156, 884541258, 973072558,
+        1334393182, 1385497508, 5520842561,
+    }
+
+
+def test_backfill_admin_notifications_skips_already_notified(monkeypatch):
+    """If `admin_notified_at` is non-NULL for a user, the script must
+    skip them — re-runs after the first successful pass should be
+    no-ops, not duplicate admin posts."""
+    import importlib
+    mod = importlib.import_module("scripts.backfill_admin_notifications")
+    # Stub get_profile so _post_one sees a profile with admin_notified_at set.
+    monkeypatch.setattr(
+        mod, "get_profile",
+        lambda conn, uid: {"user_id": uid, "lang": "uk",
+                           "admin_notified_at": "2026-05-27T10:00:00+00:00"},
+    )
+    sent: list = []
+    monkeypatch.setattr(mod, "send_message", lambda *a, **kw: sent.append(a))
+    out = mod._post_one(conn=None, user_id=999, dry_run=False)
+    assert "already notified" in out
+    assert sent == [], "send_message must not be called for already-notified users"
+
+
+def test_backfill_admin_notifications_posts_and_stamps(monkeypatch):
+    """Happy path: profile exists, not yet notified → send_message
+    fires AND admin_notified_at gets stamped via update_profile."""
+    import importlib
+    mod = importlib.import_module("scripts.backfill_admin_notifications")
+    monkeypatch.setattr(
+        mod, "get_profile",
+        lambda conn, uid: {"user_id": uid, "lang": "uk",
+                           "admin_notified_at": None, "goal": "lose",
+                           "sex": "male", "daily_calorie_target": 2000},
+    )
+    monkeypatch.setattr(mod, "_fetch_username", lambda c, u: "testuser")
+    monkeypatch.setattr(mod, "_fetch_first_name", lambda c, u: "Test")
+    monkeypatch.setattr(mod, "ADMIN_NOTIFY_CHAT_ID", "-1001234567890")
+    sent: list = []
+    monkeypatch.setattr(mod, "send_message",
+                        lambda chat_id, text: (sent.append((chat_id, text))
+                                               or {"ok": True}))
+    stamped: list = []
+    monkeypatch.setattr(mod, "update_profile",
+                        lambda conn, uid, **kwargs: stamped.append((uid, kwargs)))
+    out = mod._post_one(conn=None, user_id=42, dry_run=False)
+    assert out.startswith("✓")
+    assert len(sent) == 1
+    assert sent[0][0] == -1001234567890
+    assert len(stamped) == 1
+    assert stamped[0][0] == 42
+    assert "admin_notified_at" in stamped[0][1]
+
+
 def test_backfill_finish_onboarding_is_idempotent_on_empty():
     """When the SELECT returns zero rows, the script's main loop must
     short-circuit without touching the DB or Telegram. Guarantees

@@ -964,27 +964,40 @@ def _finalize_onboarding(conn, chat_id: int, user_id: int, first_name: str | Non
     send_message(chat_id, done_text, reply_markup=main_menu_keyboard(locale=i18n_mod.locale_of(profile)))
 
     # Best-effort admin-channel notification. Wrapped to never affect the user.
+    # On success, stamp `admin_notified_at` so finalisation-from-script
+    # paths (the backfill script) know not to re-notify.
     try:
-        _notify_admin_new_user(conn, user_id, first_name)
+        if _notify_admin_new_user(conn, user_id, first_name):
+            from datetime import datetime as _dt, timezone as _tz
+            update_profile(conn, user_id,
+                           admin_notified_at=_dt.now(_tz.utc).isoformat())
     except Exception:
         # Deliberately no detail in the log — the chat id and any underlying
         # send error must not leak into Vercel logs.
         print("admin notify dispatch failed", flush=True)
 
 
-def _notify_admin_new_user(conn, user_id: int, first_name: str | None) -> None:
+def _notify_admin_new_user(conn, user_id: int, first_name: str | None) -> bool:
     """Post a freshly-onboarded user's profile to the configured admin channel.
 
-    No-op when ``ADMIN_NOTIFY_CHAT_ID`` is unset. Never logs the chat id or
-    Telegram error bodies — keeps the destination secret even on failures.
+    Returns ``True`` when the message was accepted by Telegram, ``False``
+    otherwise (no chat id configured, bad chat id format, exception
+    during send, or Telegram returned ``ok: false``). The caller uses
+    this signal to decide whether to stamp ``admin_notified_at`` — we
+    only mark a user as "admin has seen them" when the post actually
+    landed, so a future retry can still happen.
+
+    No-op when ``ADMIN_NOTIFY_CHAT_ID`` is unset. Never logs the chat id
+    or Telegram error bodies — keeps the destination secret even on
+    failures.
     """
     if not ADMIN_NOTIFY_CHAT_ID:
-        return
+        return False
     try:
         chat_id = int(ADMIN_NOTIFY_CHAT_ID)
     except (TypeError, ValueError):
         print("admin notify: invalid chat id format", flush=True)
-        return
+        return False
     try:
         profile = get_profile(conn, user_id) or {}
         username = ""
@@ -997,11 +1010,14 @@ def _notify_admin_new_user(conn, user_id: int, first_name: str | None) -> None:
             username = ""
         text = format_new_user_notification(profile, username, first_name)
         resp = send_message(chat_id, text)
-        if not (isinstance(resp, dict) and resp.get("ok")):
-            # Generic log only — no chat id, no response body.
-            print("admin notify: telegram returned non-ok", flush=True)
+        if isinstance(resp, dict) and resp.get("ok"):
+            return True
+        # Generic log only — no chat id, no response body.
+        print("admin notify: telegram returned non-ok", flush=True)
+        return False
     except Exception:
         print("admin notify: send failed", flush=True)
+        return False
 
 
 def handle_onboarding_text(conn, chat_id: int, user_id: int, first_name: str | None,

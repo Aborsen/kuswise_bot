@@ -3255,6 +3255,108 @@ def test_count_cron_runs_24h_by_status_returns_four_buckets():
     assert params == ("cron_good_morning",)
 
 
+def test_welcome_lang_inline_keyboard_offers_both_with_onb_lang_routing():
+    """The new welcome switcher (replacing lang_confirm) must show both
+    flag buttons in a single row, each routing through the existing
+    `onb:lang:` callback. Same end-state semantics as the legacy
+    confirm keyboard so cached taps from stuck users still work."""
+    from lib.telegram_helpers import welcome_lang_inline_keyboard
+    kb = welcome_lang_inline_keyboard()
+    rows = kb["inline_keyboard"]
+    # Single row, two flag buttons.
+    assert len(rows) == 1
+    assert len(rows[0]) == 2
+    callbacks = {b["callback_data"] for b in rows[0]}
+    assert callbacks == {"onb:lang:en", "onb:lang:uk"}
+    # Visually distinguishable — both flag emojis present.
+    labels = " ".join(b["text"] for b in rows[0])
+    assert "🇬🇧" in labels and "🇺🇦" in labels
+
+
+def test_profile_edit_keyboard_includes_language_button():
+    """After the 2026-05 onboarding simplification, /profile must
+    surface a 🌐 Language button so users discover the switcher
+    without having to know the /language command exists."""
+    from lib.telegram_helpers import profile_edit_keyboard
+    for locale in ("en", "uk"):
+        kb = profile_edit_keyboard(locale=locale)
+        callbacks: list[str] = []
+        for row in kb["inline_keyboard"]:
+            for btn in row:
+                callbacks.append(btn["callback_data"])
+        assert "prof:lang" in callbacks, (
+            f"profile_edit_keyboard({locale!r}) missing the 🌐 Language "
+            f"button (callback `prof:lang`)"
+        )
+
+
+def test_profile_edit_language_label_localizes():
+    """Label for the new Language button must render in both locales —
+    English and Ukrainian — not fall back to a placeholder."""
+    en = i18n_mod.t("profile_edit.language", locale="en")
+    uk = i18n_mod.t("profile_edit.language", locale="uk")
+    assert "🌐" in en
+    assert "🌐" in uk
+    # Locale-specific words to guard against accidental cross-pollination.
+    assert "Language" in en
+    assert "Мова" in uk
+
+
+def test_handle_start_skips_lang_confirm_for_fresh_user():
+    """The 2026-05 onboarding simplification: a fresh user must land
+    at `awaiting_age` directly, NOT at `awaiting_lang_confirm`. This
+    is the source-grep guard against the confirmation screen being
+    re-introduced.
+    """
+    import os
+    here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    src = open(os.path.join(here, "api", "webhook.py")).read()
+    # The new fresh-user entry helper must exist.
+    assert "_enter_onboarding_age_step(" in src
+    # The handle_start body must invoke it (NOT set onboarding_step
+    # to awaiting_lang_confirm).
+    handle_start_block = src.split("def handle_start(", 1)[1].split("\ndef ", 1)[0]
+    assert "_enter_onboarding_age_step" in handle_start_block
+    assert 'onboarding_step="awaiting_lang_confirm"' not in handle_start_block
+    # The old lang_confirm_keyboard call must be gone from handle_start.
+    assert "lang_confirm_keyboard(" not in handle_start_block
+
+
+def test_enter_onboarding_age_step_advances_to_awaiting_age():
+    """Source-grep guard: the new helper must persist lang, stamp
+    lang_confirmed_at, and set onboarding_step='awaiting_age'. Each
+    of these is critical — missing any leaves the user in a dead
+    state."""
+    import os
+    here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    src = open(os.path.join(here, "api", "webhook.py")).read()
+    helper_block = src.split(
+        "def _enter_onboarding_age_step(", 1
+    )[1].split("\ndef ", 1)[0]
+    assert "lang=lang" in helper_block
+    assert "lang_confirmed_at=" in helper_block
+    assert 'onboarding_step="awaiting_age"' in helper_block
+    # Must send both the intro (with the new switcher keyboard) and
+    # the age question.
+    assert 'i18n_mod.t("onboarding.intro"' in helper_block
+    assert 'welcome_lang_inline_keyboard()' in helper_block
+    assert 'i18n_mod.t("onboarding.ask_age"' in helper_block
+
+
+def test_prof_lang_callback_handler_present():
+    """The Profile screen's 🌐 Language button needs a `prof:lang`
+    callback handler that opens the language picker. Source-grep
+    guard against accidental removal."""
+    import os
+    here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    src = open(os.path.join(here, "api", "webhook.py")).read()
+    profile_block = src.split(
+        "def handle_profile_edit_callback(", 1
+    )[1].split("\ndef ", 1)[0]
+    assert 'data == "prof:lang"' in profile_block
+    assert "language_keyboard()" in profile_block
+
+
 def test_record_cron_run_body_unchanged_phase_a():
     """Phase A regression guard: `record_cron_run` body MUST stay
     exactly as today so the admin panel reader + existing callers

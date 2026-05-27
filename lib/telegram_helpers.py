@@ -550,6 +550,12 @@ def language_keyboard() -> dict:
 def lang_confirm_keyboard(detected: str) -> dict:
     """F-2b onboarding step zero: confirm auto-detected language or override.
 
+    DEPRECATED 2026-05: no longer attached to fresh-user `/start` — the
+    confirmation step was removed because 39% of new users bounced
+    there. Kept intact for back-compat with any cached keyboards in
+    stuck users' chat history; the same ``onb:lang:`` handler still
+    advances them correctly.
+
     The "primary" button matches what we auto-detected, so one tap
     continues the flow. The other button switches. Callback prefix
     ``onb:lang:`` routes through the existing ``handle_onboarding_callback``
@@ -566,6 +572,32 @@ def lang_confirm_keyboard(detected: str) -> dict:
         "inline_keyboard": [
             [{"text": "✅ Continue in English",     "callback_data": "onb:lang:en"}],
             [{"text": "🇺🇦 Перейти на українську", "callback_data": "onb:lang:uk"}],  # noqa: i18n
+        ]
+    }
+
+
+def welcome_lang_inline_keyboard() -> dict:
+    """Inline language switcher attached to the welcome message of a
+    fresh-user onboarding — the mis-detection rescue path.
+
+    Replaces the old `lang_confirm_keyboard` blocking screen: instead
+    of demanding a tap before proceeding, we proceed in the
+    auto-detected language and offer a one-tap correction below the
+    welcome. If we got it right (common case) the user ignores this
+    and answers the next question. If we got it wrong, a single tap
+    re-renders the welcome + first question in the chosen language.
+
+    Both buttons route through the existing ``onb:lang:*`` callback —
+    same end state semantics as the legacy confirm flow, so any
+    cached keyboard taps from the stuck-user cohort also work
+    correctly.
+    """
+    return {
+        "inline_keyboard": [
+            [
+                {"text": "🇬🇧 English",     "callback_data": "onb:lang:en"},
+                {"text": "🇺🇦 Українська", "callback_data": "onb:lang:uk"},  # noqa: i18n
+            ],
         ]
     }
 
@@ -607,7 +639,13 @@ def tz_keyboard(prefix: str = "tz:set", locale: str = "en") -> dict:
 
 
 def profile_edit_keyboard(locale: str = "en") -> dict:
-    """Quick-edit actions shown under the /profile message."""
+    """Quick-edit actions shown under the /profile message.
+
+    2026-05: added Language row so users discover the switcher without
+    having to type `/language`. Removing the onboarding lang-confirm
+    step meant the only post-onboarding language path was the typed
+    `/language` command, which is invisible to most users.
+    """
     return {
         "inline_keyboard": [
             [
@@ -620,6 +658,9 @@ def profile_edit_keyboard(locale: str = "en") -> dict:
             ],
             [
                 {"text": _i18n_t("profile_edit.water_goal", locale=locale), "callback_data": "prof:water"},
+                {"text": _i18n_t("profile_edit.language",   locale=locale), "callback_data": "prof:lang"},
+            ],
+            [
                 {"text": _i18n_t("profile_edit.restart",    locale=locale), "callback_data": "onb:restart"},
             ],
         ]

@@ -113,6 +113,7 @@ from lib.telegram_helpers import (
     health_menu_keyboard,
     language_keyboard,
     lang_confirm_keyboard,
+    welcome_lang_inline_keyboard,
     nudge_optout_keyboard,
     ai_menu_keyboard,
 )
@@ -793,16 +794,72 @@ def handle_start(
     profile = ensure_profile_row(conn, user_id)
     reset_onboarding(conn, user_id)
 
-    # F-2b onboarding step zero: confirm the auto-detected language.
-    # We seed `lang` from Telegram's language_code so the entire onboarding
-    # message stack runs in the right locale, then ask the user to confirm
-    # or override before the existing 6-question flow.
+    # 2026-05: dropped the explicit "EN/UK?" confirmation step that
+    # used to live here — 39% of new users bounced on that screen.
+    # We already know Telegram's `language_code`, so we auto-detect,
+    # advance straight to the first real onboarding question, and
+    # piggyback a tiny inline language-switcher on the welcome
+    # message for the mis-detection rescue path. Single tap fixes
+    # any wrong guess; the common (correct) case requires no taps.
     detected = i18n_mod.normalize_lang(language_code) if language_code else "en"
-    update_profile(conn, user_id, lang=detected, onboarding_step="awaiting_lang_confirm")
+    _enter_onboarding_age_step(conn, chat_id, user_id, detected)
+
+
+def _enter_onboarding_age_step(
+    conn,
+    chat_id: int,
+    user_id: int,
+    lang: str,
+) -> None:
+    """Set the user to ``awaiting_age`` in ``lang``, sync the chat-menu
+    button + slash-command autocomplete to that language, send the
+    standard onboarding intro (with an inline language-switcher
+    keyboard for mis-detection rescue), then send the age question.
+
+    Shared by:
+      * ``handle_start`` — fresh user, ``lang`` auto-detected from
+        Telegram's language_code.
+      * ``onb:lang:*`` callback — both the legacy stuck-user cohort
+        (cached `lang_confirm_keyboard` taps) and the new welcome
+        switcher route here, giving them all identical end state.
+
+    Idempotent: safe to call on a user who is already at
+    ``awaiting_age`` — they just see the welcome + age question
+    again in the chosen language.
+    """
+    from datetime import datetime as _dt, timezone as _tz
+    update_profile(
+        conn, user_id,
+        lang=lang,
+        lang_confirmed_at=_dt.now(_tz.utc).isoformat(),
+        onboarding_step="awaiting_age",
+    )
+    # Pin a chat-scoped `/` command menu in the chosen language so
+    # autocomplete flips immediately (otherwise an EN-UI user whose
+    # Telegram is EN would keep seeing the EN menu after switching).
+    try:
+        set_my_commands(
+            commands=build_commands(locale=lang),
+            scope={"type": "chat", "chat_id": chat_id},
+        )
+    except Exception as e:
+        print("set_my_commands (onb_intro) error:", e, flush=True)
+    # Re-register the persistent chat menu button so its Mini App URL
+    # carries the new ?lang= query param.
+    try:
+        set_chat_menu_button(chat_id=chat_id, locale=lang)
+    except Exception as e:
+        print("set_chat_menu_button (onb_intro) error:", e, flush=True)
+    # Welcome intro carries the inline language switcher for the
+    # mis-detection rescue. `ask_age` follows in the same locale.
     send_message(
         chat_id,
-        i18n_mod.t("lang_confirm_prompt", locale=detected),
-        reply_markup=lang_confirm_keyboard(detected),
+        i18n_mod.t("onboarding.intro", locale=lang),
+        reply_markup=welcome_lang_inline_keyboard(),
+    )
+    send_message(
+        chat_id,
+        i18n_mod.t("onboarding.ask_age", locale=lang),
     )
 
 
@@ -1063,44 +1120,23 @@ def handle_onboarding_callback(conn, cb: dict) -> None:
         send_message(chat_id, _t("onboarding.ask_age", profile))
         return
 
-    # F-2b: onboarding step zero — language confirmation
+    # Onboarding language switcher — reused by both:
+    #   (a) the legacy `lang_confirm_keyboard` (cached in chat history
+    #       of any user who was at `awaiting_lang_confirm` before the
+    #       2026-05 simplification removed that step), and
+    #   (b) the new `welcome_lang_inline_keyboard` attached to fresh-
+    #       user welcome messages — the mis-detection rescue path.
+    # Same end state in both cases: lang persisted, step advanced to
+    # `awaiting_age` (or kept there), intro + first question re-sent
+    # in the chosen language.
     if data.startswith("onb:lang:"):
         chosen = data.split(":", 2)[2]
         if chosen not in i18n_mod.supported_langs():
             answer_callback_query(cb_id, "?")
             return
-        # Persist choice + mark confirmed + advance to the existing first question.
-        from datetime import datetime as _dt, timezone as _tz
-        update_profile(
-            conn, user_id,
-            lang=chosen,
-            lang_confirmed_at=_dt.now(_tz.utc).isoformat(),
-            onboarding_step="awaiting_age",
-        )
-        # Brief inline ack matching the chosen language.
         ack_key = "lang_confirm_saved_" + chosen
         answer_callback_query(cb_id, i18n_mod.t(ack_key, locale=chosen))
-        # Pin a chat-scoped `/` command menu in the chosen language so
-        # the autocomplete flips immediately. Without this, a UA user
-        # whose Telegram UI is in English would keep seeing the EN menu.
-        try:
-            set_my_commands(
-                commands=build_commands(locale=chosen),
-                scope={"type": "chat", "chat_id": chat_id},
-            )
-        except Exception as e:
-            print("set_my_commands (lang_confirm) error:", e, flush=True)
-        # Re-register the chat menu button URL with the chosen locale —
-        # /start fired before profile.lang was set, so the menu button
-        # currently points at a stale ?lang=en URL even for UA users.
-        try:
-            set_chat_menu_button(chat_id=chat_id, locale=chosen)
-        except Exception as e:
-            print("set_chat_menu_button (lang_confirm) error:", e, flush=True)
-        # Now run the standard onboarding intro + first question. These
-        # strings are still hardcoded UA in Phase 1; Phase 2 migrates them.
-        send_message(chat_id, _t("onboarding.intro", profile))
-        send_message(chat_id, _t("onboarding.ask_age", profile))
+        _enter_onboarding_age_step(conn, chat_id, user_id, chosen)
         return
 
     if data.startswith("onb:sex:"):
@@ -3953,6 +3989,22 @@ def handle_profile_edit_callback(conn, cb: dict, profile: dict) -> None:
         answer_callback_query(cb_id, _t("toast.waiting_water_number", profile))
         set_awaiting_input(conn, user_id, "water_target")
         send_message(chat_id, _t("profile.water_prompt", profile))
+        return
+
+    # prof:lang → open the language picker (same flow as the /language
+    # command). Surfaced on the /profile screen so users discover it
+    # without having to type the typed command. The actual switch
+    # happens via the existing `lang:set:*` callback handled by
+    # `handle_language_callback`.
+    if data == "prof:lang":
+        answer_callback_query(cb_id)
+        lang = i18n_mod.locale_of(profile)
+        cur_label = i18n_mod.t(f"lang_label_{lang}", locale=lang)
+        send_message(
+            chat_id,
+            i18n_mod.t("language_prompt", locale=lang, current=cur_label),
+            reply_markup=language_keyboard(),
+        )
         return
 
     answer_callback_query(cb_id, _t("toast.unknown_action", profile))

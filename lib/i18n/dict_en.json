@@ -456,6 +456,7 @@
   "profile_edit.target_weight":  "🏁 Target weight",
   "profile_edit.weekly_delta":   "📈 Weekly goal",
   "profile_edit.water_goal":     "💧 Water goal",
+  "profile_edit.language":       "🌐 Language",
   "profile_edit.restart":        "✏️ Start over",
 
   "goals_edit.set_target":     "🏁 Set target",

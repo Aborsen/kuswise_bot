@@ -469,6 +469,7 @@ PROFILE_COLUMNS = [
     "tz", "lang", "weekly_delta_kg", "lang_confirmed_at",
     "last_nudge_sent_at", "nudge_optout",
     "blocked_at", "last_morning_sent_at", "activation_step",
+    "admin_notified_at",
 ]
 
 
@@ -510,6 +511,10 @@ _ALLOWED_PROFILE_FIELDS = {
     "tz", "lang", "weekly_delta_kg", "lang_confirmed_at",
     "last_nudge_sent_at", "nudge_optout",
     "blocked_at", "last_morning_sent_at", "activation_step",
+    # 2026-05: stamped by `_finalize_onboarding` after a successful admin-
+    # channel post so finalisation-from-script paths can gate on it and
+    # avoid duplicate admin notifications.
+    "admin_notified_at",
 }
 
 

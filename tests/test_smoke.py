@@ -3457,6 +3457,17 @@ def test_backfill_finish_onboarding_resolve_target_cal_paths():
     ) is None
 
 
+def test_admin_notified_at_wired_through_profile_helpers():
+    """`admin_notified_at` must be (a) in the SELECT column list so
+    `get_profile` returns it, AND (b) in the update whitelist so
+    `update_profile(conn, uid, admin_notified_at=...)` actually
+    persists. Earlier today the column was created but the whitelist
+    silently dropped writes, causing the backfill script to double-
+    post 7 admin notifications."""
+    assert "admin_notified_at" in db.PROFILE_COLUMNS
+    assert "admin_notified_at" in db._ALLOWED_PROFILE_FIELDS
+
+
 def test_admin_notified_at_column_added_to_init_db():
     """The 2026-05 fix adds an `admin_notified_at` column on
     user_profiles so finalisation-from-script paths can stamp

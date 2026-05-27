@@ -3502,6 +3502,98 @@ def test_backfill_finish_onboarding_resolve_target_cal_paths():
     ) is None
 
 
+def test_schema_version_constant_exists():
+    """2026-05: cold-start optimization. `init_db` reads
+    `schema_meta.schema_version` first — if it matches `SCHEMA_VERSION`,
+    the ~50 CREATE/ALTER round-trips skip entirely. The constant must
+    exist and be a non-empty string."""
+    assert hasattr(db, "SCHEMA_VERSION")
+    assert isinstance(db.SCHEMA_VERSION, str)
+    assert len(db.SCHEMA_VERSION) > 0
+
+
+def test_init_db_short_circuits_on_matching_schema_version(monkeypatch):
+    """When `schema_meta.schema_version` equals `SCHEMA_VERSION`, init_db
+    must execute exactly the two short-circuit queries (CREATE schema_meta
+    + SELECT version) and then return — NOT run the full DDL block.
+
+    This is the optimization: ~50 round-trips → 2 round-trips.
+    """
+    # Reset the module-level cache so init_db actually runs.
+    monkeypatch.setattr(db, "_SCHEMA_INITIALISED", False)
+    # Fake conn that returns the current SCHEMA_VERSION on SELECT,
+    # tracks every execute() call, and explodes on a 3rd query (a sign
+    # that we fell through to the full DDL block).
+    class _Cur:
+        def __init__(self, parent): self.p = parent
+        def __enter__(self): return self
+        def __exit__(self, *exc): return False
+        def execute(self, sql, params=None):
+            self.p.calls.append((sql, params))
+            if len(self.p.calls) > 2:
+                raise AssertionError(
+                    f"Expected short-circuit after 2 queries, "
+                    f"got a 3rd: {sql[:80]!r}"
+                )
+        def fetchone(self):
+            return (db.SCHEMA_VERSION,)
+    class _Conn:
+        def __init__(self): self.calls = []; self.commits = 0
+        def cursor(self): return _Cur(self)
+        def commit(self): self.commits += 1
+        def close(self): pass
+
+    conn = _Conn()
+    db.init_db(conn)
+    # Exactly 2 queries: CREATE schema_meta + SELECT.
+    assert len(conn.calls) == 2
+    assert "CREATE TABLE IF NOT EXISTS schema_meta" in conn.calls[0][0]
+    assert "SELECT value FROM schema_meta" in conn.calls[1][0]
+    # No DDL block ran.
+    assert db._SCHEMA_INITIALISED is True
+
+
+def test_init_db_runs_full_ddl_when_version_mismatch(monkeypatch):
+    """When the stored schema_version differs from SCHEMA_VERSION (e.g.
+    immediately after a deploy that bumped the constant), init_db must
+    fall through and run the full DDL block, then stamp the new version.
+
+    Verified via:
+      * conn.calls includes the full DDL (we count >10 statements)
+      * the last call is an UPSERT into schema_meta with SCHEMA_VERSION
+    """
+    monkeypatch.setattr(db, "_SCHEMA_INITIALISED", False)
+    class _Cur:
+        def __init__(self, parent): self.p = parent
+        def __enter__(self): return self
+        def __exit__(self, *exc): return False
+        def execute(self, sql, params=None):
+            self.p.calls.append((sql, params))
+        def fetchone(self):
+            # Stored version is stale → return a mismatching value
+            # so init_db falls through to the full DDL block.
+            return ("v0000-stale",)
+    class _Conn:
+        def __init__(self): self.calls = []; self.commits = 0
+        def cursor(self): return _Cur(self)
+        def commit(self): self.commits += 1
+        def close(self): pass
+
+    conn = _Conn()
+    db.init_db(conn)
+    # Full DDL block ran: many statements, far more than the 2-query
+    # short-circuit.
+    assert len(conn.calls) > 10, (
+        f"Expected full DDL block (>10 statements), got {len(conn.calls)}"
+    )
+    # Last UPSERT stamps the new version.
+    last_sql, last_params = conn.calls[-1]
+    assert "INSERT INTO schema_meta" in last_sql
+    assert "ON CONFLICT" in last_sql
+    assert last_params == (db.SCHEMA_VERSION,)
+    assert db._SCHEMA_INITIALISED is True
+
+
 def test_openai_clients_have_bounded_timeout():
     """All OpenAI client factories must set an explicit timeout under
     Telegram's webhook timeout (~60s). The SDK default is 600s; without

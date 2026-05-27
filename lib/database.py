@@ -31,6 +31,20 @@ def _today_str() -> str:
 _SCHEMA_INITIALISED = False
 
 
+# Schema-version cache (2026-05). Bumped any time we add, remove, or alter
+# a column/index/table below. On cold start, `init_db` reads this value
+# from `schema_meta` via a single SELECT (~15ms on the Neon pooler in the
+# same region). If it matches the constant, the ~50 idempotent CREATE /
+# ALTER round-trips are skipped — saves ~700ms per cold start.
+#
+# DISCIPLINE: every commit that adds DDL below MUST bump this string.
+# Forgetting to bump means the new column never gets created on warm
+# servers (the SELECT short-circuits before reaching the DDL). The first
+# code path that needs the column will fail loudly with
+# "column does not exist" — easy to spot in dev/staging.
+SCHEMA_VERSION = "v2026-05-27-1"
+
+
 def init_db(conn=None, force: bool = False) -> None:
     """Create tables if they don't exist. Idempotent — but cached after the
     first call within a function instance. Pass force=True to bypass the cache
@@ -43,6 +57,36 @@ def init_db(conn=None, force: bool = False) -> None:
     if conn is None:
         conn = get_conn()
         close_after = True
+
+    # Schema-version short-circuit: one SELECT replaces ~50 idempotent
+    # CREATE / ALTER round-trips when the DB is already at the current
+    # version. Must run BEFORE the DDL block so the cold-start cost on
+    # warm-schema DBs collapses to ~15ms.
+    if not force:
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "CREATE TABLE IF NOT EXISTS schema_meta "
+                    "(key TEXT PRIMARY KEY, value TEXT NOT NULL)"
+                )
+                cur.execute(
+                    "SELECT value FROM schema_meta WHERE key = 'schema_version'"
+                )
+                row = cur.fetchone()
+            conn.commit()
+            if row and row[0] == SCHEMA_VERSION:
+                _SCHEMA_INITIALISED = True
+                if close_after:
+                    try:
+                        conn.close()
+                    except Exception:
+                        pass
+                return
+        except Exception:
+            # If the short-circuit query fails (e.g. transient Neon
+            # error) fall through to the full migration block. Safety
+            # over speed.
+            pass
 
     with conn.cursor() as cur:
         cur.execute("""
@@ -423,6 +467,15 @@ def init_db(conn=None, force: bool = False) -> None:
         cur.execute(
             "CREATE INDEX IF NOT EXISTS idx_cron_runs_name_time "
             "ON cron_runs(cron_name, started_at DESC)"
+        )
+        # Stamp the version so future cold starts can short-circuit
+        # the entire DDL block via the SELECT above. UPSERT in case
+        # the row already exists from a prior version.
+        cur.execute(
+            "INSERT INTO schema_meta (key, value) "
+            "VALUES ('schema_version', %s) "
+            "ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
+            (SCHEMA_VERSION,),
         )
     conn.commit()
     _SCHEMA_INITIALISED = True

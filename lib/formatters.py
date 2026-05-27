@@ -524,14 +524,17 @@ def format_profile(profile: dict, locale: str = "en") -> str:
 
     g = t("macro.gram_short", locale)
     kcal_unit = t("macro.calories_short", locale)
-    sep = "━━━━━━━━━━━━━━━━━━━━━"
 
     # kg unit is locale-specific (UA / EN), distinct from g (gram).
     kg_unit = "кг" if locale == "uk" else "kg"  # noqa: i18n
 
+    # 2026-05: dropped the two `━━━` separator rules and the trailing
+    # "Official documentation" link. Vertical whitespace alone scopes
+    # the two halves (basic info + daily target) more quietly than a
+    # solid line; the docs link was rarely tapped and added noise.
     lines = [
         t("profile.header", locale),
-        sep,
+        "",
         t("profile.age",    locale, v=profile.get("age", "—")),
         t("profile.sex",    locale, v=_sex_ua(profile.get("sex", ""), locale)),
         t("profile.weight", locale, v=profile.get("weight_kg", "—")),
@@ -555,7 +558,7 @@ def format_profile(profile: dict, locale: str = "en") -> str:
     elif tw:
         lines.append(t("profile.target_simple", locale, tw=tw))
 
-    lines.append(sep)
+    lines.append("")
     if rec and rec != target:
         lines.append(t("profile.daily_norm_with_rec", locale, cal=target, kcal_unit=kcal_unit, rec=rec))
     else:
@@ -566,8 +569,6 @@ def format_profile(profile: dict, locale: str = "en") -> str:
     ))
     lines.append("")
     lines.append(t("profile.edit_hint", locale))
-    lines.append("")
-    lines.append(t("profile.docs", locale))
     return "\n".join(lines)
 
 
@@ -668,17 +669,23 @@ def format_today_progress(
     # source of truth for at-a-glance progress on this card.
     #
     # 2026-05: the two `━━━` separator rules around the macro block were
-    # also dropped for the same reason — they were stripes of noise the
-    # eye had to step over. Vertical whitespace (one blank line before
-    # the totals block) does the same job more quietly.
+    # dropped for the same reason. Spacing now groups by macro tier:
+    # Calories alone (the headline) → Protein/Carbs/Fat (the macros) →
+    # Fiber/Sugar (the micros) → Meals/Remaining (the totals). Each
+    # group separated by a blank line so the eye lands on the
+    # boundaries without ASCII rules.
     return (
         f"{t('today.header', locale, date=date_display)}\n"
+        f"\n"
         f"{t('today.user_line', locale, name=name)}\n"
         f"{streak_block}"
+        f"\n"
         f"{t('today.cal_line', locale, cur=round(cal), target=daily_cal_target, pct=_pct(cal, daily_cal_target))}\n"
+        f"\n"
         f"{t('today.protein_line', locale, cur=round(p), target=macros['protein'], pct=_pct(p, macros['protein']), g=g)}\n"
         f"{t('today.carbs_line', locale, cur=round(c), target=macros['carbs'], pct=_pct(c, macros['carbs']), g=g)}\n"
         f"{t('today.fat_line', locale, cur=round(f), target=macros['fat'], pct=_pct(f, macros['fat']), g=g)}\n"
+        f"\n"
         f"{t('today.fiber_line', locale, cur=round(fib), target=fib_target, pct=_pct(fib, fib_target), g=g)}\n"
         f"{t('today.sugar_line', locale, cur=round(sug), target=sug_target, pct=_pct(sug, sug_target), g=g)}\n"
         f"\n"

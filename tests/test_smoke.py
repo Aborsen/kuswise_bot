@@ -1693,6 +1693,53 @@ def test_format_today_progress_renders_fiber_sugar_lines():
     # were also dropped — same noise-vs-signal complaint. Guard against
     # accidental re-introduction.
     assert "━" not in out
+    # 2026-05 follow-up 2: dense macro stack was hard to scan — split
+    # into three tiers (Calories alone | Protein+Carbs+Fat | Fiber+Sugar)
+    # with blank lines between each. The render must include the
+    # `\n\n` separator BEFORE the calories line (group boundary after
+    # user/streak), BEFORE protein (group boundary after calories),
+    # and BEFORE fiber (group boundary after fat). Detecting via
+    # adjacent line patterns is more robust than counting newlines.
+    lines = out.split("\n")
+    # Find the calories line — should be preceded by a blank line.
+    cal_idx = next(i for i, ln in enumerate(lines) if "Calories" in ln)
+    assert lines[cal_idx - 1] == "", (
+        "Calories line must have a blank line above it (group boundary)"
+    )
+    # Find protein — should also be preceded by a blank line.
+    prot_idx = next(i for i, ln in enumerate(lines) if "Protein" in ln)
+    assert lines[prot_idx - 1] == "", (
+        "Protein line must have a blank line above it (macro group starts here)"
+    )
+    # Find fiber — preceded by blank (start of micros group).
+    fiber_idx = next(i for i, ln in enumerate(lines) if "Fiber" in ln)
+    assert lines[fiber_idx - 1] == "", (
+        "Fiber line must have a blank line above it (micro group starts here)"
+    )
+
+
+def test_format_profile_drops_separator_rules_and_docs_link():
+    """2026-05: the two `━━━` rules around the profile body were
+    removed (same noise-vs-signal as /today's card), and the
+    "Official documentation" link was removed because it's rarely
+    tapped and added clutter. Source-grep + render guard."""
+    from lib.formatters import format_profile
+    profile = {
+        "lang": "en", "age": 36, "sex": "male", "weight_kg": 80,
+        "height_cm": 180, "gym_per_week": "3-4", "goal": "maintain",
+        "daily_calorie_target": 2400,
+    }
+    out = format_profile(profile, locale="en")
+    # No ━━━ rules.
+    assert "━" not in out
+    # No docs link.
+    assert "raudar.gitbook" not in out
+    assert "Official documentation" not in out
+    # But the body still renders: age + sex + macros + edit hint.
+    assert "36" in out
+    assert "male" in out.lower()
+    assert "2400" in out
+    assert "tap" in out.lower()  # edit_hint mentions "tap ✏️ below"
 
 
 def test_format_meals_list_without_header_args_suppresses_daily_totals():

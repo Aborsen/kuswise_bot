@@ -130,46 +130,6 @@ def _locale_from_request(path: str, form: dict | None = None) -> str:
             pass
     return "en"
 
-
-def _resolve_dashboard_locale(
-    user: dict, profile_lang: str | None, url_locale: str
-) -> str:
-    """Locale priority for the authenticated dashboard render.
-
-    1. ``profile_lang`` (from DB) — authoritative. Set by /language
-       and by onboarding's first-question handoff. Survives device-
-       locale changes and is the user's explicit choice. Pass ``None``
-       (NOT a profile dict) when the DB lookup failed or returned no
-       row — the caller is responsible for unwrapping ``profile.lang``
-       so this helper stays a pure function that survives a DB error.
-    2. Telegram's ``user.language_code`` (always present on initData)
-       via ``normalize_lang`` — reliable middle ground when profile
-       isn't available. No DB call, so it works even when the DB
-       lookup raises.
-    3. ``url_locale`` — last resort. Only the in-chat inline button
-       URL carries ``?lang=`` (built by ``_build_miniapp_url``); the
-       chat-list Mini App menu button URL has none (set globally via
-       ``setChatMenuButton`` with no per-user context). Without a
-       Telegram fallback, chat-list opens for non-EN users were
-       defaulting to EN on profile.lang lookups that didn't return a
-       recognized value.
-
-    History: the original signature took ``profile: dict | None``
-    and unwrapped ``.lang`` internally. That signature plus the
-    do_POST caller wrapping this in the same try/except as the DB
-    calls meant a transient ``get_profile`` exception skipped the
-    whole fallback chain — chat-list opens collapsed to EN even
-    for users with profile.lang='uk' in the DB. Splitting the
-    lookup from the resolution lets the helper run unconditionally.
-    """
-    if profile_lang in ("en", "uk"):
-        return profile_lang
-    from lib.i18n import normalize_lang
-    tg_lang = normalize_lang(user.get("language_code") if isinstance(user, dict) else None)
-    if tg_lang in ("en", "uk"):
-        return tg_lang
-    return url_locale
-
 setup_sentry("dashboard")
 
 
@@ -484,45 +444,23 @@ class handler(BaseHTTPRequestHandler):
         user_id = user["id"]
         first_name = user.get("first_name") or None
 
-        # F-2b Chunk 7++: dashboard locale resolution that survives a
-        # transient DB hiccup. The priority is:
-        #   1. profile.lang from DB (authoritative).
-        #   2. Telegram's user.language_code via normalize_lang
-        #      (no DB call — always available from initData).
-        #   3. url_locale (last resort).
-        #
-        # CRITICAL: step 2 must run even if step 1 raises. Previously
-        # the resolution call sat inside the same try/except that
-        # wrapped the DB calls — so when get_profile threw, the whole
-        # chain was bypassed and locale collapsed to url_locale,
-        # producing the chat-list-is-EN bug for users whose ?lang=
-        # URL hint was 'en'. The DB block here ONLY sets
-        # `profile_lang_from_db`; everything after runs unconditionally.
-        profile_lang_from_db: str | None = None
+        # Read the authoritative locale from the user's profile in DB.
+        # Falls back to the URL-derived locale only when no profile row exists
+        # yet (i.e. user has not started onboarding).
         try:
             _conn_for_locale = get_conn()
             try:
                 init_db(_conn_for_locale)
                 _profile_for_locale = get_profile(_conn_for_locale, user_id)
-                profile_lang_from_db = (
-                    _profile_for_locale.get("lang")
-                    if isinstance(_profile_for_locale, dict)
-                    else None
-                )
             finally:
                 try:
                     _conn_for_locale.close()
                 except Exception:
                     pass
+            from lib.i18n import locale_of as _locale_of
+            locale = _locale_of(_profile_for_locale) if _profile_for_locale else url_locale
         except Exception:
-            print(
-                "dashboard locale-block error:",
-                traceback.format_exc(),
-                flush=True,
-            )
-            profile_lang_from_db = None
-
-        locale = _resolve_dashboard_locale(user, profile_lang_from_db, url_locale)
+            locale = url_locale
 
         # F-12.5 (dashboard share): generate the weekly recap PNG and send it
         # to the user's chat via the bot. Mini App stays on screen so the JS
@@ -709,18 +647,6 @@ _BOOTSTRAP_HTML = """<!DOCTYPE html>
       try { tg.ready(); } catch(e) {}
       try { tg.expand && tg.expand(); } catch(e) {}
     }
-    // 2026-05 dashboard Phase 2 hotfix #3: carry initData across the
-    // form-submit navigation via sessionStorage. The chat-list /
-    // direct-link entry path delivers tgWebAppData in the URL hash
-    // but form-submit nav clears the hash — so the POST-rendered
-    // shell can't recover initData via the legacy sources. Same-tab
-    // sessionStorage survives the nav and is byte-identical to the
-    // value found here (no Python encoding round-trip risk). The
-    // Phase 2 bootstrap on the POST-rendered shell reads from
-    // sessionStorage first.
-    try {
-      sessionStorage.setItem('__kuswise_initData__', initDataStr);
-    } catch(e) {}
     // Submit a real form POST instead of fetch + document.write. With the
     // strict CSP nonce in place, document.write keeps the original page's
     // CSP active, which has the bootstrap's nonce — not the rendered
@@ -981,25 +907,17 @@ def _load_initial_data(user: dict, locale: str = "en") -> dict:
 
 
 def _render_dashboard(user: dict, nonce: str = "", locale: str = "en") -> str:
-    """Render the dashboard SHELL — layout + JS, no inlined data.
+    """Render the full dashboard HTML with all data inlined.
 
-    2026-05 Phase 2: the shell renders fast (~50–150ms, no DB queries
-    inside this function). Data arrives via a follow-up XHR to
-    ``action=initial_data`` which calls ``_load_initial_data`` and
-    returns JSON. The JS bootstrap (added below the static labels)
-    stuffs that JSON into ``#__data__`` and calls
-    ``window.__bootDashboard()`` — the rest of the existing inline
-    script body — once data is available.
-
-    User perceives the dashboard ~10× faster: the spinner sits on
-    the shell HTML for ~500ms (cold) / ~150ms (warm) instead of
-    waiting for the full data render before any HTML lands.
+    2026-05 Phase 1: delegates data fetch to `_load_initial_data` so the
+    same dict can also be served as JSON via the `action=initial_data`
+    endpoint. Phase 2 will replace this function with a shell that lets
+    the client fetch via XHR.
     """
+    data = _load_initial_data(user, locale=locale)
     body = (
         _DASHBOARD_HTML
-        # 2026-05 Phase 2: empty data placeholder. JS fills it via XHR
-        # before calling window.__bootDashboard().
-        .replace("__DATA_JSON__", "null")
+        .replace("__DATA_JSON__", _json_for_script(data))
         .replace("__NONCE__", _esc(nonce))
         .replace("__LANG__", locale)
         .replace("__JS_LABELS__", _build_js_labels(locale))
@@ -1035,9 +953,6 @@ def _render_dashboard(user: dict, nonce: str = "", locale: str = "en") -> str:
         "NAV_OVERVIEW":       _i18n_t("dash.nav_overview",       locale=locale),
         "NAV_MEALS":          _i18n_t("dash.nav_meals",          locale=locale),
         "NAV_PROFILE":        _i18n_t("dash.nav_profile",        locale=locale),
-        # 2026-05 Phase 2 — full-page loading + error overlay.
-        "LOADING_FAILED":     _i18n_t("dash.loading_failed",     locale=locale),
-        "RETRY":              _i18n_t("dash.retry",              locale=locale),
     }
     for k, v in static_labels.items():
         body = body.replace(f"__LABEL_{k}__", v)
@@ -1358,39 +1273,9 @@ _DASHBOARD_HTML = r"""<!DOCTYPE html>
   }
 
   .hint-line { color: var(--hint); font-size: 0.88em; margin: 8px 0 0; }
-
-  /* 2026-05 Phase 2 — full-page loading + error overlay spinner. */
-  @keyframes spin { to { transform: rotate(360deg); } }
 </style>
 </head>
 <body>
-
-<!-- 2026-05 Phase 2: full-page loading overlay shown until the
-     initial_data XHR resolves and window.__bootDashboard() runs.
-     Removed from the DOM when data arrives. Shows shellError on
-     failure so the user knows to retry. -->
-<div id="shellLoading" style="position:fixed;inset:0;display:flex;
-     align-items:center;justify-content:center;
-     background:var(--bg, #101014);z-index:9999;">
-  <div style="width:32px;height:32px;
-       border:3px solid rgba(127,127,127,0.25);
-       border-top-color: var(--tg-theme-button-color, #3ea6ff);
-       border-radius:50%;animation:spin 0.8s linear infinite;"></div>
-</div>
-<div id="shellError" style="position:fixed;inset:0;display:none;
-     align-items:center;justify-content:center;flex-direction:column;
-     background:var(--bg, #101014);z-index:9998;
-     color:var(--tg-theme-text-color, #e6e6ea);
-     font-family:-apple-system, system-ui, sans-serif;padding:20px;">
-  <p style="text-align:center;margin:0 0 16px 0;">⚠️ __LABEL_LOADING_FAILED__</p>
-  <button onclick="location.reload()"
-          style="background:var(--tg-theme-button-color, #3ea6ff);
-                 color:var(--tg-theme-button-text-color, #fff);
-                 border:0;padding:10px 18px;border-radius:10px;
-                 font-size:1em;font-family:inherit;cursor:pointer;">
-    __LABEL_RETRY__
-  </button>
-</div>
 
 <div class="spinner-wrap">
   <div class="spinner-row" id="spinnerRow"></div>
@@ -1543,117 +1428,7 @@ _DASHBOARD_HTML = r"""<!DOCTYPE html>
 </nav>
 
 <script type="application/json" id="__data__">__DATA_JSON__</script>
-
-<!-- 2026-05 Phase 2 bootstrap: applies theme + TG.ready synchronously
-     (so page chrome is correct immediately), then fetches initial_data
-     via XHR and runs the existing dashboard init once data arrives.
-     Previously the entire data blob was inlined and the user waited
-     5–7s for the spinner to clear; now they see the dashboard layout
-     in ~500ms (cold) and watch the cards fill in. -->
 <script nonce="__NONCE__">
-(function() {
-  var TG = (window.Telegram && window.Telegram.WebApp) || null;
-  function applyTheme() {
-    var tp = (TG && TG.themeParams) || {};
-    for (var k in tp) {
-      if (tp.hasOwnProperty(k)) {
-        document.documentElement.style.setProperty(
-          '--tg-theme-' + k.replace(/_/g,'-'), tp[k]);
-      }
-    }
-    document.documentElement.dataset.theme = (TG && TG.colorScheme) || 'dark';
-  }
-  applyTheme();
-  if (TG) {
-    try { TG.ready(); } catch(e) {}
-    try { TG.expand(); } catch(e) {}
-    try { TG.onEvent('themeChanged', applyTheme); } catch(e) {}
-  }
-
-  function showShellError() {
-    var el = document.getElementById('shellLoading');
-    if (el) el.style.display = 'none';
-    var err = document.getElementById('shellError');
-    if (err) err.style.display = 'flex';
-  }
-
-  // Three sources for the Telegram auth blob, preferred in order:
-  //  (1) `sessionStorage.__kuswise_initData__` — written by the GET
-  //      bootstrap before the form-submit navigation. This is the
-  //      most reliable source for chat-list / direct-link entries
-  //      because form-submit nav LOSES the URL hash that initially
-  //      carried tgWebAppData. sessionStorage survives same-tab
-  //      same-origin nav and is byte-identical to the value the
-  //      GET bootstrap read (no Python encoding round-trip risk).
-  //  (2) `tg.initData` — SDK property. Works for in-chat entry
-  //      paths (chat menu button, inline web_app button) where
-  //      Telegram keeps the chat context active.
-  //  (3) `location.hash#tgWebAppData=...` — URL hash. Initial entry
-  //      point for chat-list opens but typically lost after the
-  //      form-submit nav; kept here as defense-in-depth (e.g.
-  //      direct page reload outside the form-submit flow).
-  function findInitData() {
-    try {
-      var s = sessionStorage.getItem('__kuswise_initData__');
-      if (s) return s;
-    } catch(e) {}
-    if (TG && TG.initData) return TG.initData;
-    if (window.location.hash &&
-        window.location.hash.indexOf('tgWebAppData') !== -1) {
-      var hash = window.location.hash.charAt(0) === '#'
-        ? window.location.hash.substring(1) : window.location.hash;
-      try {
-        var params = new URLSearchParams(hash);
-        var raw = params.get('tgWebAppData');
-        if (raw) return raw;
-      } catch(e) {}
-    }
-    return '';
-  }
-  var initData = findInitData();
-  if (!initData) { showShellError(); return; }
-
-  // 2026-05 Phase 2 hotfix #4: URL-encoded body, NOT multipart.
-  // A FormData body makes fetch send `multipart/form-data; boundary=...`
-  // but the POST handler uses `urllib.parse.parse_qs(raw)` which only
-  // understands `application/x-www-form-urlencoded`. On a multipart
-  // body, parse_qs returns an empty `initData` field → server 401 →
-  // "Couldn't load the dashboard." Same fix pattern as scan.py:297
-  // and the `fetchDay` / `request_recap` XHRs below.
-  var body = 'action=initial_data' +
-             '&initData=' + encodeURIComponent(initData) +
-             '&lang=' + encodeURIComponent(document.documentElement.lang || 'en');
-  fetch(window.location.pathname, {
-    method: 'POST',
-    headers: {'Content-Type': 'application/x-www-form-urlencoded'},
-    body: body
-  })
-    .then(function(r) {
-      if (!r.ok) throw new Error('HTTP ' + r.status);
-      return r.json();
-    })
-    .then(function(data) {
-      // Drop the carried initData now that the XHR landed —
-      // prevents a stale value from being used on a future load
-      // in the same tab (per plan R3).
-      try { sessionStorage.removeItem('__kuswise_initData__'); } catch(e) {}
-      document.getElementById('__data__').textContent = JSON.stringify(data);
-      var el = document.getElementById('shellLoading');
-      if (el) el.style.display = 'none';
-      if (typeof window.__bootDashboard === 'function') {
-        try { window.__bootDashboard(); }
-        catch(e) { console.error('bootDashboard failed:', e); showShellError(); }
-      }
-    })
-    .catch(function(err) {
-      console.error('initial_data fetch failed:', err);
-      showShellError();
-    });
-})();
-</script>
-
-<script nonce="__NONCE__">
-window.__bootDashboard = function() {
   var TG = (window.Telegram && window.Telegram.WebApp) || null;
   var DATA = JSON.parse(document.getElementById('__data__').textContent);
   var BOT_URL = DATA.bot_url || '';
@@ -2414,6 +2189,5 @@ window.__bootDashboard = function() {
   renderSpinner();
   renderOverview(DATA.today_blob);
   renderMeals(DATA.today_blob);
-}; // end window.__bootDashboard — invoked by the Phase 2 bootstrap once XHR data arrives.
 </script>
 </body></html>"""

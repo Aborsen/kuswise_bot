@@ -3502,6 +3502,23 @@ def test_backfill_finish_onboarding_resolve_target_cal_paths():
     ) is None
 
 
+def test_moderation_keyboard_layout_accept_is_big_button():
+    """2026-05: Accept owns the top row alone (single button →
+    full-width = "big"). Recalculate + Manual entry are paired on
+    row 2 as the "fix it" group. Source-grep guard so the layout
+    can't drift accidentally."""
+    from lib.telegram_helpers import moderation_keyboard
+    kb = moderation_keyboard(locale="en")
+    rows = kb["inline_keyboard"]
+    # Row 0: Accept alone.
+    assert len(rows[0]) == 1, "Accept must be alone on row 1 (big button)"
+    assert rows[0][0]["callback_data"] == "mod:accept"
+    # Row 1: Recalculate + Manual entry, in that order.
+    assert len(rows[1]) == 2
+    assert rows[1][0]["callback_data"] == "mod:recalc"
+    assert rows[1][1]["callback_data"] == "mod:manual"
+
+
 def test_moderation_keyboard_has_save_as_favorite_button():
     """2026-05: the meal-preview keyboard gained a ⭐ Save as favorite
     button so users can mark + save in one tap. Previously they had

@@ -3503,13 +3503,15 @@ def test_backfill_finish_onboarding_resolve_target_cal_paths():
 
 
 def test_moderation_keyboard_layout_accept_is_big_button():
-    """2026-05: Accept owns the top row alone (single button →
-    full-width = "big"). Recalculate + Manual entry are paired on
-    row 2 as the "fix it" group. Source-grep guard so the layout
-    can't drift accidentally."""
+    """2026-05: 3-row layout —
+        Row 1: ✅ Accept (alone, full-width = "big")
+        Row 2: 🔄 Recalculate · ✏️ Manual entry  (fix-the-analysis pair)
+        Row 3: ⭐ Save as favorite · ❌ Cancel    (non-default-actions pair)
+    Source-grep guard so the layout can't drift accidentally."""
     from lib.telegram_helpers import moderation_keyboard
     kb = moderation_keyboard(locale="en")
     rows = kb["inline_keyboard"]
+    assert len(rows) == 3, "Expected exactly 3 rows after the 2026-05 layout"
     # Row 0: Accept alone.
     assert len(rows[0]) == 1, "Accept must be alone on row 1 (big button)"
     assert rows[0][0]["callback_data"] == "mod:accept"
@@ -3517,6 +3519,10 @@ def test_moderation_keyboard_layout_accept_is_big_button():
     assert len(rows[1]) == 2
     assert rows[1][0]["callback_data"] == "mod:recalc"
     assert rows[1][1]["callback_data"] == "mod:manual"
+    # Row 2: ⭐ Save as favorite + ❌ Cancel, in that order.
+    assert len(rows[2]) == 2
+    assert rows[2][0]["callback_data"] == "mod:accept_fav"
+    assert rows[2][1]["callback_data"] == "mod:cancel"
 
 
 def test_moderation_keyboard_has_save_as_favorite_button():

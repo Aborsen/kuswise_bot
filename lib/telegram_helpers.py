@@ -221,12 +221,12 @@ def moderation_keyboard(locale: str = "en") -> dict:
     Layout (also 2026-05):
       Row 1: ✅ Accept (big — full-width row, single button)
       Row 2: 🔄 Recalculate · ✏️ Manual entry
-      Row 3: ⭐ Save as favorite
-      Row 4: ❌ Cancel
+      Row 3: ⭐ Save as favorite · ❌ Cancel
 
     Accept is alone on the top row so its tap target is biggest and
     visually dominant — it's the most common path. Recalc and Manual
-    are the "fix the analysis" pair, grouped on one row.
+    are the "fix the analysis" pair. ⭐ and ❌ are paired as the
+    "non-default actions" row.
     """
     return {
         "inline_keyboard": [
@@ -239,8 +239,6 @@ def moderation_keyboard(locale: str = "en") -> dict:
             ],
             [
                 {"text": _i18n_t("inline_button.fav_add",      locale=locale), "callback_data": "mod:accept_fav"},
-            ],
-            [
                 {"text": _i18n_t("inline_button.cancel",       locale=locale), "callback_data": "mod:cancel"},
             ],
         ]

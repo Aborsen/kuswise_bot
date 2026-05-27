@@ -48,6 +48,7 @@ from lib.database import (
     count_meals_and_active_users_24h,
     count_new_blocks,
     count_signups_24h,
+    count_unfinished_onboarding_by_step,
     count_users_logged_yesterday_utc,
     get_conn,
     get_cron_errors_24h,
@@ -381,6 +382,7 @@ def _build_report(conn) -> tuple[str, dict]:
     signups = count_signups_24h(conn)
     activity = count_meals_and_active_users_24h(conn)
     first_meals = count_first_meal_logs_today(conn)
+    onboarding_funnel = count_unfinished_onboarding_by_step(conn)
 
     # --- render ---
     parts: list[str] = []
@@ -434,6 +436,25 @@ def _build_report(conn) -> tuple[str, dict]:
     if first_meals:
         parts.append(f"⭐ {first_meals} users logged their FIRST EVER meal in last 24h")
 
+    # --- onboarding funnel: stuck users right now (not just today) ---
+    # This is the abandoned-onboarding cohort across all time, not just
+    # today's new arrivals. Surfaced separately from the ACTIVITY block
+    # because spotting "10 users stuck at awaiting_age for days" is a
+    # different signal from "today's signups bounced at step X".
+    parts.append("")
+    parts.append("ONBOARDING FUNNEL:")
+    if onboarding_funnel["total_unfinished"] == 0:
+        parts.append(
+            f"✅ 0 users stuck mid-onboarding (of {onboarding_funnel['total_users']} total)"
+        )
+    else:
+        parts.append(
+            f"🛑 {onboarding_funnel['total_unfinished']} users mid-onboarding "
+            f"(of {onboarding_funnel['total_users']} total):"
+        )
+        for step, n in onboarding_funnel["by_step"].items():
+            parts.append(f"  • {step}: {n}")
+
     # --- footer: pass or alert list ---
     all_alerts: list[str] = []
     for c in (cron_firing, cron_errors, user_errors, auto_quiet,
@@ -461,6 +482,7 @@ def _build_report(conn) -> tuple[str, dict]:
         "signups": signups,
         "activity": activity,
         "first_meals": first_meals,
+        "onboarding_funnel": onboarding_funnel,
     }
     return text, json_summary
 

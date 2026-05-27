@@ -3457,6 +3457,130 @@ def test_backfill_finish_onboarding_resolve_target_cal_paths():
     ) is None
 
 
+def test_count_unfinished_onboarding_by_step_shape():
+    """The unfinished-onboarding helper must:
+      * group by onboarding_step
+      * filter out 'done' and empty steps
+      * order by count DESC then step name
+      * return {by_step, total_unfinished, total_users}
+    """
+    rows = [
+        ("awaiting_sex", 12),
+        ("awaiting_age", 8),
+        ("awaiting_gym", 1),
+    ]
+    # _AdminConn's cursor returns the same `rows` for ANY query, so we
+    # use a tiny custom cursor that returns different things on the two
+    # queries the helper issues.
+    class _Cur:
+        def __init__(self, parent): self.parent = parent; self.n = 0
+        def __enter__(self): return self
+        def __exit__(self, *exc): return False
+        def execute(self, sql, params=None):
+            self.parent.calls.append((sql, params))
+            self.n += 1
+        def fetchall(self): return rows
+        def fetchone(self): return (149,)
+    class _Conn:
+        def __init__(self): self.calls = []
+        def cursor(self): return _Cur(self)
+        def commit(self): pass
+
+    conn = _Conn()
+    out = db.count_unfinished_onboarding_by_step(conn)
+    assert out["by_step"] == {
+        "awaiting_sex": 12, "awaiting_age": 8, "awaiting_gym": 1,
+    }
+    assert out["total_unfinished"] == 21
+    assert out["total_users"] == 149
+    # First query: group + filter.
+    sql0, _ = conn.calls[0]
+    assert "FROM user_profiles" in sql0
+    assert "GROUP BY step" in sql0
+    assert "'done'" in sql0
+    assert "ORDER BY cnt DESC" in sql0
+    # Second query: total user count.
+    sql1, _ = conn.calls[1]
+    assert "COUNT(*) FROM user_profiles" in sql1
+
+
+def test_health_monitor_renders_onboarding_funnel_section(monkeypatch):
+    """The daily health report must surface the abandoned-onboarding
+    cohort: total stuck + per-step counts. Operator should be able to
+    spot a leak (e.g. lots stuck at the same step) without leaving
+    the channel."""
+    import importlib
+    cm = importlib.import_module("api.cron_health_monitor")
+    # Stub out everything _build_report touches except the funnel
+    # so the test is focused.
+    monkeypatch.setattr(cm, "_check_cron_firing",
+                        lambda c: {"ok": True, "lines": [], "alerts": []})
+    monkeypatch.setattr(cm, "_check_cron_errors",
+                        lambda c: {"ok": True, "lines": [], "alerts": []})
+    monkeypatch.setattr(cm, "_check_user_errors",
+                        lambda c: {"ok": True, "lines": [], "alerts": []})
+    monkeypatch.setattr(cm, "_check_auto_quiet_sanity",
+                        lambda c: {"ok": True, "lines": [], "alerts": []})
+    monkeypatch.setattr(cm, "_check_activation_funnel",
+                        lambda c: {"ok": True, "lines": [], "alerts": []})
+    monkeypatch.setattr(cm, "_check_summary_cohort",
+                        lambda c: {"ok": True, "lines": [], "alerts": []})
+    monkeypatch.setattr(cm, "_check_block_spike",
+                        lambda c: {"ok": True, "lines": [], "alerts": []})
+    monkeypatch.setattr(cm, "sum_counters_24h",
+                        lambda c, name, keys: {k: 0 for k in keys})
+    monkeypatch.setattr(cm, "count_signups_24h",
+                        lambda c: {"done": 0, "mid": 0})
+    monkeypatch.setattr(cm, "count_meals_and_active_users_24h",
+                        lambda c: {"meals": 0, "active_users": 0})
+    monkeypatch.setattr(cm, "count_first_meal_logs_today", lambda c: 0)
+    # The function under test:
+    monkeypatch.setattr(cm, "count_unfinished_onboarding_by_step",
+                        lambda c: {
+                            "by_step": {"awaiting_sex": 12, "awaiting_age": 8},
+                            "total_unfinished": 20,
+                            "total_users": 149,
+                        })
+
+    text, summary = cm._build_report(conn=None)
+    # The section header + headline.
+    assert "ONBOARDING FUNNEL:" in text
+    assert "20 users mid-onboarding" in text
+    assert "of 149 total" in text
+    # Per-step lines, in the order the helper returned them.
+    assert "• awaiting_sex: 12" in text
+    assert "• awaiting_age: 8" in text
+    # JSON summary carries the raw breakdown for cron_runs.result_json.
+    assert summary["onboarding_funnel"]["by_step"]["awaiting_sex"] == 12
+    assert summary["onboarding_funnel"]["total_unfinished"] == 20
+
+
+def test_health_monitor_onboarding_funnel_clean_state(monkeypatch):
+    """When nobody is stuck, render the ✅ healthy line — not an empty
+    bulleted list."""
+    import importlib
+    cm = importlib.import_module("api.cron_health_monitor")
+    for fn in ("_check_cron_firing", "_check_cron_errors",
+               "_check_user_errors", "_check_auto_quiet_sanity",
+               "_check_activation_funnel", "_check_summary_cohort",
+               "_check_block_spike"):
+        monkeypatch.setattr(cm, fn,
+                            lambda c: {"ok": True, "lines": [], "alerts": []})
+    monkeypatch.setattr(cm, "sum_counters_24h",
+                        lambda c, name, keys: {k: 0 for k in keys})
+    monkeypatch.setattr(cm, "count_signups_24h",
+                        lambda c: {"done": 0, "mid": 0})
+    monkeypatch.setattr(cm, "count_meals_and_active_users_24h",
+                        lambda c: {"meals": 0, "active_users": 0})
+    monkeypatch.setattr(cm, "count_first_meal_logs_today", lambda c: 0)
+    monkeypatch.setattr(cm, "count_unfinished_onboarding_by_step",
+                        lambda c: {"by_step": {}, "total_unfinished": 0,
+                                   "total_users": 100})
+    text, _ = cm._build_report(conn=None)
+    assert "✅ 0 users stuck mid-onboarding" in text
+    assert "of 100 total" in text
+
+
 def test_nudge_mid_flow_sent_at_wired_through_profile_helpers():
     """`nudge_mid_flow_sent_at` must be wired through both
     PROFILE_COLUMNS and `_ALLOWED_PROFILE_FIELDS` (same pattern as

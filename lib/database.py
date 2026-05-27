@@ -3141,6 +3141,40 @@ def count_meals_and_active_users_24h(conn) -> dict[str, int]:
     }
 
 
+def count_unfinished_onboarding_by_step(conn) -> dict:
+    """For the daily health report: how many users are stuck at each
+    onboarding step right now (excluding `done`).
+
+    Returns ``{"by_step": {step: count, ...}, "total_unfinished": N,
+    "total_users": M}``. Only steps with ≥1 user appear in `by_step`;
+    callers iterating the dict get a clean per-step breakdown without
+    rendering empty buckets.
+
+    Used by `cron_health_monitor` to surface the abandoned-onboarding
+    cohort so the operator can spot leaks (someone bouncing at the
+    same step repeatedly) without having to dig into the admin panel.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT COALESCE(onboarding_step, '')          AS step,
+                   COUNT(*)                                AS cnt
+            FROM user_profiles
+            WHERE COALESCE(onboarding_step, '') NOT IN ('', 'done')
+            GROUP BY step
+            ORDER BY cnt DESC, step
+            """
+        )
+        by_step = {r[0]: int(r[1] or 0) for r in cur.fetchall()}
+        cur.execute("SELECT COUNT(*) FROM user_profiles")
+        total_users = int((cur.fetchone() or [0])[0] or 0)
+    return {
+        "by_step":          by_step,
+        "total_unfinished": sum(by_step.values()),
+        "total_users":      total_users,
+    }
+
+
 def count_first_meal_logs_today(conn) -> int:
     """Users whose *first lifetime meal* landed in the last 24h.
 

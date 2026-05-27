@@ -132,17 +132,20 @@ def _locale_from_request(path: str, form: dict | None = None) -> str:
 
 
 def _resolve_dashboard_locale(
-    user: dict, profile: dict | None, url_locale: str
+    user: dict, profile_lang: str | None, url_locale: str
 ) -> str:
     """Locale priority for the authenticated dashboard render.
 
-    1. ``profile.lang`` from DB — authoritative. Set by /language and
-       by onboarding's first-question handoff. Survives device-locale
-       changes and is the user's explicit choice.
+    1. ``profile_lang`` (from DB) — authoritative. Set by /language
+       and by onboarding's first-question handoff. Survives device-
+       locale changes and is the user's explicit choice. Pass ``None``
+       (NOT a profile dict) when the DB lookup failed or returned no
+       row — the caller is responsible for unwrapping ``profile.lang``
+       so this helper stays a pure function that survives a DB error.
     2. Telegram's ``user.language_code`` (always present on initData)
        via ``normalize_lang`` — reliable middle ground when profile
-       doesn't have a recognized lang yet. A Ukrainian device resolves
-       to ``uk`` even with no profile row and no ``?lang=`` URL hint.
+       isn't available. No DB call, so it works even when the DB
+       lookup raises.
     3. ``url_locale`` — last resort. Only the in-chat inline button
        URL carries ``?lang=`` (built by ``_build_miniapp_url``); the
        chat-list Mini App menu button URL has none (set globally via
@@ -150,8 +153,15 @@ def _resolve_dashboard_locale(
        Telegram fallback, chat-list opens for non-EN users were
        defaulting to EN on profile.lang lookups that didn't return a
        recognized value.
+
+    History: the original signature took ``profile: dict | None``
+    and unwrapped ``.lang`` internally. That signature plus the
+    do_POST caller wrapping this in the same try/except as the DB
+    calls meant a transient ``get_profile`` exception skipped the
+    whole fallback chain — chat-list opens collapsed to EN even
+    for users with profile.lang='uk' in the DB. Splitting the
+    lookup from the resolution lets the helper run unconditionally.
     """
-    profile_lang = (profile or {}).get("lang") if isinstance(profile, dict) else None
     if profile_lang in ("en", "uk"):
         return profile_lang
     from lib.i18n import normalize_lang
@@ -474,26 +484,45 @@ class handler(BaseHTTPRequestHandler):
         user_id = user["id"]
         first_name = user.get("first_name") or None
 
-        # F-2b Chunk 7+: locale resolution priority for the authenticated
-        # dashboard render. See `_resolve_dashboard_locale` docstring —
-        # profile.lang wins, Telegram's user.language_code is the
-        # reliable middle ground, URL is last resort. Without the
-        # Telegram fallback the chat-list path defaulted to EN for
-        # every user whose profile.lang wasn't a recognized value,
-        # because the chat-list menu button URL carries no ?lang=.
+        # F-2b Chunk 7++: dashboard locale resolution that survives a
+        # transient DB hiccup. The priority is:
+        #   1. profile.lang from DB (authoritative).
+        #   2. Telegram's user.language_code via normalize_lang
+        #      (no DB call — always available from initData).
+        #   3. url_locale (last resort).
+        #
+        # CRITICAL: step 2 must run even if step 1 raises. Previously
+        # the resolution call sat inside the same try/except that
+        # wrapped the DB calls — so when get_profile threw, the whole
+        # chain was bypassed and locale collapsed to url_locale,
+        # producing the chat-list-is-EN bug for users whose ?lang=
+        # URL hint was 'en'. The DB block here ONLY sets
+        # `profile_lang_from_db`; everything after runs unconditionally.
+        profile_lang_from_db: str | None = None
         try:
             _conn_for_locale = get_conn()
             try:
                 init_db(_conn_for_locale)
                 _profile_for_locale = get_profile(_conn_for_locale, user_id)
+                profile_lang_from_db = (
+                    _profile_for_locale.get("lang")
+                    if isinstance(_profile_for_locale, dict)
+                    else None
+                )
             finally:
                 try:
                     _conn_for_locale.close()
                 except Exception:
                     pass
-            locale = _resolve_dashboard_locale(user, _profile_for_locale, url_locale)
         except Exception:
-            locale = url_locale
+            print(
+                "dashboard locale-block error:",
+                traceback.format_exc(),
+                flush=True,
+            )
+            profile_lang_from_db = None
+
+        locale = _resolve_dashboard_locale(user, profile_lang_from_db, url_locale)
 
         # F-12.5 (dashboard share): generate the weekly recap PNG and send it
         # to the user's chat via the bot. Mini App stays on screen so the JS

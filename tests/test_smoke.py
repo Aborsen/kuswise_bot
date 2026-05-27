@@ -3613,30 +3613,32 @@ def test_dashboard_initial_data_xhr_uses_urlencoded_not_formdata():
 def test_dashboard_locale_profile_lang_wins():
     """2026-05 locale fallback fix: when profile.lang is a recognized
     value, it's the authoritative choice — Telegram language_code
-    and URL hint are both ignored. Set via /language or by onboarding."""
+    and URL hint are both ignored. Set via /language or by onboarding.
+
+    The helper takes ``profile_lang`` (str|None) directly so the do_POST
+    caller can unwrap profile.get('lang') OUTSIDE the DB try/except —
+    making the resolution survive a transient DB error."""
     import importlib
     ds = importlib.import_module("api.dashboard")
     user = {"id": 1, "language_code": "en"}  # Telegram says EN
-    profile = {"lang": "uk"}                  # but user explicitly chose UK
-    assert ds._resolve_dashboard_locale(user, profile, url_locale="en") == "uk"
+    assert ds._resolve_dashboard_locale(user, "uk", url_locale="en") == "uk"
 
 
 def test_dashboard_locale_falls_back_to_telegram_language_code():
-    """2026-05 locale fallback fix: when profile.lang is None/missing,
-    the dashboard must use Telegram's user.language_code (always
-    present in initData) BEFORE falling back to the URL hint.
+    """2026-05 locale fallback fix: when profile.lang is None (DB lookup
+    failed OR profile row doesn't have lang set), the dashboard must use
+    Telegram's user.language_code (always present in initData) BEFORE
+    falling back to the URL hint.
 
     This is the actual bug fix — without this fallback, the chat-list
     "Open Mini App" path (URL has no ?lang= because setChatMenuButton
     is set globally without per-user context) was defaulting to EN
-    for every user whose profile.lang wasn't set yet."""
+    for every UK user whose profile.lang lookup didn't succeed."""
     import importlib
     ds = importlib.import_module("api.dashboard")
     user = {"id": 1, "language_code": "uk"}
-    # No profile row at all → Telegram language_code wins, URL ignored.
+    # No profile.lang from DB → Telegram language_code wins, URL ignored.
     assert ds._resolve_dashboard_locale(user, None, url_locale="en") == "uk"
-    # Profile exists but lang is None → same fallback.
-    assert ds._resolve_dashboard_locale(user, {"lang": None}, url_locale="en") == "uk"
     # Slavic neighbour code (ru) → still resolves to uk via normalize_lang.
     assert ds._resolve_dashboard_locale(
         {"id": 1, "language_code": "ru"}, None, url_locale="en"
@@ -3656,6 +3658,50 @@ def test_dashboard_locale_telegram_en_returns_en():
     ) == "en"
     # Missing language_code → normalize_lang returns 'en' → EN.
     assert ds._resolve_dashboard_locale({"id": 1}, None, url_locale="uk") == "en"
+
+
+def test_dashboard_locale_db_block_does_not_wrap_language_code_fallback():
+    """2026-05 hotfix #5: the DB-access try/except in do_POST must NOT
+    wrap the language_code fallback. If it did, a transient
+    `get_profile` exception would skip the entire fallback chain and
+    `locale` would collapse to `url_locale` — exactly the bug that
+    survived 4 hotfixes because every prior fix sat INSIDE the
+    same try/except.
+
+    Source-grep regression: the `_resolve_dashboard_locale(` call in
+    do_POST must appear OUTSIDE the `try: _conn_for_locale = ...`
+    block. Specifically: the call must come AFTER the `except`
+    that catches the DB error."""
+    import os
+    here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    src = open(os.path.join(here, "api", "dashboard.py")).read()
+    # Slice out the do_POST locale block.
+    marker = "# F-2b Chunk 7++"
+    assert marker in src, "locale-block marker comment missing"
+    block_start = src.index(marker)
+    # The block runs to the next blank-line-after-blank-line in the
+    # handler (heuristic).
+    block_end = src.index("# F-12.5 (dashboard share)", block_start)
+    block = src[block_start:block_end]
+
+    # The DB-access try MUST exist.
+    assert "try:" in block and "_conn_for_locale = get_conn()" in block
+    # The except block for the DB error MUST log a traceback so
+    # Vercel runtime logs surface the real cause.
+    assert "dashboard locale-block error:" in block, (
+        "DB-block except must print traceback so the underlying "
+        "Neon / connection-pool error is visible in Vercel logs"
+    )
+    # The _resolve_dashboard_locale call MUST appear AFTER the
+    # except clause — i.e. the position of the call must be greater
+    # than the position of the except.
+    except_idx = block.index("except Exception:")
+    resolve_idx = block.index("_resolve_dashboard_locale(")
+    assert resolve_idx > except_idx, (
+        "_resolve_dashboard_locale must be called AFTER the DB-block "
+        "except — otherwise a transient get_profile exception strips "
+        "the language_code fallback and chat-list collapses to EN"
+    )
 
 
 def test_dashboard_initial_data_post_action_present():

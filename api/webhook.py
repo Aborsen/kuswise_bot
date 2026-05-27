@@ -113,7 +113,6 @@ from lib.telegram_helpers import (
     health_menu_keyboard,
     language_keyboard,
     lang_confirm_keyboard,
-    welcome_lang_inline_keyboard,
     nudge_optout_keyboard,
     ai_menu_keyboard,
 )
@@ -850,12 +849,15 @@ def _enter_onboarding_age_step(
         set_chat_menu_button(chat_id=chat_id, locale=lang)
     except Exception as e:
         print("set_chat_menu_button (onb_intro) error:", e, flush=True)
-    # Welcome intro carries the inline language switcher for the
-    # mis-detection rescue. `ask_age` follows in the same locale.
+    # Welcome intro + first question, both in the auto-detected
+    # language. No inline language picker — users who want to switch
+    # discover it under /profile → 🌐 Language (or via the typed
+    # /language command). Trade-off accepted: Russian/Belarusian
+    # Telegram users land in Ukrainian onboarding by default, and
+    # their recourse is the Profile button.
     send_message(
         chat_id,
         i18n_mod.t("onboarding.intro", locale=lang),
-        reply_markup=welcome_lang_inline_keyboard(),
     )
     send_message(
         chat_id,

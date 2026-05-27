@@ -3255,22 +3255,28 @@ def test_count_cron_runs_24h_by_status_returns_four_buckets():
     assert params == ("cron_good_morning",)
 
 
-def test_welcome_lang_inline_keyboard_offers_both_with_onb_lang_routing():
-    """The new welcome switcher (replacing lang_confirm) must show both
-    flag buttons in a single row, each routing through the existing
-    `onb:lang:` callback. Same end-state semantics as the legacy
-    confirm keyboard so cached taps from stuck users still work."""
-    from lib.telegram_helpers import welcome_lang_inline_keyboard
-    kb = welcome_lang_inline_keyboard()
-    rows = kb["inline_keyboard"]
-    # Single row, two flag buttons.
-    assert len(rows) == 1
-    assert len(rows[0]) == 2
-    callbacks = {b["callback_data"] for b in rows[0]}
-    assert callbacks == {"onb:lang:en", "onb:lang:uk"}
-    # Visually distinguishable — both flag emojis present.
-    labels = " ".join(b["text"] for b in rows[0])
-    assert "🇬🇧" in labels and "🇺🇦" in labels
+def test_welcome_intro_sends_without_inline_lang_keyboard():
+    """2026-05 follow-up: the welcome `onboarding.intro` send must NOT
+    carry an inline language picker. User explicitly rejected the
+    rescue switcher — Profile → 🌐 Language is the sole post-arrival
+    recourse for mis-detection. Source-grep guard against the
+    keyboard being re-attached."""
+    import os
+    here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    src = open(os.path.join(here, "api", "webhook.py")).read()
+    helper_block = src.split(
+        "def _enter_onboarding_age_step(", 1
+    )[1].split("\ndef ", 1)[0]
+    # The intro send is present, but does NOT pass reply_markup.
+    assert 'i18n_mod.t("onboarding.intro"' in helper_block
+    assert "welcome_lang_inline_keyboard" not in helper_block
+    # As a stronger guard, the function itself shouldn't exist anymore.
+    from lib import telegram_helpers as th
+    assert not hasattr(th, "welcome_lang_inline_keyboard"), (
+        "welcome_lang_inline_keyboard should be removed — Profile is "
+        "the sole language-switch surface for the post-confirm-removal "
+        "flow."
+    )
 
 
 def test_profile_edit_keyboard_includes_language_button():
@@ -3336,10 +3342,10 @@ def test_enter_onboarding_age_step_advances_to_awaiting_age():
     assert "lang=lang" in helper_block
     assert "lang_confirmed_at=" in helper_block
     assert 'onboarding_step="awaiting_age"' in helper_block
-    # Must send both the intro (with the new switcher keyboard) and
-    # the age question.
+    # Must send both the intro and the age question. No inline
+    # keyboard is attached — Profile is the sole language-switch
+    # surface for the new flow.
     assert 'i18n_mod.t("onboarding.intro"' in helper_block
-    assert 'welcome_lang_inline_keyboard()' in helper_block
     assert 'i18n_mod.t("onboarding.ask_age"' in helper_block
 
 

@@ -576,32 +576,6 @@ def lang_confirm_keyboard(detected: str) -> dict:
     }
 
 
-def welcome_lang_inline_keyboard() -> dict:
-    """Inline language switcher attached to the welcome message of a
-    fresh-user onboarding — the mis-detection rescue path.
-
-    Replaces the old `lang_confirm_keyboard` blocking screen: instead
-    of demanding a tap before proceeding, we proceed in the
-    auto-detected language and offer a one-tap correction below the
-    welcome. If we got it right (common case) the user ignores this
-    and answers the next question. If we got it wrong, a single tap
-    re-renders the welcome + first question in the chosen language.
-
-    Both buttons route through the existing ``onb:lang:*`` callback —
-    same end state semantics as the legacy confirm flow, so any
-    cached keyboard taps from the stuck-user cohort also work
-    correctly.
-    """
-    return {
-        "inline_keyboard": [
-            [
-                {"text": "🇬🇧 English",     "callback_data": "onb:lang:en"},
-                {"text": "🇺🇦 Українська", "callback_data": "onb:lang:uk"},  # noqa: i18n
-            ],
-        ]
-    }
-
-
 def health_menu_keyboard(locale: str = "en") -> dict:
     """Top-level /health menu (F-1)."""
     return {

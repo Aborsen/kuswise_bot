@@ -41,6 +41,7 @@ if _ROOT not in sys.path:
 
 from lib.config import CRON_SECRET
 from lib.database import (
+    finish_cron_run,
     get_conn,
     init_db,
     get_users_due_morning_greeting,
@@ -48,9 +49,9 @@ from lib.database import (
     get_users_for_d4_followup,
     get_users_for_d7_final,
     mark_morning_sent,
-    record_cron_run,
     set_activation_step,
     set_blocked,
+    start_cron_run,
     get_profile,
 )
 from lib.telegram_helpers import send_message
@@ -156,6 +157,12 @@ def _process_activation_cohort(
 
 def run_good_morning() -> dict:
     conn = get_conn()
+    # R2: initialise BEFORE the try block. `start_cron_run` is defensive
+    # (returns None on DB error) but the caller still needs `run_id` in
+    # scope for the `finally` block — even if start failed, finish gets
+    # the None and falls back to a one-shot insert.
+    run_id: int | None = None
+    run_id = start_cron_run(conn, "cron_good_morning")
     sent = 0
     skipped_blocked = 0
     errors: list[dict] = []
@@ -250,7 +257,7 @@ def run_good_morning() -> dict:
         raise
     finally:
         try:
-            record_cron_run(conn, "cron_good_morning", status,
+            finish_cron_run(conn, run_id, status,
                             result if status == "ok" else None, err_repr)
         except Exception:
             pass  # never let cron-status logging mask the real run outcome

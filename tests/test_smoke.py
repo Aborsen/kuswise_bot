@@ -3014,42 +3014,120 @@ def test_cron_good_morning_uses_per_variant_activation_counters():
     assert '"activation_sent":' not in src
 
 
-def test_health_monitor_check_cron_firing_alerts_on_low_count(monkeypatch):
-    """The cron-firing check must alert when an hourly cron is <20 fires."""
+def _breakdown(started=0, ok=0, errored=0, unfinished=0):
+    """Test helper: shape of count_cron_runs_24h_by_status return value."""
+    return {
+        "started":            started,
+        "finished_ok":        ok,
+        "errored":            errored,
+        "running_unfinished": unfinished,
+    }
+
+
+def test_health_monitor_check_cron_firing_alerts_on_low_starts(monkeypatch):
+    """Alert branch A: too few starts → Vercel didn't invoke us.
+    Hourly cron with started < _HOURLY_OK_FLOOR (20) must flag the
+    'Vercel cron not invoking' message."""
     import importlib
     cm = importlib.import_module("api.cron_health_monitor")
-    counts = {
-        "cron_daily_summary":         24,
-        "cron_good_morning":           5,   # <20 → alert
-        "cron_midnight_reset":         1,
-        "cron_weekly_weight_checkin":  0,
+    breakdowns = {
+        "cron_daily_summary":         _breakdown(started=24, ok=24),
+        "cron_good_morning":          _breakdown(started=5,  ok=5),  # 5<20
+        "cron_midnight_reset":        _breakdown(started=1,  ok=1),
+        "cron_weekly_weight_checkin": _breakdown(started=0,  ok=0),
     }
-    monkeypatch.setattr(cm, "count_cron_runs_24h",
-                        lambda conn, name: counts[name])
+    monkeypatch.setattr(cm, "count_cron_runs_24h_by_status",
+                        lambda conn, name: breakdowns[name])
     out = cm._check_cron_firing(conn=None)
     assert out["ok"] is False
-    assert any("cron_good_morning" in a for a in out["alerts"])
-    # The daily summary and midnight reset lines must still render OK.
+    # The alert text must point at Vercel-not-invoking, not function-crashing.
+    morning_alert = next(a for a in out["alerts"] if "cron_good_morning" in a)
+    assert "Vercel cron not invoking" in morning_alert
+    # Healthy lines still render OK.
     rendered = "\n".join(out["lines"])
     assert "✅ daily_summary" in rendered
     assert "✅ midnight_reset" in rendered
 
 
-def test_health_monitor_check_cron_firing_passes_when_above_floor(monkeypatch):
-    """Healthy fire counts produce no alerts."""
+def test_health_monitor_check_cron_firing_alerts_on_crashes(monkeypatch):
+    """Alert branch B: started but didn't finish → function crashing
+    mid-flight. The alert wording must be distinct from low-starts so
+    the followup investigation goes in the right direction."""
     import importlib
     cm = importlib.import_module("api.cron_health_monitor")
-    counts = {
-        "cron_daily_summary":         24,
-        "cron_good_morning":          22,   # ≥20 floor → ok
-        "cron_midnight_reset":         1,
-        "cron_weekly_weight_checkin":  0,
+    breakdowns = {
+        "cron_daily_summary":         _breakdown(started=24, ok=24),
+        "cron_good_morning":          _breakdown(started=24, ok=12, unfinished=12),
+        "cron_midnight_reset":        _breakdown(started=1,  ok=1),
+        "cron_weekly_weight_checkin": _breakdown(),
     }
-    monkeypatch.setattr(cm, "count_cron_runs_24h",
-                        lambda conn, name: counts[name])
+    monkeypatch.setattr(cm, "count_cron_runs_24h_by_status",
+                        lambda conn, name: breakdowns[name])
+    out = cm._check_cron_firing(conn=None)
+    assert out["ok"] is False
+    morning_alert = next(a for a in out["alerts"] if "cron_good_morning" in a)
+    assert "started but never finished" in morning_alert
+    assert "Vercel logs" in morning_alert
+    # Breakdown line shows the split.
+    rendered = "\n".join(out["lines"])
+    assert "12 lost" in rendered
+
+
+def test_health_monitor_check_cron_firing_passes_when_above_floor(monkeypatch):
+    """Healthy: enough starts AND no unfinished → no alerts."""
+    import importlib
+    cm = importlib.import_module("api.cron_health_monitor")
+    breakdowns = {
+        "cron_daily_summary":         _breakdown(started=24, ok=24),
+        "cron_good_morning":          _breakdown(started=22, ok=22),  # ≥20
+        "cron_midnight_reset":        _breakdown(started=1,  ok=1),
+        "cron_weekly_weight_checkin": _breakdown(),
+    }
+    monkeypatch.setattr(cm, "count_cron_runs_24h_by_status",
+                        lambda conn, name: breakdowns[name])
     out = cm._check_cron_firing(conn=None)
     assert out["ok"] is True
     assert out["alerts"] == []
+
+
+def test_health_monitor_unfinished_tolerance_one_or_two(monkeypatch):
+    """One or two genuinely-still-running fires (the function might
+    legitimately be in-flight when the monitor reads the row) must
+    NOT trigger the crash alert. Threshold is `> 2`."""
+    import importlib
+    cm = importlib.import_module("api.cron_health_monitor")
+    breakdowns = {
+        "cron_daily_summary":         _breakdown(started=24, ok=22, unfinished=2),
+        "cron_good_morning":          _breakdown(started=24, ok=22, unfinished=2),
+        "cron_midnight_reset":        _breakdown(started=1,  ok=1),
+        "cron_weekly_weight_checkin": _breakdown(),
+    }
+    monkeypatch.setattr(cm, "count_cron_runs_24h_by_status",
+                        lambda conn, name: breakdowns[name])
+    out = cm._check_cron_firing(conn=None)
+    # 2 unfinished is within tolerance → no crash alert.
+    assert not any("started but never finished" in a for a in out["alerts"])
+
+
+def test_cron_good_morning_uses_start_finish_bracket():
+    """Phase B source-grep guard: the morning cron must use the
+    start/finish bracket pattern (not the legacy one-shot
+    record_cron_run). And R2 — `run_id` must be initialised BEFORE
+    the try block so the finally can always reference it."""
+    import os
+    here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    src = open(os.path.join(here, "api", "cron_good_morning.py")).read()
+    # Bracket pattern present.
+    assert "start_cron_run(conn, \"cron_good_morning\")" in src
+    assert "finish_cron_run(conn, run_id, status" in src
+    # Legacy one-shot must not be re-introduced for this cron.
+    assert "record_cron_run(conn, \"cron_good_morning\"" not in src
+    # R2 guard: run_id initialised BEFORE its assignment from start_cron_run.
+    # Look for the `run_id: int | None = None` line above `start_cron_run`.
+    idx_init = src.find("run_id: int | None = None")
+    idx_start = src.find("start_cron_run(conn, \"cron_good_morning\")")
+    assert idx_init >= 0, "run_id must be initialised to None before start_cron_run"
+    assert idx_init < idx_start, "run_id init must precede start_cron_run call"
 
 
 def test_health_monitor_check_block_spike_requires_breach_and_magnitude(monkeypatch):

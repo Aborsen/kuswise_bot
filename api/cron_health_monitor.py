@@ -43,6 +43,7 @@ from lib.config import CRON_SECRET, ADMIN_NOTIFY_CHAT_ID
 from lib.database import (
     avg_daily_blocks,
     count_cron_runs_24h,
+    count_cron_runs_24h_by_status,
     count_first_meal_logs_today,
     count_meals_and_active_users_24h,
     count_new_blocks,
@@ -120,6 +121,19 @@ class handler(BaseHTTPRequestHandler):
 def _check_cron_firing(conn) -> dict:
     """Hourly crons should fire ≥20× / day; daily crons ≥1×.
 
+    Uses the per-status breakdown (`count_cron_runs_24h_by_status`) so
+    the report can distinguish:
+      * Vercel-not-invoking (low `started` count)
+      * Function-crashed-mid-flight (`started - finished_ok > 2` —
+        rows that inserted but never updated)
+
+    The two alert conditions render distinct messages so the followup
+    investigation goes in the right direction.
+
+    Pre-Phase-B legacy rows from `record_cron_run` have `finished_at`
+    set + `status='ok'`, so they fall into `finished_ok` cleanly —
+    crons we haven't migrated yet still report sensible numbers.
+
     Weekly check-in is `⏸️ not scheduled today` on non-Mondays —
     monitor doesn't alert outside its scheduled window.
     """
@@ -134,30 +148,69 @@ def _check_cron_firing(conn) -> dict:
     alerts: list[str] = []
     overall_ok = True
     for label, cron_name, kind, scheduled_dow in specs:
-        count = count_cron_runs_24h(conn, cron_name)
+        b = count_cron_runs_24h_by_status(conn, cron_name)
+        started = b["started"]
+        ok_count = b["finished_ok"]
+        errored = b["errored"]
+        unfinished = b["running_unfinished"]
+
+        # Build the breakdown suffix shown on every line — same shape for
+        # every cron so the eye trains on the position.
+        if started > 0:
+            suffix = f"{started} starts → {ok_count} ok"
+            if errored:
+                suffix += f", {errored} errored"
+            if unfinished:
+                suffix += f", {unfinished} lost"
+        else:
+            suffix = f"0 starts"
+
+        # Two independent alert conditions:
+        #   A) too few starts → Vercel didn't invoke us
+        #   B) starts but didn't finish → function crashed mid-flight
+        low_starts = False
+        crashed = unfinished > 2  # tolerance for one or two genuinely-still-running
+
         if kind == "hourly":
-            ok = count >= _HOURLY_OK_FLOOR
-            lines.append(
-                f"{'✅' if ok else '🚨'} {label:<16} {count}/{_HOURLY_EXPECTED} fires"
-            )
-            if not ok:
+            low_starts = started < _HOURLY_OK_FLOOR
+            ok = not (low_starts or crashed)
+            lines.append(f"{'✅' if ok else '🚨'} {label:<16} {suffix}")
+            if low_starts:
                 alerts.append(
-                    f"{cron_name}: {count}/{_HOURLY_EXPECTED} fires "
-                    f"(expected ≥{_HOURLY_OK_FLOOR})"
+                    f"{cron_name}: only {started}/{_HOURLY_EXPECTED} starts "
+                    f"in 24h (Vercel cron not invoking — check delivery)"
+                )
+                overall_ok = False
+            if crashed:
+                alerts.append(
+                    f"{cron_name}: {unfinished} fires started but never "
+                    f"finished (function crashing mid-flight — check Vercel logs)"
                 )
                 overall_ok = False
         elif kind == "daily":
-            ok = count >= 1
-            lines.append(f"{'✅' if ok else '🚨'} {label:<16} {count}/1 fires")
-            if not ok:
-                alerts.append(f"{cron_name}: 0 fires in last 24h")
+            low_starts = started < 1
+            ok = not (low_starts or crashed)
+            lines.append(f"{'✅' if ok else '🚨'} {label:<16} {suffix}")
+            if low_starts:
+                alerts.append(f"{cron_name}: 0 starts in last 24h")
+                overall_ok = False
+            if crashed:
+                alerts.append(
+                    f"{cron_name}: {unfinished} fires started but never finished"
+                )
                 overall_ok = False
         elif kind == "weekly":
             if today_dow == scheduled_dow:
-                ok = count >= 1
-                lines.append(f"{'✅' if ok else '🚨'} {label:<16} {count}/1 fires")
-                if not ok:
-                    alerts.append(f"{cron_name}: 0 fires on Monday")
+                low_starts = started < 1
+                ok = not (low_starts or crashed)
+                lines.append(f"{'✅' if ok else '🚨'} {label:<16} {suffix}")
+                if low_starts:
+                    alerts.append(f"{cron_name}: 0 starts on Monday")
+                    overall_ok = False
+                if crashed:
+                    alerts.append(
+                        f"{cron_name}: {unfinished} fires started but never finished"
+                    )
                     overall_ok = False
             else:
                 lines.append(f"⏸️ {label:<16} not scheduled today")

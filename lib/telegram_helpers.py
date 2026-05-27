@@ -210,11 +210,22 @@ def meal_type_keyboard(locale: str = "en") -> dict:
 
 
 def moderation_keyboard(locale: str = "en") -> dict:
+    """Preview keyboard shown after meal analysis, before save.
+
+    2026-05: added ⭐ Save as favorite as a one-tap "accept + favorite"
+    shortcut. Previously the user had to accept the meal, then tap a
+    separate ⭐ button on the confirmation message — now that the
+    confirmation no longer carries inline buttons (consolidated into
+    a 2-message flow), pre-marking favorites must happen here.
+    """
     return {
         "inline_keyboard": [
             [
                 {"text": _i18n_t("inline_button.accept",       locale=locale), "callback_data": "mod:accept"},
                 {"text": _i18n_t("inline_button.recalc",       locale=locale), "callback_data": "mod:recalc"},
+            ],
+            [
+                {"text": _i18n_t("inline_button.fav_add",      locale=locale), "callback_data": "mod:accept_fav"},
             ],
             [
                 {"text": _i18n_t("inline_button.manual_entry", locale=locale), "callback_data": "mod:manual"},

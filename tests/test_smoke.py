@@ -2286,40 +2286,38 @@ def test_get_attribution_breakdown_shape():
     assert out[1]["source"] == "site_calc_continue_uk"
 
 
-def test_restore_main_menu_helper_used_after_every_meal_save():
-    """Regression: every saved-meal send must be followed by a
-    `_restore_main_menu` call. The meal-saved message uses an inline
-    keyboard (⭐ / ✏️ / 🗑), so without the follow-up the persistent
-    reply keyboard (often collapsed by Telegram during photo upload)
-    never gets refreshed.
-    """
+def test_meal_save_sites_attach_main_menu_directly():
+    """Regression (2026-05 rewrite of earlier test): the 3-message
+    save flow was collapsed to 2. There is no `_restore_main_menu`
+    helper anymore — every meal-save site now attaches
+    `main_menu_keyboard` to the confirmation message itself, doing
+    both jobs in one Telegram send.
+
+    Source-grep: the helper must be gone AND every `format_meal_logged`
+    call site (the confirmation message render) must pass
+    `main_menu_keyboard` as its `reply_markup`."""
     import os
     here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     src = open(os.path.join(here, "api", "webhook.py")).read()
-    # Helper exists.
-    assert "def _restore_main_menu" in src, "helper not defined"
-    # Every block that attaches `meal_logged_actions_keyboard` as a
-    # reply_markup must be followed within ~20 lines by a call to
-    # `_restore_main_menu` — except the favorite-toggle callback,
-    # which uses editMessageReplyMarkup (no new message → no refresh
-    # needed). The toggle site is identifiable because it's inside
-    # `handle_meal_manage_callback` and uses `is_fav=target_state`.
-    chunks = src.split("meal_logged_actions_keyboard(meal_id")
-    # First chunk is preamble; remaining chunks each start AT a usage.
+    # Helper is gone.
+    assert "def _restore_main_menu" not in src, (
+        "_restore_main_menu should be deleted — the reply keyboard is "
+        "now attached directly to the confirmation message"
+    )
+    # Every confirmation-send call site uses format_meal_logged + the
+    # reply keyboard, NOT the legacy inline action keyboard.
+    chunks = src.split("format_meal_logged(")
     save_sites = 0
-    save_sites_with_refresh = 0
+    save_sites_with_reply_kb = 0
     for chunk in chunks[1:]:
-        window = chunk[:600]
-        # Favorite-toggle callback uses `is_fav=target_state`, not False.
-        if "is_fav=target_state" in window[:100]:
-            continue
+        window = chunk[:400]
         save_sites += 1
-        if "_restore_main_menu" in window:
-            save_sites_with_refresh += 1
+        if "main_menu_keyboard(" in window:
+            save_sites_with_reply_kb += 1
     assert save_sites >= 2, f"expected ≥2 meal-save sites, found {save_sites}"
-    assert save_sites == save_sites_with_refresh, (
-        f"{save_sites - save_sites_with_refresh} meal-save sites are "
-        f"missing a `_restore_main_menu` follow-up"
+    assert save_sites == save_sites_with_reply_kb, (
+        f"{save_sites - save_sites_with_reply_kb} confirmation send(s) "
+        f"missing the main_menu_keyboard reply_markup"
     )
 
 
@@ -3502,6 +3500,85 @@ def test_backfill_finish_onboarding_resolve_target_cal_paths():
     assert backfill._resolve_target_cal(
         {"rec_cal": None, "weight_kg": None, "goal": None}
     ) is None
+
+
+def test_moderation_keyboard_has_save_as_favorite_button():
+    """2026-05: the meal-preview keyboard gained a ⭐ Save as favorite
+    button so users can mark + save in one tap. Previously they had
+    to accept first, then tap a separate ⭐ on the confirmation —
+    but the confirmation no longer carries inline buttons.
+
+    The callback `mod:accept_fav` runs the same save logic as
+    `mod:accept` then stamps `favorites.is_favorite = TRUE` on the
+    new meal."""
+    from lib.telegram_helpers import moderation_keyboard
+    kb = moderation_keyboard(locale="en")
+    callbacks: list[str] = []
+    for row in kb["inline_keyboard"]:
+        for btn in row:
+            callbacks.append(btn["callback_data"])
+    assert "mod:accept"     in callbacks
+    assert "mod:accept_fav" in callbacks
+    assert "mod:recalc"     in callbacks
+    assert "mod:manual"     in callbacks
+    assert "mod:cancel"     in callbacks
+
+
+def test_meal_confirmation_uses_reply_keyboard_not_inline():
+    """2026-05: the 3-message post-save flow was collapsed to 2.
+    The confirmation message must now attach `main_menu_keyboard`
+    (a reply keyboard) — NOT `meal_logged_actions_keyboard` (an
+    inline keyboard). One message does both the announcement AND
+    re-attaches the bottom reply keyboard, eliminating the
+    separate "What's next?" follow-up.
+
+    Source-grep guard against regressing back to the 3-message
+    flow on either the photo-accept path or the barcode-save path."""
+    import os
+    here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    src = open(os.path.join(here, "api", "webhook.py")).read()
+    # The two save paths.
+    accept_block = src.split(
+        'if action in ("accept", "accept_fav"):', 1
+    )[1].split("\n    elif action", 1)[0]
+    barcode_block = src.split(
+        "def _process_barcode_save_meal(", 1
+    )[1].split("\ndef ", 1)[0] if "def _process_barcode_save_meal(" in src \
+        else src.split("F-8: turn a pending barcode lookup", 1)[1].split("\ndef ", 1)[0]
+
+    for name, block in (("accept", accept_block), ("barcode", barcode_block)):
+        assert "main_menu_keyboard(" in block, (
+            f"{name} branch must attach main_menu_keyboard as the "
+            f"reply_markup of the confirmation message"
+        )
+        assert "meal_logged_actions_keyboard(" not in block, (
+            f"{name} branch must NOT attach meal_logged_actions_keyboard "
+            f"(the inline ⭐ / ✏️ / 🗑 set) — those buttons live on the "
+            f"preview now (⭐) or in /today / /meals (✏️ / 🗑)"
+        )
+        assert "_restore_main_menu" not in block, (
+            f"{name} branch must NOT call _restore_main_menu — the "
+            f"main_menu_keyboard already comes attached to the "
+            f"confirmation message; the separate follow-up is gone"
+        )
+
+
+def test_accept_fav_handler_stamps_favorite_on_save():
+    """The new `mod:accept_fav` handler must call `set_favorite` after
+    `save_meal` so the freshly-saved row is marked is_favorite=True.
+    Source-grep guard: the call must be inside the accept branch and
+    gated on the `as_favorite` boolean."""
+    import os
+    here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    src = open(os.path.join(here, "api", "webhook.py")).read()
+    accept_block = src.split(
+        'if action in ("accept", "accept_fav"):', 1
+    )[1].split("\n    elif action", 1)[0]
+    # The branch must derive a boolean from the action.
+    assert 'as_favorite = (action == "accept_fav")' in accept_block
+    # The set_favorite call must be present + gated.
+    assert "if as_favorite:" in accept_block
+    assert "set_favorite(conn, meal_id, user_id, True)" in accept_block
 
 
 def test_count_unfinished_onboarding_by_step_shape():

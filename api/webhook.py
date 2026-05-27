@@ -380,27 +380,6 @@ _TEXT_INPUT_STATES = frozenset({
 })
 
 
-def _restore_main_menu(chat_id: int, locale: str) -> None:
-    """Send a short "what's next?" prompt carrying main_menu_keyboard
-    so the persistent reply keyboard is refreshed.
-
-    Used after flows that end with an inline-keyboard message (e.g. the
-    meal-saved confirmation with ⭐ / ✏️ / 🗑 inline buttons). Telegram
-    allows only one reply_markup per message, so we can't simultaneously
-    attach the inline action keyboard AND main_menu_keyboard. The
-    Telegram mobile client typically collapses the persistent reply
-    keyboard when the user taps 📎 to send a photo — without this
-    follow-up, users came out of the meal-save flow with no visible
-    reply keyboard until they /start. The body doubles as a friendly
-    nudge inviting the user to pick their next action.
-    """
-    send_message(
-        chat_id,
-        i18n_mod.t("main_menu.what_next", locale=locale),
-        reply_markup=main_menu_keyboard(locale=locale),
-    )
-
-
 # ---------- Main dispatcher ----------
 
 def process_update(update: dict) -> None:
@@ -1957,14 +1936,23 @@ def handle_moderation_callback(conn, cb: dict, profile: dict) -> None:
     message = cb.get("message", {})
     chat_id = message.get("chat", {}).get("id", user_id)
 
-    if action == "accept":
-        answer_callback_query(cb_id, _t("toast.saved_kg", profile))
+    if action in ("accept", "accept_fav"):
+        as_favorite = (action == "accept_fav")
+        toast_key = "favorite.added" if as_favorite else "toast.saved_kg"
+        answer_callback_query(cb_id, _t(toast_key, profile))
         pending = pop_pending_analysis(conn, user_id)
         if not pending:
             send_message(chat_id, _t("errors.pending_expired", profile))
             return
         analysis = pending["analysis"]
         meal_id = save_meal(conn, user_id, pending["meal_type"], analysis, pending["photo_file_id"] or "", pending["raw_response"])
+        # ⭐ Save-as-favorite path: stamp the new row immediately. Best-
+        # effort — if the favorite flip fails we still keep the meal.
+        if as_favorite:
+            try:
+                set_favorite(conn, meal_id, user_id, True)
+            except Exception as _fav_exc:
+                error("set_favorite_on_save_failed", exc=_fav_exc, user_id=user_id)
         upsert_daily_log_from_meal(conn, user_id, analysis)
         # /meals → ✏️ Edit replacement: now that the new meal is safely
         # saved, drop the row we're replacing and recompute that date's
@@ -1993,15 +1981,19 @@ def handle_moderation_callback(conn, cb: dict, profile: dict) -> None:
         # Pass health_profile so the minimal log message renders allergen /
         # Crohn warnings only for users who actually have those configured.
         health_profile = get_health_profile(conn, user_id)
+        # 2026-05: 3-message flow collapsed to 2. The confirmation message
+        # used to carry inline ⭐ / ✏️ / 🗑 buttons followed by a separate
+        # "What's next?" message that re-attached the persistent reply
+        # keyboard. We've moved ⭐ to the preview keyboard above and now
+        # attach `main_menu_keyboard` directly to this confirmation —
+        # one message does both jobs, the "What's next?" follow-up is
+        # dropped. Edit / Delete on a saved meal stay reachable via
+        # /today and /meals.
         send_message(
             chat_id,
             format_meal_logged(pending["meal_type"], analysis, today_log, cal_target, first_name, locale=i18n_mod.locale_of(profile), health_profile=health_profile),
-            reply_markup=meal_logged_actions_keyboard(meal_id, is_fav=False, locale=i18n_mod.locale_of(profile)),
+            reply_markup=main_menu_keyboard(locale=i18n_mod.locale_of(profile)),
         )
-        # Persistent reply keyboard often collapses during photo upload
-        # — restore it with a tiny follow-up so the user doesn't have to
-        # /start to get the 6-button menu back.
-        _restore_main_menu(chat_id, locale=i18n_mod.locale_of(profile))
 
     elif action == "recalc":
         answer_callback_query(cb_id, _t("toast.recalculating", profile))
@@ -2261,14 +2253,15 @@ def _save_barcode_meal(
     # Pass health_profile so the minimal log message renders allergen /
     # Crohn warnings only for users who actually have those configured.
     health_profile = get_health_profile(conn, user_id)
+    # 2026-05: matches the photo-Accept branch — single confirmation
+    # message with the reply keyboard attached, no inline buttons,
+    # no separate "What's next?" follow-up. Edit / Delete still
+    # reachable via /today and /meals.
     send_message(
         chat_id,
         format_meal_logged(pending["meal_type"], analysis, today_log, cal_target, first_name, locale=i18n_mod.locale_of(profile), health_profile=health_profile),
-        reply_markup=meal_logged_actions_keyboard(meal_id, is_fav=False, locale=i18n_mod.locale_of(profile)),
+        reply_markup=main_menu_keyboard(locale=i18n_mod.locale_of(profile)),
     )
-    # Restore the persistent reply keyboard that Telegram's photo-upload
-    # UI typically collapses (same rationale as the photo-Accept branch).
-    _restore_main_menu(chat_id, locale=i18n_mod.locale_of(profile))
 
 
 def handle_barcode_callback(conn, cb: dict, profile: dict) -> None:

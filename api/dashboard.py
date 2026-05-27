@@ -542,7 +542,12 @@ class handler(BaseHTTPRequestHandler):
 
         nonce = _new_nonce()
         try:
-            body = _render_dashboard(user, nonce=nonce, locale=locale)
+            # Pass the verified initData through to the shell so the
+            # Phase 2 JS bootstrap can re-authenticate the XHR even on
+            # entry paths where tg.initData (SDK) is empty after the
+            # form-submit navigation (chat-list "Open Mini App" etc).
+            body = _render_dashboard(user, nonce=nonce, locale=locale,
+                                     init_data=init_data)
         except Exception:
             print("dashboard render error:", traceback.format_exc(), flush=True)
             body = "<pre>Dashboard error (see logs)</pre>"
@@ -906,7 +911,8 @@ def _load_initial_data(user: dict, locale: str = "en") -> dict:
     }
 
 
-def _render_dashboard(user: dict, nonce: str = "", locale: str = "en") -> str:
+def _render_dashboard(user: dict, nonce: str = "", locale: str = "en",
+                     init_data: str = "") -> str:
     """Render the dashboard SHELL — layout + JS, no inlined data.
 
     2026-05 Phase 2: the shell renders fast (~50–150ms, no DB queries
@@ -917,6 +923,14 @@ def _render_dashboard(user: dict, nonce: str = "", locale: str = "en") -> str:
     ``window.__bootDashboard()`` — the rest of the existing inline
     script body — once data is available.
 
+    ``init_data`` is the Telegram WebApp HMAC-signed auth blob from the
+    POST form body. We stamp it into the rendered HTML as a JS global
+    so the Phase 2 bootstrap can re-authenticate the XHR even on entry
+    paths where `tg.initData` (SDK property) and `location.hash#tgWebAppData`
+    are both empty after form-submit navigation (chat-list "Open Mini
+    App" + direct t.me link). The bootstrap prefers this server-stamped
+    value over the SDK/hash fallbacks.
+
     User perceives the dashboard ~10× faster: the spinner sits on
     the shell HTML for ~500ms (cold) / ~150ms (warm) instead of
     waiting for the full data render before any HTML lands.
@@ -926,6 +940,11 @@ def _render_dashboard(user: dict, nonce: str = "", locale: str = "en") -> str:
         # 2026-05 Phase 2: empty data placeholder. JS fills it via XHR
         # before calling window.__bootDashboard().
         .replace("__DATA_JSON__", "null")
+        # JSON-encoded so it survives intact through the JS string literal
+        # regardless of special chars in the auth blob (it's url-encoded
+        # already but contains `&` separators we don't want to break out
+        # of an attribute).
+        .replace("__INIT_DATA_JSON__", _json_for_script(init_data or ""))
         .replace("__NONCE__", _esc(nonce))
         .replace("__LANG__", locale)
         .replace("__JS_LABELS__", _build_js_labels(locale))
@@ -1470,6 +1489,14 @@ _DASHBOARD_HTML = r"""<!DOCTYPE html>
 
 <script type="application/json" id="__data__">__DATA_JSON__</script>
 
+<!-- 2026-05 Phase 2: server-stamped Telegram auth blob from the
+     original form-body POST. Required because form-submit navigation
+     loses the URL hash that initially carried tgWebAppData for
+     non-in-chat entry paths (chat-list "Open Mini App", direct t.me
+     link). The bootstrap below reads this first; the legacy SDK +
+     hash fallbacks remain as defense-in-depth. -->
+<script nonce="__NONCE__">window.__INIT_DATA__ = __INIT_DATA_JSON__;</script>
+
 <!-- 2026-05 Phase 2 bootstrap: applies theme + TG.ready synchronously
      (so page chrome is correct immediately), then fetches initial_data
      via XHR and runs the existing dashboard init once data arrives.
@@ -1503,14 +1530,24 @@ _DASHBOARD_HTML = r"""<!DOCTYPE html>
     if (err) err.style.display = 'flex';
   }
 
-  // Two sources for the Telegram auth blob, mirroring the legacy GET
-  // bootstrap's `findInitData()`. The SDK property `tg.initData` works
-  // when Telegram has populated it (most chat-button + menu-button
-  // entries), but for other entry paths (chat-list "Open Mini App",
-  // direct t.me link) the auth arrives via the URL hash as
-  // `#tgWebAppData=...`. Missing the hash fallback caused the
-  // "Couldn't load the dashboard" error on chat-list opens.
+  // Three sources for the Telegram auth blob, preferred in order:
+  //  (1) `window.__INIT_DATA__` — server-stamped in this rendered HTML
+  //      from the original form-body POST. This is the most reliable
+  //      source: chat-list / direct-link opens go GET → POST form
+  //      submit, and the form-submit navigation LOSES the URL hash
+  //      that initially carried tgWebAppData. By the time this JS
+  //      runs on the POST-rendered shell, neither tg.initData nor
+  //      location.hash has the auth blob anymore for non-in-chat
+  //      contexts — but the POST handler received it and stamps it
+  //      back into the rendered HTML for us to use here.
+  //  (2) `tg.initData` — SDK property. Works for in-chat entry paths
+  //      (chat menu button, inline web_app button) where Telegram
+  //      keeps the chat context active.
+  //  (3) `location.hash#tgWebAppData=...` — URL hash. Initial entry
+  //      point for chat-list opens, but typically lost after the
+  //      form-submit navigation; kept here as defense-in-depth.
   function findInitData() {
+    if (window.__INIT_DATA__) return window.__INIT_DATA__;
     if (TG && TG.initData) return TG.initData;
     if (window.location.hash &&
         window.location.hash.indexOf('tgWebAppData') !== -1) {

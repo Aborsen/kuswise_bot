@@ -789,6 +789,23 @@ def handle_start(
         send_message(chat_id, welcome_message(first_name, locale=i18n_mod.locale_of(profile)), reply_markup=main_menu_keyboard(locale=i18n_mod.locale_of(profile)))
         return
 
+    # 2026-05: dedupe rapid `/start` re-taps mid-onboarding. If the
+    # user already received the intro+Q1 in the last 30 seconds (e.g.
+    # double-tapped /start by accident), don't reset their state and
+    # re-fire the whole sequence — they'd see a confusing duplicate
+    # welcome AND lose any in-progress answers. The first /start's
+    # keyboard is still active; they can just tap an answer.
+    if profile and (profile.get("onboarding_step") or "") not in ("", "done"):
+        from datetime import datetime as _dt, timezone as _tz
+        last = profile.get("updated_at")
+        if last:
+            try:
+                last_dt = _dt.fromisoformat(str(last).replace("Z", "+00:00"))
+                if (_dt.now(_tz.utc) - last_dt).total_seconds() < 30:
+                    return  # Rapid re-tap — silent no-op
+            except Exception:
+                pass  # Bad timestamp, fall through to the reset path
+
     # Fresh user or unfinished profile: kick off onboarding.
     profile = ensure_profile_row(conn, user_id)
     reset_onboarding(conn, user_id)

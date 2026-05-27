@@ -3340,6 +3340,27 @@ def test_profile_edit_timezone_label_localizes():
     assert "Часовий пояс" in uk
 
 
+def test_handle_start_dedupes_rapid_retaps():
+    """Source-grep guard: a /start fired within 30 seconds of a
+    previous one (while user is mid-onboarding) must NOT reset state
+    or re-send the intro+Q1. Double-taps were wiping in-progress
+    onboarding and spamming the welcome twice."""
+    import os
+    here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    src = open(os.path.join(here, "api", "webhook.py")).read()
+    handle_start_block = src.split("def handle_start(", 1)[1].split("\ndef ", 1)[0]
+    # The dedupe path must be present.
+    assert ".total_seconds() < 30" in handle_start_block, (
+        "handle_start must short-circuit when updated_at is within "
+        "30 seconds of now — guards against double-tap /start wiping "
+        "in-progress onboarding."
+    )
+    # The dedupe must only fire when the user is mid-onboarding (not
+    # done, not completely empty step) — otherwise it'd break the
+    # legitimate fresh-user path.
+    assert '("", "done")' in handle_start_block
+
+
 def test_handle_start_skips_lang_confirm_for_fresh_user():
     """The 2026-05 onboarding simplification: a fresh user must land
     at the first question directly, NOT at `awaiting_lang_confirm`.

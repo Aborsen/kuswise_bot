@@ -341,6 +341,42 @@ to distinguish "Vercel never invoked" (low `started` count) from
   observability that distinguishes "platform didn't invoke" from
   "code crashed." Don't trust a missing row to mean any specific cause.
 
+### 5.9 — Late `from X import Y` shadowed a module-level name inside `do_POST` (2026-05-27)
+
+`api/dashboard.py::do_POST` had a `from lib.database import
+get_profile` inside the `if action == "request_recap":` branch
+(added on 2026-04-25 as part of the share-recap feature). The
+same name was already imported at module level. Python's scoping
+rule: ANY assignment to a name inside a function makes that name
+local for the ENTIRE function. So when the locale block earlier
+in `do_POST` called `get_profile(_conn_for_locale, user_id)`, it
+hit `UnboundLocalError: cannot access local variable 'get_profile'
+where it is not associated with a value` — even though the
+module-level import was sitting right there.
+
+The locale block's broad `except Exception: locale = url_locale`
+swallowed the UnboundLocalError silently. `url_locale` is `'en'`
+for chat-list opens (the menu button URL has no `?lang=`) and
+`'uk'` for in-chat opens (the URL is built per-user with
+`?lang=<locale>`). Hence the in-chat/chat-list divergence —
+which looked exactly like a menu-button-URL caching bug and
+absorbed 6 wrong hotfixes today before a `print(traceback...)`
+in the except clause revealed the real error.
+
+- **Fix:** delete the redundant local import. The module-level
+  one (line ~40 of `api/dashboard.py`) is the only one needed.
+- **Commit:** TBD (this commit)
+- **Lesson:** Don't repeat a `from X import Y` inside a function
+  if `Y` is already imported at module level. Python's local-scope
+  rule fires on ANY assignment in the function — including
+  `from … import …` — regardless of WHERE in the function the
+  assignment sits. Broad `except Exception: locale = fallback`
+  clauses can hide this for months: the user just sees the
+  fallback. Add a `traceback.format_exc()` inside any such except
+  so a regression like this surfaces in runtime logs immediately.
+  Regression-tested in `test_smoke.py`
+  ::`test_dashboard_do_post_no_local_get_profile_import`.
+
 ### 5.8 — Dashboard XHR multipart/parse_qs mismatch (2026-05-27)
 
 Phase 2 dashboard refactor (`6b73de1`) split the page into a fast

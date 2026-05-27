@@ -3502,6 +3502,53 @@ def test_backfill_finish_onboarding_resolve_target_cal_paths():
     ) is None
 
 
+def test_dashboard_do_post_no_local_get_profile_import():
+    """Scar guard: a `from lib.database import get_profile` inside
+    `do_POST` makes Python treat `get_profile` as a local variable for
+    the WHOLE function, so the earlier locale-block reference at
+    `get_profile(_conn_for_locale, user_id)` fails with
+    `UnboundLocalError: cannot access local variable 'get_profile'`.
+
+    Diagnosed 2026-05-27 via Vercel runtime logs after a month of
+    chat-list opens showing English for UK users — the
+    UnboundLocalError was caught by the locale block's broad
+    `except Exception: locale = url_locale`, which silently fell
+    back to the URL hint ('en' for chat-list, 'uk' for in-chat) and
+    looked like a chat-menu-button registration bug.
+
+    `get_profile` is imported at module level. Late re-imports of
+    module-level names inside a function are a Python-scoping
+    footgun; any handler that needs the name must rely on the
+    module-level import."""
+    import os
+    here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    src = open(os.path.join(here, "api", "dashboard.py")).read()
+    # Slice from `def do_POST` to the end of the class body (next
+    # top-level `def ` or `class `).
+    post_start = src.index("def do_POST")
+    # The handler class ends at the next top-level def/class. Slice a
+    # generous bound; the regression only needs to cover do_POST.
+    tail = src[post_start:]
+    # End at the first `\n\nclass ` or `\n\ndef ` (top-level decl).
+    end_idx = len(tail)
+    for marker in ("\n\nclass ", "\n\ndef _", "\n\ndef "):
+        i = tail.find(marker)
+        if i != -1 and i < end_idx:
+            end_idx = i
+    body = tail[:end_idx]
+    assert "from lib.database import get_profile" not in body, (
+        "do_POST must NOT contain `from lib.database import "
+        "get_profile` (or any other locally-scoped import of a name "
+        "that's already imported at module level). The locale block "
+        "references `get_profile` BEFORE this late import would run, "
+        "and Python treats the late import as a local-scope binding "
+        "for the entire function → UnboundLocalError → the locale "
+        "block's broad except silently falls back to url_locale, "
+        "which is 'en' for chat-list opens. Trust the module-level "
+        "import on line ~40."
+    )
+
+
 def test_dashboard_initial_data_extracted_to_helper():
     """2026-05 Phase 1 dashboard refactor: data-loader extracted from
     `_render_dashboard` into a separate `_load_initial_data` function

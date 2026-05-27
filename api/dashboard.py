@@ -447,9 +447,6 @@ class handler(BaseHTTPRequestHandler):
         # Read the authoritative locale from the user's profile in DB.
         # Falls back to the URL-derived locale only when no profile row exists
         # yet (i.e. user has not started onboarding).
-        # Initialize OUTSIDE the try so the DIAG block below always has a
-        # defined variable to log, even if the try raises before assignment.
-        _profile_for_locale = None
         try:
             _conn_for_locale = get_conn()
             try:
@@ -463,60 +460,25 @@ class handler(BaseHTTPRequestHandler):
             from lib.i18n import locale_of as _locale_of
             locale = _locale_of(_profile_for_locale) if _profile_for_locale else url_locale
         except Exception:
-            # 2026-05-27 DIAG (chat-list opens in EN bug): if the locale
-            # block throws, log the traceback so we can see in Vercel
-            # runtime logs WHICH call failed (get_conn / init_db /
-            # get_profile) and WHY (connection? schema? type error?).
-            print(
-                "DIAG dashboard locale-block exception:",
-                traceback.format_exc(),
-                flush=True,
-            )
             locale = url_locale
-
-        # 2026-05-27 DIAG (chat-list opens in EN bug): one-line JSON per
-        # POST request that captures every input to the locale decision.
-        # Filter Vercel logs for "DIAG dashboard locale:" to see exactly
-        # what the server has when the user opens chat-list. Remove this
-        # block after the bug is resolved.
-        try:
-            _diag = {
-                "path": self.path,
-                "user_id": user_id,
-                "language_code": (
-                    user.get("language_code") if isinstance(user, dict) else None
-                ),
-                "form_lang": (
-                    (form.get("lang") or [""])[0] if isinstance(form, dict) else None
-                ),
-                "url_locale": url_locale,
-                "profile_lookup_ok": _profile_for_locale is not None,
-                "profile_lang_value": (
-                    _profile_for_locale.get("lang")
-                    if isinstance(_profile_for_locale, dict)
-                    else None
-                ),
-                "resolved_locale": locale,
-                "action": action,
-            }
-            print(
-                "DIAG dashboard locale:",
-                json.dumps(_diag, ensure_ascii=False),
-                flush=True,
-            )
-        except Exception:
-            print(
-                "DIAG dashboard locale: log-build error:",
-                traceback.format_exc(),
-                flush=True,
-            )
 
         # F-12.5 (dashboard share): generate the weekly recap PNG and send it
         # to the user's chat via the bot. Mini App stays on screen so the JS
         # can show a "card sent" toast → tg.close() shortly after.
         if action == "request_recap":
             from lib.recap import build_user_recap
-            from lib.database import get_profile
+            # NOTE: get_profile is imported at module level (line 40).
+            # Do NOT re-import it locally here — a local-scope `from
+            # lib.database import get_profile` inside this function
+            # makes Python treat `get_profile` as a LOCAL variable
+            # throughout do_POST, so the locale block above hits
+            # `UnboundLocalError: cannot access local variable
+            # 'get_profile' where it is not associated with a value`
+            # before this branch ever runs. That silently broke the
+            # locale-from-profile lookup on chat-list opens (the
+            # outer except caught the UnboundLocalError and fell back
+            # to url_locale = 'en'). Diagnosed via Vercel runtime
+            # logs 2026-05-27 after a month of confusion.
             from lib.telegram_helpers import send_photo
             conn = get_conn()
             try:

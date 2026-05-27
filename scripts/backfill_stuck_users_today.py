@@ -54,6 +54,7 @@ from lib import i18n as i18n_mod
 from lib.database import (
     get_conn,
     get_profile,
+    init_db,
     set_blocked,
     update_profile,
     upsert_water_target_from_profile,
@@ -341,6 +342,11 @@ def main() -> None:
     conn = get_conn()
     a_done = b_done = c_done = 0
     try:
+        # Ensure the latest schema (including nudge_mid_flow_sent_at)
+        # is applied before any read — `get_profile` SELECTs the full
+        # column list and would error on a stale prod schema.
+        init_db(conn)
+
         print("=== Action A: lang_confirm rescue ===")
         for uid in _ACTION_A_LANG_CONFIRM:
             outcome = _process_action_a(conn, uid, dry_run=args.dry_run)

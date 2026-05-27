@@ -1503,7 +1503,28 @@ _DASHBOARD_HTML = r"""<!DOCTYPE html>
     if (err) err.style.display = 'flex';
   }
 
-  var initData = (TG && TG.initData) || '';
+  // Two sources for the Telegram auth blob, mirroring the legacy GET
+  // bootstrap's `findInitData()`. The SDK property `tg.initData` works
+  // when Telegram has populated it (most chat-button + menu-button
+  // entries), but for other entry paths (chat-list "Open Mini App",
+  // direct t.me link) the auth arrives via the URL hash as
+  // `#tgWebAppData=...`. Missing the hash fallback caused the
+  // "Couldn't load the dashboard" error on chat-list opens.
+  function findInitData() {
+    if (TG && TG.initData) return TG.initData;
+    if (window.location.hash &&
+        window.location.hash.indexOf('tgWebAppData') !== -1) {
+      var hash = window.location.hash.charAt(0) === '#'
+        ? window.location.hash.substring(1) : window.location.hash;
+      try {
+        var params = new URLSearchParams(hash);
+        var raw = params.get('tgWebAppData');
+        if (raw) return raw;
+      } catch(e) {}
+    }
+    return '';
+  }
+  var initData = findInitData();
   if (!initData) { showShellError(); return; }
 
   var form = new FormData();

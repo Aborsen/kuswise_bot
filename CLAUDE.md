@@ -341,6 +341,40 @@ to distinguish "Vercel never invoked" (low `started` count) from
   observability that distinguishes "platform didn't invoke" from
   "code crashed." Don't trust a missing row to mean any specific cause.
 
+### 5.8 — Dashboard XHR multipart/parse_qs mismatch (2026-05-27)
+
+Phase 2 dashboard refactor (`6b73de1`) split the page into a fast
+shell + a follow-up XHR for the data blob. The XHR was built with
+`new FormData()`, which makes fetch send `multipart/form-data;
+boundary=...`. But the POST handler at `api/dashboard.py` line 421
+uses `urllib.parse.parse_qs(raw)`, which only understands
+`application/x-www-form-urlencoded`. On a multipart body, parse_qs
+returns garbage keys and `initData=""` → `_verify_init_data("")`
+returns None → server replies 401 → JS shell shows "Couldn't load
+the dashboard." Three downstream hotfixes (`0902824` URL-hash
+fallback, `e07c15b` server-stamp [reverted by `57b4bbd`],
+`b4d0a43` sessionStorage carry-through) all addressed
+`findInitData()` rather than the body encoding — none of them
+fixed the actual broken layer.
+
+- **Fix:** replace `new FormData()` with a literal
+  `'action=initial_data&initData=...&lang=...'` URL-encoded body +
+  explicit `Content-Type: application/x-www-form-urlencoded` header.
+  Pattern-identical to `fetchDay` and `request_recap` 200 lines
+  below in the same file, and to the documented fix in
+  `api/scan.py:297-301`.
+- **Commit:** `5ea42bc`
+- **Lesson:** When a serverless handler uses `parse_qs` to read the
+  body, ALL clients (form-submit POST nav, fetch XHRs, anything
+  else) MUST send `application/x-www-form-urlencoded`. `new
+  FormData()` quietly produces multipart, which `parse_qs` can't
+  decode. Either pick one body parser convention per handler and
+  hold the line, or add a multipart fallback (`api/barcode.py`
+  does this for file uploads). The codebase's choice is URL-encoded
+  for all dashboard XHRs — the regression test in
+  `tests/test_smoke.py::test_dashboard_initial_data_xhr_uses_urlencoded_not_formdata`
+  enforces it.
+
 ---
 
 ## 5. Cron + flow quick reference

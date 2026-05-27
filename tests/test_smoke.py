@@ -514,12 +514,23 @@ def test_onboarding_intro_localizes():
 
 
 def test_onboarding_ask_age_localizes():
+    """2026-05: age is now Q2 (sex took Q1). Numbering swapped."""
     en = i18n_mod.t("onboarding.ask_age", locale="en")
     uk = i18n_mod.t("onboarding.ask_age", locale="uk")
-    assert en.startswith("1/6")
-    assert uk.startswith("1/6")
+    assert en.startswith("2/6")
+    assert uk.startswith("2/6")
     assert "old" in en.lower()
     assert "років" in uk.lower()
+
+
+def test_onboarding_ask_sex_is_question_one():
+    """2026-05: sex moved from Q2 to Q1 — answering with a button tap
+    is meaningfully less friction than typing age first, especially
+    on the first interaction."""
+    en = i18n_mod.t("onboarding.ask_sex", locale="en")
+    uk = i18n_mod.t("onboarding.ask_sex", locale="uk")
+    assert en.startswith("1/6")
+    assert uk.startswith("1/6")
 
 
 def test_onboarding_done_format_kwargs():
@@ -3265,7 +3276,7 @@ def test_welcome_intro_sends_without_inline_lang_keyboard():
     here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     src = open(os.path.join(here, "api", "webhook.py")).read()
     helper_block = src.split(
-        "def _enter_onboarding_age_step(", 1
+        "def _enter_onboarding_first_question(", 1
     )[1].split("\ndef ", 1)[0]
     # The intro send is present, but does NOT pass reply_markup.
     assert 'i18n_mod.t("onboarding.intro"' in helper_block
@@ -3310,43 +3321,101 @@ def test_profile_edit_language_label_localizes():
 
 def test_handle_start_skips_lang_confirm_for_fresh_user():
     """The 2026-05 onboarding simplification: a fresh user must land
-    at `awaiting_age` directly, NOT at `awaiting_lang_confirm`. This
-    is the source-grep guard against the confirmation screen being
-    re-introduced.
-    """
+    at the first question directly, NOT at `awaiting_lang_confirm`.
+    Source-grep guard against the confirmation screen being
+    re-introduced."""
     import os
     here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     src = open(os.path.join(here, "api", "webhook.py")).read()
-    # The new fresh-user entry helper must exist.
-    assert "_enter_onboarding_age_step(" in src
-    # The handle_start body must invoke it (NOT set onboarding_step
-    # to awaiting_lang_confirm).
+    # The fresh-user entry helper must exist.
+    assert "_enter_onboarding_first_question(" in src
     handle_start_block = src.split("def handle_start(", 1)[1].split("\ndef ", 1)[0]
-    assert "_enter_onboarding_age_step" in handle_start_block
+    assert "_enter_onboarding_first_question" in handle_start_block
     assert 'onboarding_step="awaiting_lang_confirm"' not in handle_start_block
     # The old lang_confirm_keyboard call must be gone from handle_start.
     assert "lang_confirm_keyboard(" not in handle_start_block
 
 
-def test_enter_onboarding_age_step_advances_to_awaiting_age():
-    """Source-grep guard: the new helper must persist lang, stamp
-    lang_confirmed_at, and set onboarding_step='awaiting_age'. Each
-    of these is critical — missing any leaves the user in a dead
-    state."""
+def test_enter_onboarding_first_question_lands_at_awaiting_sex():
+    """2026-05: sex is now Q1, age is Q2. Source-grep guard that the
+    fresh-user entry helper:
+      * persists lang + stamps lang_confirmed_at
+      * sets onboarding_step='awaiting_sex' (NOT 'awaiting_age')
+      * sends the intro then ask_sex with the sex keyboard
+    """
     import os
     here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     src = open(os.path.join(here, "api", "webhook.py")).read()
     helper_block = src.split(
-        "def _enter_onboarding_age_step(", 1
+        "def _enter_onboarding_first_question(", 1
     )[1].split("\ndef ", 1)[0]
     assert "lang=lang" in helper_block
     assert "lang_confirmed_at=" in helper_block
-    assert 'onboarding_step="awaiting_age"' in helper_block
-    # Must send both the intro and the age question. No inline
-    # keyboard is attached — Profile is the sole language-switch
-    # surface for the new flow.
+    assert 'onboarding_step="awaiting_sex"' in helper_block
+    # The first question is sex (not age), shown with its keyboard.
     assert 'i18n_mod.t("onboarding.intro"' in helper_block
-    assert 'i18n_mod.t("onboarding.ask_age"' in helper_block
+    assert 'i18n_mod.t("onboarding.ask_sex"' in helper_block
+    assert "sex_keyboard(" in helper_block
+    # The old "ask_age as first question" must be gone.
+    assert 'i18n_mod.t("onboarding.ask_age"' not in helper_block
+
+
+def test_onb_sex_callback_advances_to_awaiting_age():
+    """The sex callback handler must now transition awaiting_sex →
+    awaiting_age (not awaiting_weight). Sex is Q1, age is Q2."""
+    import os
+    here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    src = open(os.path.join(here, "api", "webhook.py")).read()
+    # Find the onb:sex: handler block. It's inside
+    # handle_onboarding_callback so we slice on the data branch.
+    after = src.split('if data.startswith("onb:sex:"):', 1)[1]
+    block = after.split("\n    if data", 1)[0]
+    assert 'onboarding_step="awaiting_age"' in block
+    assert 'i18n_mod.t("onboarding.ask_age"' in block or \
+           '_t("onboarding.ask_age"' in block
+
+
+def test_awaiting_age_text_handler_advances_to_weight():
+    """The age text handler must advance to awaiting_weight (Q3)
+    after the 2026-05 reorder. Previously it advanced to
+    awaiting_sex (Q2)."""
+    import os
+    here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    src = open(os.path.join(here, "api", "webhook.py")).read()
+    after = src.split('if step == "awaiting_age":', 1)[1]
+    block = after.split("\n    elif step", 1)[0]
+    assert 'onboarding_step="awaiting_weight"' in block
+    assert '_t("onboarding.ask_weight"' in block
+
+
+def test_no_more_awaiting_confirm_step_in_happy_path():
+    """The 2026-05 simplification removes the calorie-review screen
+    that was stranding users at the finish line. Both terminal goal
+    paths (maintain and lose/gain via target_weight) must advance
+    directly to awaiting_tz, not awaiting_confirm.
+    """
+    import os
+    here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    src = open(os.path.join(here, "api", "webhook.py")).read()
+    # The maintain branch of the goal callback.
+    maintain_block = src.split(
+        '# maintain → compute target,', 1
+    )[1].split("        return\n", 1)[0]
+    assert 'onboarding_step="awaiting_tz"' in maintain_block
+    assert 'onboarding_step="awaiting_confirm"' not in maintain_block
+    assert "daily_calorie_target=rec" in maintain_block
+    # No confirm-calories keyboard in the maintain happy path —
+    # we're auto-accepting now.
+    assert "confirm_calories_keyboard(" not in maintain_block
+
+    # The lose/gain branch terminates at the target_weight text handler.
+    tw_block = src.split(
+        'elif step == "awaiting_target_weight":', 1
+    )[1].split("\n    elif step", 1)[0]
+    assert 'onboarding_step="awaiting_tz"' in tw_block
+    assert 'onboarding_step="awaiting_confirm"' not in tw_block
+    assert "daily_calorie_target=rec" in tw_block
+    assert "confirm_calories_keyboard(" not in tw_block
 
 
 def test_prof_lang_callback_handler_present():

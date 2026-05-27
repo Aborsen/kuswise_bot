@@ -10,8 +10,8 @@
   "lang_confirm_saved_en": "✅ Continuing in English 🇬🇧",
 
   "onboarding.intro": "👋 Hi! I'm KusWise Bot — your personal nutrition genie.\n\nTo calculate your ideal calorie target I need to learn a little about you. Six quick questions, takes about a minute. Ready? 🚀",
-  "onboarding.ask_age": "1/6 🎂 <b>How old are you?</b>\nJust the number (10–100). I won't tell anyone.",
-  "onboarding.ask_sex": "2/6 🚻 <b>Sex?</b>\nNeeded for the formula — different metabolism.",
+  "onboarding.ask_sex": "1/6 🚻 <b>Sex?</b>\nNeeded for the formula — different metabolism.",
+  "onboarding.ask_age": "2/6 🎂 <b>How old are you?</b>\nJust the number (10–100). I won't tell anyone.",
   "onboarding.ask_weight": "3/6 ⚖️ <b>How much do you weigh?</b> (in kilograms)\nDecimals OK (e.g. 75.5). Scales don't lie. Neither does the bot.",
   "onboarding.ask_height": "4/6 📏 <b>How tall are you?</b> (in centimeters)\nWhole number, 100–250. Don't add 'with shoes'.",
   "onboarding.ask_gym": "5/6 🏋️ <b>How often do you train per week?</b>\nBe honest. Couch doesn't count.",

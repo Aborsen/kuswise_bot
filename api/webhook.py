@@ -801,29 +801,33 @@ def handle_start(
     # message for the mis-detection rescue path. Single tap fixes
     # any wrong guess; the common (correct) case requires no taps.
     detected = i18n_mod.normalize_lang(language_code) if language_code else "en"
-    _enter_onboarding_age_step(conn, chat_id, user_id, detected)
+    _enter_onboarding_first_question(conn, chat_id, user_id, detected)
 
 
-def _enter_onboarding_age_step(
+def _enter_onboarding_first_question(
     conn,
     chat_id: int,
     user_id: int,
     lang: str,
 ) -> None:
-    """Set the user to ``awaiting_age`` in ``lang``, sync the chat-menu
+    """Set the user to ``awaiting_sex`` in ``lang``, sync the chat-menu
     button + slash-command autocomplete to that language, send the
-    standard onboarding intro (with an inline language-switcher
-    keyboard for mis-detection rescue), then send the age question.
+    welcome intro, then send the first question (sex) with its
+    keyboard.
+
+    2026-05: sex moved from question 2 to question 1 — answering it
+    with a single tap (button vs. typing age first) is meaningfully
+    less friction for the very first interaction. Age is now Q2.
 
     Shared by:
       * ``handle_start`` — fresh user, ``lang`` auto-detected from
         Telegram's language_code.
-      * ``onb:lang:*`` callback — both the legacy stuck-user cohort
-        (cached `lang_confirm_keyboard` taps) and the new welcome
-        switcher route here, giving them all identical end state.
+      * ``onb:lang:*`` callback — the legacy stuck-user cohort
+        (cached `lang_confirm_keyboard` taps) routes here for an
+        identical end state.
 
     Idempotent: safe to call on a user who is already at
-    ``awaiting_age`` — they just see the welcome + age question
+    ``awaiting_sex`` — they just see the welcome + sex question
     again in the chosen language.
     """
     from datetime import datetime as _dt, timezone as _tz
@@ -831,7 +835,7 @@ def _enter_onboarding_age_step(
         conn, user_id,
         lang=lang,
         lang_confirmed_at=_dt.now(_tz.utc).isoformat(),
-        onboarding_step="awaiting_age",
+        onboarding_step="awaiting_sex",
     )
     # Pin a chat-scoped `/` command menu in the chosen language so
     # autocomplete flips immediately (otherwise an EN-UI user whose
@@ -849,7 +853,7 @@ def _enter_onboarding_age_step(
         set_chat_menu_button(chat_id=chat_id, locale=lang)
     except Exception as e:
         print("set_chat_menu_button (onb_intro) error:", e, flush=True)
-    # Welcome intro + first question, both in the auto-detected
+    # Welcome intro + sex question, both in the auto-detected
     # language. No inline language picker — users who want to switch
     # discover it under /profile → 🌐 Language (or via the typed
     # /language command). Trade-off accepted: Russian/Belarusian
@@ -861,7 +865,8 @@ def _enter_onboarding_age_step(
     )
     send_message(
         chat_id,
-        i18n_mod.t("onboarding.ask_age", locale=lang),
+        i18n_mod.t("onboarding.ask_sex", locale=lang),
+        reply_markup=sex_keyboard(locale=lang),
     )
 
 
@@ -996,8 +1001,9 @@ def handle_onboarding_text(conn, chat_id: int, user_id: int, first_name: str | N
         if not (10 <= age <= 100):
             send_message(chat_id, _t("onboarding.age_range", profile))
             return
-        update_profile(conn, user_id, age=age, onboarding_step="awaiting_sex")
-        send_message(chat_id, _t("onboarding.ask_sex", profile), reply_markup=sex_keyboard(locale=i18n_mod.locale_of(profile)))
+        # 2026-05: sex moved to Q1, so age (Q2) advances to weight (Q3).
+        update_profile(conn, user_id, age=age, onboarding_step="awaiting_weight")
+        send_message(chat_id, _t("onboarding.ask_weight", profile))
 
     elif step == "awaiting_sex":
         send_message(chat_id, _t("onboarding.need_button", profile), reply_markup=sex_keyboard(locale=i18n_mod.locale_of(profile)))
@@ -1047,19 +1053,27 @@ def handle_onboarding_text(conn, chat_id: int, user_id: int, first_name: str | N
             if goal == "gain" and tw <= float(current_w):
                 send_message(chat_id, _t("target_weight.gain_mismatch", profile, current=current_w))
                 return
+        # 2026-05: skip the `awaiting_confirm` review screen — auto-
+        # accept the calculated target and advance straight to
+        # timezone. Same rationale as the maintain branch above.
         rec = calorie_target_from_profile(float(current_w or 70), goal)
         update_profile(
             conn, user_id,
             target_weight_kg=float(tw),
             recommended_calorie_target=rec,
-            onboarding_step="awaiting_confirm",
+            daily_calorie_target=rec,
+            onboarding_step="awaiting_tz",
         )
         profile_after = get_profile(conn, user_id) or {}
         send_message(chat_id, _t("target_weight.saved", profile, target=tw))
         send_message(
             chat_id,
             format_recommendation(profile_after, rec, locale=i18n_mod.locale_of(profile_after)),
-            reply_markup=confirm_calories_keyboard(locale=i18n_mod.locale_of(profile)),
+        )
+        send_message(
+            chat_id,
+            _t("onboarding.ask_tz", profile),
+            reply_markup=tz_keyboard(prefix="onb:tz", locale=i18n_mod.locale_of(profile)),
         )
 
     elif step == "awaiting_confirm":
@@ -1098,9 +1112,10 @@ def handle_onboarding_text(conn, chat_id: int, user_id: int, first_name: str | N
         _finalize_onboarding(conn, chat_id, user_id, first_name)
 
     else:
-        # Unexpected state — restart
+        # Unexpected state — restart from Q1 (sex).
         reset_onboarding(conn, user_id)
-        send_message(chat_id, _t("onboarding.ask_age", profile))
+        send_message(chat_id, _t("onboarding.ask_sex", profile),
+                     reply_markup=sex_keyboard(locale=i18n_mod.locale_of(profile)))
 
 
 def handle_onboarding_callback(conn, cb: dict) -> None:
@@ -1114,23 +1129,22 @@ def handle_onboarding_callback(conn, cb: dict) -> None:
     profile = ensure_profile_row(conn, user_id)
     step = profile.get("onboarding_step") or "awaiting_age"
 
-    # Allow restart from the profile screen regardless of step
+    # Allow restart from the profile screen regardless of step.
+    # Starts at Q1 (sex) after the 2026-05 question reorder.
     if data == "onb:restart":
         answer_callback_query(cb_id, _t("toast.restart", profile))
         reset_onboarding(conn, user_id)
         send_message(chat_id, _t("onboarding.intro", profile))
-        send_message(chat_id, _t("onboarding.ask_age", profile))
+        send_message(chat_id, _t("onboarding.ask_sex", profile),
+                     reply_markup=sex_keyboard(locale=i18n_mod.locale_of(profile)))
         return
 
-    # Onboarding language switcher — reused by both:
-    #   (a) the legacy `lang_confirm_keyboard` (cached in chat history
-    #       of any user who was at `awaiting_lang_confirm` before the
-    #       2026-05 simplification removed that step), and
-    #   (b) the new `welcome_lang_inline_keyboard` attached to fresh-
-    #       user welcome messages — the mis-detection rescue path.
-    # Same end state in both cases: lang persisted, step advanced to
-    # `awaiting_age` (or kept there), intro + first question re-sent
-    # in the chosen language.
+    # Onboarding language switcher — covers the legacy
+    # `lang_confirm_keyboard` taps cached in any stuck user's chat
+    # history from before the 2026-05 simplification removed that
+    # step. Lang persisted, step advanced to `awaiting_sex` (or
+    # kept there), intro + first question (Q1 = sex) re-sent in the
+    # chosen language.
     if data.startswith("onb:lang:"):
         chosen = data.split(":", 2)[2]
         if chosen not in i18n_mod.supported_langs():
@@ -1138,7 +1152,7 @@ def handle_onboarding_callback(conn, cb: dict) -> None:
             return
         ack_key = "lang_confirm_saved_" + chosen
         answer_callback_query(cb_id, i18n_mod.t(ack_key, locale=chosen))
-        _enter_onboarding_age_step(conn, chat_id, user_id, chosen)
+        _enter_onboarding_first_question(conn, chat_id, user_id, chosen)
         return
 
     if data.startswith("onb:sex:"):
@@ -1149,9 +1163,10 @@ def handle_onboarding_callback(conn, cb: dict) -> None:
         if sex not in ("male", "female"):
             answer_callback_query(cb_id, _t("toast.invalid", profile))
             return
-        update_profile(conn, user_id, sex=sex, onboarding_step="awaiting_weight")
+        # 2026-05: sex is now Q1 (advanced to age, not weight).
+        update_profile(conn, user_id, sex=sex, onboarding_step="awaiting_age")
         answer_callback_query(cb_id, _t("toast.saved", profile))
-        send_message(chat_id, _t("onboarding.ask_weight", profile))
+        send_message(chat_id, _t("onboarding.ask_age", profile))
         return
 
     if data.startswith("onb:gym:"):
@@ -1179,7 +1194,9 @@ def handle_onboarding_callback(conn, cb: dict) -> None:
         if not updated.get("weight_kg"):
             reset_onboarding(conn, user_id)
             answer_callback_query(cb_id, _t("toast.something_wrong", profile))
-            send_message(chat_id, _t("onboarding.ask_age", profile))
+            # Restart from Q1 (sex) after the 2026-05 question reorder.
+            send_message(chat_id, _t("onboarding.ask_sex", profile),
+                         reply_markup=sex_keyboard(locale=i18n_mod.locale_of(profile)))
             return
 
         # lose / gain → ask the motivation target weight first, then recommendation.
@@ -1195,21 +1212,33 @@ def handle_onboarding_callback(conn, cb: dict) -> None:
             send_message(chat_id, prompt)
             return
 
-        # maintain → straight to the calorie recommendation (no target weight needed).
+        # maintain → compute target, skip the review screen, advance
+        # straight to timezone. 2026-05: removed `awaiting_confirm`
+        # because users were ghosting at the finish-line review
+        # (4 stuck on the confirm step, 3 stuck on the custom-calorie
+        # follow-up). Profile screen lets them adjust later.
         rec = calorie_target_from_profile(float(updated["weight_kg"]), goal)
         update_profile(
             conn, user_id,
             goal=goal,
             target_weight_kg=None,
             recommended_calorie_target=rec,
-            onboarding_step="awaiting_confirm",
+            daily_calorie_target=rec,
+            onboarding_step="awaiting_tz",
         )
         answer_callback_query(cb_id, _t("toast.calculating", profile))
         profile_after = get_profile(conn, user_id) or {}
+        # Show the calculated target as informational text (no
+        # accept/reject keyboard) so the user sees what we computed
+        # without needing to act on it.
         send_message(
             chat_id,
             format_recommendation(profile_after, rec, locale=i18n_mod.locale_of(profile_after)),
-            reply_markup=confirm_calories_keyboard(locale=i18n_mod.locale_of(profile)),
+        )
+        send_message(
+            chat_id,
+            _t("onboarding.ask_tz", profile),
+            reply_markup=tz_keyboard(prefix="onb:tz", locale=i18n_mod.locale_of(profile)),
         )
         return
 

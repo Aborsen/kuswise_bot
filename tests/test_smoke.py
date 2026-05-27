@@ -3290,10 +3290,12 @@ def test_welcome_intro_sends_without_inline_lang_keyboard():
     )
 
 
-def test_profile_edit_keyboard_includes_language_button():
+def test_profile_edit_keyboard_includes_language_and_timezone_buttons():
     """After the 2026-05 onboarding simplification, /profile must
-    surface a 🌐 Language button so users discover the switcher
-    without having to know the /language command exists."""
+    surface BOTH the 🌐 Language and 🌍 Timezone buttons so users
+    discover the switchers without having to know the /language
+    and /timezone commands exist. Weekly-Goal was removed to make
+    room for Timezone (since onboarding no longer asks for it)."""
     from lib.telegram_helpers import profile_edit_keyboard
     for locale in ("en", "uk"):
         kb = profile_edit_keyboard(locale=locale)
@@ -3304,6 +3306,15 @@ def test_profile_edit_keyboard_includes_language_button():
         assert "prof:lang" in callbacks, (
             f"profile_edit_keyboard({locale!r}) missing the 🌐 Language "
             f"button (callback `prof:lang`)"
+        )
+        assert "prof:timezone" in callbacks, (
+            f"profile_edit_keyboard({locale!r}) missing the 🌍 Timezone "
+            f"button (callback `prof:timezone`)"
+        )
+        # Weekly Goal was replaced by Timezone — it should NOT appear.
+        assert "prof:weekly_delta" not in callbacks, (
+            f"profile_edit_keyboard({locale!r}) still has the legacy "
+            f"Weekly Goal button — should have been replaced by Timezone"
         )
 
 
@@ -3317,6 +3328,16 @@ def test_profile_edit_language_label_localizes():
     # Locale-specific words to guard against accidental cross-pollination.
     assert "Language" in en
     assert "Мова" in uk
+
+
+def test_profile_edit_timezone_label_localizes():
+    """Label for the new Timezone button must render in both locales."""
+    en = i18n_mod.t("profile_edit.timezone", locale="en")
+    uk = i18n_mod.t("profile_edit.timezone", locale="uk")
+    assert "🌍" in en
+    assert "🌍" in uk
+    assert "Timezone" in en
+    assert "Часовий пояс" in uk
 
 
 def test_handle_start_skips_lang_confirm_for_fresh_user():
@@ -3388,34 +3409,54 @@ def test_awaiting_age_text_handler_advances_to_weight():
     assert '_t("onboarding.ask_weight"' in block
 
 
-def test_no_more_awaiting_confirm_step_in_happy_path():
-    """The 2026-05 simplification removes the calorie-review screen
-    that was stranding users at the finish line. Both terminal goal
-    paths (maintain and lose/gain via target_weight) must advance
-    directly to awaiting_tz, not awaiting_confirm.
+def test_happy_path_finalises_without_confirm_or_tz_screens():
+    """The 2026-05 simplification removes BOTH the calorie-review
+    screen AND the timezone picker from the happy path. Both terminal
+    goal paths (maintain, and lose/gain via target_weight) must:
+
+      * set `daily_calorie_target` to the calculated value
+      * default `tz` to `Europe/Kyiv`
+      * set `onboarding_step="done"` directly (no `awaiting_tz`,
+        no `awaiting_confirm`)
+      * NOT send the `format_recommendation` "🧮 Calculated!" message
+      * NOT send a tz-keyboard prompt
+
+    The user can change timezone or calorie target later via /profile.
     """
     import os
     here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     src = open(os.path.join(here, "api", "webhook.py")).read()
-    # The maintain branch of the goal callback.
+
+    # --- Maintain branch of the goal callback ---
     maintain_block = src.split(
         '# maintain → compute target,', 1
     )[1].split("        return\n", 1)[0]
-    assert 'onboarding_step="awaiting_tz"' in maintain_block
+    assert 'onboarding_step="done"' in maintain_block
+    assert 'onboarding_step="awaiting_tz"' not in maintain_block
     assert 'onboarding_step="awaiting_confirm"' not in maintain_block
+    assert 'tz="Europe/Kyiv"' in maintain_block
     assert "daily_calorie_target=rec" in maintain_block
-    # No confirm-calories keyboard in the maintain happy path —
-    # we're auto-accepting now.
+    # No review or picker keyboards.
     assert "confirm_calories_keyboard(" not in maintain_block
+    assert "tz_keyboard(" not in maintain_block
+    # No "🧮 Calculated!" recommendation card.
+    assert "format_recommendation(" not in maintain_block
+    # Finalisation must be called directly.
+    assert "_finalize_onboarding(" in maintain_block
 
-    # The lose/gain branch terminates at the target_weight text handler.
+    # --- Lose/gain branch terminates at the target_weight text handler ---
     tw_block = src.split(
         'elif step == "awaiting_target_weight":', 1
     )[1].split("\n    elif step", 1)[0]
-    assert 'onboarding_step="awaiting_tz"' in tw_block
+    assert 'onboarding_step="done"' in tw_block
+    assert 'onboarding_step="awaiting_tz"' not in tw_block
     assert 'onboarding_step="awaiting_confirm"' not in tw_block
+    assert 'tz="Europe/Kyiv"' in tw_block
     assert "daily_calorie_target=rec" in tw_block
     assert "confirm_calories_keyboard(" not in tw_block
+    assert "tz_keyboard(" not in tw_block
+    assert "format_recommendation(" not in tw_block
+    assert "_finalize_onboarding(" in tw_block
 
 
 def test_prof_lang_callback_handler_present():
@@ -3430,6 +3471,23 @@ def test_prof_lang_callback_handler_present():
     )[1].split("\ndef ", 1)[0]
     assert 'data == "prof:lang"' in profile_block
     assert "language_keyboard()" in profile_block
+
+
+def test_prof_timezone_callback_handler_present():
+    """The Profile screen's 🌍 Timezone button needs a `prof:timezone`
+    callback that opens the tz picker (same flow as the /timezone
+    command). Critical because onboarding no longer asks for tz —
+    /profile must be a discoverable way to change it."""
+    import os
+    here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    src = open(os.path.join(here, "api", "webhook.py")).read()
+    profile_block = src.split(
+        "def handle_profile_edit_callback(", 1
+    )[1].split("\ndef ", 1)[0]
+    assert 'data == "prof:timezone"' in profile_block
+    # Reuses the same `tz:set` callback prefix as /timezone — that
+    # routes through handle_timezone_callback. No new tz handler needed.
+    assert 'prefix="tz:set"' in profile_block
 
 
 def test_record_cron_run_body_unchanged_phase_a():

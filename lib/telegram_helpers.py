@@ -615,10 +615,14 @@ def tz_keyboard(prefix: str = "tz:set", locale: str = "en") -> dict:
 def profile_edit_keyboard(locale: str = "en") -> dict:
     """Quick-edit actions shown under the /profile message.
 
-    2026-05: added Language row so users discover the switcher without
-    having to type `/language`. Removing the onboarding lang-confirm
-    step meant the only post-onboarding language path was the typed
-    `/language` command, which is invisible to most users.
+    2026-05 changes (in order):
+      * Added a Language row so users discover the switcher without
+        having to know the `/language` typed command exists.
+      * Replaced the "Weekly Goal" button with "Timezone" — onboarding
+        no longer asks for timezone (defaults to Europe/Kyiv) so we
+        need a discoverable post-onboarding switch. Weekly delta
+        editing is still reachable via the `/goals` command for the
+        small audience that uses it.
     """
     return {
         "inline_keyboard": [
@@ -628,7 +632,7 @@ def profile_edit_keyboard(locale: str = "en") -> dict:
             ],
             [
                 {"text": _i18n_t("profile_edit.target_weight", locale=locale), "callback_data": "prof:target_weight"},
-                {"text": _i18n_t("profile_edit.weekly_delta",  locale=locale), "callback_data": "prof:weekly_delta"},
+                {"text": _i18n_t("profile_edit.timezone",      locale=locale), "callback_data": "prof:timezone"},
             ],
             [
                 {"text": _i18n_t("profile_edit.water_goal", locale=locale), "callback_data": "prof:water"},

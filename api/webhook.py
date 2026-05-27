@@ -1053,28 +1053,22 @@ def handle_onboarding_text(conn, chat_id: int, user_id: int, first_name: str | N
             if goal == "gain" and tw <= float(current_w):
                 send_message(chat_id, _t("target_weight.gain_mismatch", profile, current=current_w))
                 return
-        # 2026-05: skip the `awaiting_confirm` review screen — auto-
-        # accept the calculated target and advance straight to
-        # timezone. Same rationale as the maintain branch above.
+        # 2026-05: skip both `awaiting_confirm` and `awaiting_tz` —
+        # auto-accept the calculated target, default tz to Kyiv, and
+        # finalise immediately. Same rationale as the maintain
+        # branch in the goal callback: each extra step at the finish
+        # line was bouncing users.
         rec = calorie_target_from_profile(float(current_w or 70), goal)
         update_profile(
             conn, user_id,
             target_weight_kg=float(tw),
             recommended_calorie_target=rec,
             daily_calorie_target=rec,
-            onboarding_step="awaiting_tz",
+            tz="Europe/Kyiv",
+            onboarding_step="done",
         )
-        profile_after = get_profile(conn, user_id) or {}
         send_message(chat_id, _t("target_weight.saved", profile, target=tw))
-        send_message(
-            chat_id,
-            format_recommendation(profile_after, rec, locale=i18n_mod.locale_of(profile_after)),
-        )
-        send_message(
-            chat_id,
-            _t("onboarding.ask_tz", profile),
-            reply_markup=tz_keyboard(prefix="onb:tz", locale=i18n_mod.locale_of(profile)),
-        )
+        _finalize_onboarding(conn, chat_id, user_id, first_name)
 
     elif step == "awaiting_confirm":
         send_message(chat_id, _t("onboarding.need_button", profile), reply_markup=confirm_calories_keyboard(locale=i18n_mod.locale_of(profile)))
@@ -1212,11 +1206,12 @@ def handle_onboarding_callback(conn, cb: dict) -> None:
             send_message(chat_id, prompt)
             return
 
-        # maintain → compute target, skip the review screen, advance
-        # straight to timezone. 2026-05: removed `awaiting_confirm`
-        # because users were ghosting at the finish-line review
-        # (4 stuck on the confirm step, 3 stuck on the custom-calorie
-        # follow-up). Profile screen lets them adjust later.
+        # maintain → compute target, default tz to Kyiv, finalise
+        # immediately. 2026-05: removed both the `awaiting_confirm`
+        # review screen AND the `awaiting_tz` picker because each
+        # was bouncing users at the finish line. Defaults are good
+        # enough; the user can change timezone via /profile or the
+        # daily_calorie_target via the same screen later.
         rec = calorie_target_from_profile(float(updated["weight_kg"]), goal)
         update_profile(
             conn, user_id,
@@ -1224,22 +1219,11 @@ def handle_onboarding_callback(conn, cb: dict) -> None:
             target_weight_kg=None,
             recommended_calorie_target=rec,
             daily_calorie_target=rec,
-            onboarding_step="awaiting_tz",
+            tz="Europe/Kyiv",
+            onboarding_step="done",
         )
-        answer_callback_query(cb_id, _t("toast.calculating", profile))
-        profile_after = get_profile(conn, user_id) or {}
-        # Show the calculated target as informational text (no
-        # accept/reject keyboard) so the user sees what we computed
-        # without needing to act on it.
-        send_message(
-            chat_id,
-            format_recommendation(profile_after, rec, locale=i18n_mod.locale_of(profile_after)),
-        )
-        send_message(
-            chat_id,
-            _t("onboarding.ask_tz", profile),
-            reply_markup=tz_keyboard(prefix="onb:tz", locale=i18n_mod.locale_of(profile)),
-        )
+        answer_callback_query(cb_id, _t("toast.saved", profile))
+        _finalize_onboarding(conn, chat_id, user_id, first_name)
         return
 
     if data == "onb:cal:accept":
@@ -4035,6 +4019,21 @@ def handle_profile_edit_callback(conn, cb: dict, profile: dict) -> None:
             chat_id,
             i18n_mod.t("language_prompt", locale=lang, current=cur_label),
             reply_markup=language_keyboard(),
+        )
+        return
+
+    # prof:timezone → open the timezone picker (same flow as the
+    # /timezone command). Surfaced on /profile because onboarding no
+    # longer asks for timezone (defaults to Europe/Kyiv). The actual
+    # switch happens via the existing `tz:set:*` callback handled by
+    # `handle_timezone_callback`.
+    if data == "prof:timezone":
+        answer_callback_query(cb_id)
+        cur = (profile or {}).get("tz") or "Europe/Kyiv"
+        send_message(
+            chat_id,
+            _t("timezone.prompt", profile, current=cur),
+            reply_markup=tz_keyboard(prefix="tz:set", locale=i18n_mod.locale_of(profile)),
         )
         return
 

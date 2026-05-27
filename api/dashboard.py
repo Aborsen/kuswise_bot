@@ -130,6 +130,36 @@ def _locale_from_request(path: str, form: dict | None = None) -> str:
             pass
     return "en"
 
+
+def _resolve_dashboard_locale(
+    user: dict, profile: dict | None, url_locale: str
+) -> str:
+    """Locale priority for the authenticated dashboard render.
+
+    1. ``profile.lang`` from DB — authoritative. Set by /language and
+       by onboarding's first-question handoff. Survives device-locale
+       changes and is the user's explicit choice.
+    2. Telegram's ``user.language_code`` (always present on initData)
+       via ``normalize_lang`` — reliable middle ground when profile
+       doesn't have a recognized lang yet. A Ukrainian device resolves
+       to ``uk`` even with no profile row and no ``?lang=`` URL hint.
+    3. ``url_locale`` — last resort. Only the in-chat inline button
+       URL carries ``?lang=`` (built by ``_build_miniapp_url``); the
+       chat-list Mini App menu button URL has none (set globally via
+       ``setChatMenuButton`` with no per-user context). Without a
+       Telegram fallback, chat-list opens for non-EN users were
+       defaulting to EN on profile.lang lookups that didn't return a
+       recognized value.
+    """
+    profile_lang = (profile or {}).get("lang") if isinstance(profile, dict) else None
+    if profile_lang in ("en", "uk"):
+        return profile_lang
+    from lib.i18n import normalize_lang
+    tg_lang = normalize_lang(user.get("language_code") if isinstance(user, dict) else None)
+    if tg_lang in ("en", "uk"):
+        return tg_lang
+    return url_locale
+
 setup_sentry("dashboard")
 
 
@@ -444,9 +474,13 @@ class handler(BaseHTTPRequestHandler):
         user_id = user["id"]
         first_name = user.get("first_name") or None
 
-        # Read the authoritative locale from the user's profile in DB.
-        # Falls back to the URL-derived locale only when no profile row exists
-        # yet (i.e. user has not started onboarding).
+        # F-2b Chunk 7+: locale resolution priority for the authenticated
+        # dashboard render. See `_resolve_dashboard_locale` docstring —
+        # profile.lang wins, Telegram's user.language_code is the
+        # reliable middle ground, URL is last resort. Without the
+        # Telegram fallback the chat-list path defaulted to EN for
+        # every user whose profile.lang wasn't a recognized value,
+        # because the chat-list menu button URL carries no ?lang=.
         try:
             _conn_for_locale = get_conn()
             try:
@@ -457,8 +491,7 @@ class handler(BaseHTTPRequestHandler):
                     _conn_for_locale.close()
                 except Exception:
                     pass
-            from lib.i18n import locale_of as _locale_of
-            locale = _locale_of(_profile_for_locale) if _profile_for_locale else url_locale
+            locale = _resolve_dashboard_locale(user, _profile_for_locale, url_locale)
         except Exception:
             locale = url_locale
 

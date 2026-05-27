@@ -3610,6 +3610,54 @@ def test_dashboard_initial_data_xhr_uses_urlencoded_not_formdata():
     assert "'Content-Type': 'application/x-www-form-urlencoded'" in src
 
 
+def test_dashboard_locale_profile_lang_wins():
+    """2026-05 locale fallback fix: when profile.lang is a recognized
+    value, it's the authoritative choice — Telegram language_code
+    and URL hint are both ignored. Set via /language or by onboarding."""
+    import importlib
+    ds = importlib.import_module("api.dashboard")
+    user = {"id": 1, "language_code": "en"}  # Telegram says EN
+    profile = {"lang": "uk"}                  # but user explicitly chose UK
+    assert ds._resolve_dashboard_locale(user, profile, url_locale="en") == "uk"
+
+
+def test_dashboard_locale_falls_back_to_telegram_language_code():
+    """2026-05 locale fallback fix: when profile.lang is None/missing,
+    the dashboard must use Telegram's user.language_code (always
+    present in initData) BEFORE falling back to the URL hint.
+
+    This is the actual bug fix — without this fallback, the chat-list
+    "Open Mini App" path (URL has no ?lang= because setChatMenuButton
+    is set globally without per-user context) was defaulting to EN
+    for every user whose profile.lang wasn't set yet."""
+    import importlib
+    ds = importlib.import_module("api.dashboard")
+    user = {"id": 1, "language_code": "uk"}
+    # No profile row at all → Telegram language_code wins, URL ignored.
+    assert ds._resolve_dashboard_locale(user, None, url_locale="en") == "uk"
+    # Profile exists but lang is None → same fallback.
+    assert ds._resolve_dashboard_locale(user, {"lang": None}, url_locale="en") == "uk"
+    # Slavic neighbour code (ru) → still resolves to uk via normalize_lang.
+    assert ds._resolve_dashboard_locale(
+        {"id": 1, "language_code": "ru"}, None, url_locale="en"
+    ) == "uk"
+
+
+def test_dashboard_locale_telegram_en_returns_en():
+    """2026-05 locale fallback fix: an EN-language device with no
+    profile.lang resolves to EN regardless of URL hint."""
+    import importlib
+    ds = importlib.import_module("api.dashboard")
+    user = {"id": 1, "language_code": "en"}
+    assert ds._resolve_dashboard_locale(user, None, url_locale="uk") == "en"
+    # Unknown language code → normalize_lang returns 'en' → EN.
+    assert ds._resolve_dashboard_locale(
+        {"id": 1, "language_code": "de"}, None, url_locale="uk"
+    ) == "en"
+    # Missing language_code → normalize_lang returns 'en' → EN.
+    assert ds._resolve_dashboard_locale({"id": 1}, None, url_locale="uk") == "en"
+
+
 def test_dashboard_initial_data_post_action_present():
     """The POST handler must dispatch `action == 'initial_data'`
     to a JSON response branch (vs. the legacy HTML render path).

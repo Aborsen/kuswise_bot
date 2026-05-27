@@ -23,7 +23,7 @@
     },
     {
       "path": "/api/cron_health_monitor",
-      "schedule": "0 9 * * *"
+      "schedule": "0 6 * * *"
     }
   ]
 }

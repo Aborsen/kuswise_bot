@@ -575,6 +575,8 @@
   "dash.nav_overview":           "Overview",
   "dash.nav_meals":              "Meals",
   "dash.nav_profile":            "Profile",
+  "dash.loading_failed":         "Couldn't load the dashboard.",
+  "dash.retry":                  "Retry",
   "dash.share_status_preparing": "🍳 Preparing card…",
   "dash.share_status_sent":      "✓ Card sent — closing",
   "dash.share_status_failed":    "❌ Failed — try again",

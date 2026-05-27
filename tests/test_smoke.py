@@ -3518,6 +3518,58 @@ def test_dashboard_initial_data_extracted_to_helper():
     )
 
 
+def test_dashboard_render_no_longer_inlines_data():
+    """2026-05 Phase 2: `_render_dashboard` returns a SHELL HTML —
+    no DB queries inside, no data baked into the response. The
+    user-perceived 5–7s spinner is replaced by ~500ms TTFB + an XHR
+    that fills the cards as data arrives.
+
+    Source-grep guard: `_render_dashboard` must NOT call
+    `_load_initial_data`, must NOT call any `get_*` DB helper,
+    and must replace `__DATA_JSON__` with the literal string
+    `"null"` (placeholder for client-side JSON.parse)."""
+    import os
+    here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    src = open(os.path.join(here, "api", "dashboard.py")).read()
+    block = src.split(
+        "def _render_dashboard(", 1
+    )[1].split("\ndef ", 1)[0]
+    # No data fetch inside the render.
+    assert "_load_initial_data(" not in block, (
+        "_render_dashboard must NOT load data inline — that happens "
+        "via the action=initial_data XHR after the shell renders"
+    )
+    assert "get_profile(" not in block
+    assert "get_history(" not in block
+    assert "get_adherence_stats(" not in block
+    # Data placeholder is 'null'; JS fills it via XHR.
+    assert '"null"' in block, (
+        "Data placeholder must be the literal string \"null\" — JS "
+        "parses it via JSON.parse and waits for XHR to fill in real data"
+    )
+
+
+def test_dashboard_html_contains_bootstrap_and_boot_function():
+    """The dashboard shell HTML must include both:
+      (a) the bootstrap script that fetches initial_data via XHR
+      (b) `window.__bootDashboard = function() { ... };` wrapper that
+          runs once the XHR completes
+    Source-grep guard so the two pieces stay paired — having one
+    without the other = broken dashboard."""
+    import os
+    here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    src = open(os.path.join(here, "api", "dashboard.py")).read()
+    # Bootstrap fires the XHR.
+    assert "'initial_data'" in src or '"initial_data"' in src
+    assert "form.append('action', 'initial_data')" in src
+    # Render function is named + invoked by the bootstrap.
+    assert "window.__bootDashboard = function()" in src
+    assert "window.__bootDashboard()" in src
+    # Full-page overlay markup is present.
+    assert 'id="shellLoading"' in src
+    assert 'id="shellError"' in src
+
+
 def test_dashboard_initial_data_post_action_present():
     """The POST handler must dispatch `action == 'initial_data'`
     to a JSON response branch (vs. the legacy HTML render path).

@@ -575,6 +575,8 @@
   "dash.nav_overview":           "Огляд",
   "dash.nav_meals":              "Страви",
   "dash.nav_profile":            "Профіль",
+  "dash.loading_failed":         "Не вдалося завантажити дашборд.",
+  "dash.retry":                  "Спробувати ще",
   "dash.share_status_preparing": "🍳 Готую картку…",
   "dash.share_status_sent":      "✓ Картка в чаті — закриваю",
   "dash.share_status_failed":    "❌ Не вдалось — спробуй ще раз",

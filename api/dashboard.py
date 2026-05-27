@@ -907,17 +907,25 @@ def _load_initial_data(user: dict, locale: str = "en") -> dict:
 
 
 def _render_dashboard(user: dict, nonce: str = "", locale: str = "en") -> str:
-    """Render the full dashboard HTML with all data inlined.
+    """Render the dashboard SHELL — layout + JS, no inlined data.
 
-    2026-05 Phase 1: delegates data fetch to `_load_initial_data` so the
-    same dict can also be served as JSON via the `action=initial_data`
-    endpoint. Phase 2 will replace this function with a shell that lets
-    the client fetch via XHR.
+    2026-05 Phase 2: the shell renders fast (~50–150ms, no DB queries
+    inside this function). Data arrives via a follow-up XHR to
+    ``action=initial_data`` which calls ``_load_initial_data`` and
+    returns JSON. The JS bootstrap (added below the static labels)
+    stuffs that JSON into ``#__data__`` and calls
+    ``window.__bootDashboard()`` — the rest of the existing inline
+    script body — once data is available.
+
+    User perceives the dashboard ~10× faster: the spinner sits on
+    the shell HTML for ~500ms (cold) / ~150ms (warm) instead of
+    waiting for the full data render before any HTML lands.
     """
-    data = _load_initial_data(user, locale=locale)
     body = (
         _DASHBOARD_HTML
-        .replace("__DATA_JSON__", _json_for_script(data))
+        # 2026-05 Phase 2: empty data placeholder. JS fills it via XHR
+        # before calling window.__bootDashboard().
+        .replace("__DATA_JSON__", "null")
         .replace("__NONCE__", _esc(nonce))
         .replace("__LANG__", locale)
         .replace("__JS_LABELS__", _build_js_labels(locale))
@@ -953,6 +961,9 @@ def _render_dashboard(user: dict, nonce: str = "", locale: str = "en") -> str:
         "NAV_OVERVIEW":       _i18n_t("dash.nav_overview",       locale=locale),
         "NAV_MEALS":          _i18n_t("dash.nav_meals",          locale=locale),
         "NAV_PROFILE":        _i18n_t("dash.nav_profile",        locale=locale),
+        # 2026-05 Phase 2 — full-page loading + error overlay.
+        "LOADING_FAILED":     _i18n_t("dash.loading_failed",     locale=locale),
+        "RETRY":              _i18n_t("dash.retry",              locale=locale),
     }
     for k, v in static_labels.items():
         body = body.replace(f"__LABEL_{k}__", v)
@@ -1273,9 +1284,39 @@ _DASHBOARD_HTML = r"""<!DOCTYPE html>
   }
 
   .hint-line { color: var(--hint); font-size: 0.88em; margin: 8px 0 0; }
+
+  /* 2026-05 Phase 2 — full-page loading + error overlay spinner. */
+  @keyframes spin { to { transform: rotate(360deg); } }
 </style>
 </head>
 <body>
+
+<!-- 2026-05 Phase 2: full-page loading overlay shown until the
+     initial_data XHR resolves and window.__bootDashboard() runs.
+     Removed from the DOM when data arrives. Shows shellError on
+     failure so the user knows to retry. -->
+<div id="shellLoading" style="position:fixed;inset:0;display:flex;
+     align-items:center;justify-content:center;
+     background:var(--bg, #101014);z-index:9999;">
+  <div style="width:32px;height:32px;
+       border:3px solid rgba(127,127,127,0.25);
+       border-top-color: var(--tg-theme-button-color, #3ea6ff);
+       border-radius:50%;animation:spin 0.8s linear infinite;"></div>
+</div>
+<div id="shellError" style="position:fixed;inset:0;display:none;
+     align-items:center;justify-content:center;flex-direction:column;
+     background:var(--bg, #101014);z-index:9998;
+     color:var(--tg-theme-text-color, #e6e6ea);
+     font-family:-apple-system, system-ui, sans-serif;padding:20px;">
+  <p style="text-align:center;margin:0 0 16px 0;">⚠️ __LABEL_LOADING_FAILED__</p>
+  <button onclick="location.reload()"
+          style="background:var(--tg-theme-button-color, #3ea6ff);
+                 color:var(--tg-theme-button-text-color, #fff);
+                 border:0;padding:10px 18px;border-radius:10px;
+                 font-size:1em;font-family:inherit;cursor:pointer;">
+    __LABEL_RETRY__
+  </button>
+</div>
 
 <div class="spinner-wrap">
   <div class="spinner-row" id="spinnerRow"></div>
@@ -1428,7 +1469,70 @@ _DASHBOARD_HTML = r"""<!DOCTYPE html>
 </nav>
 
 <script type="application/json" id="__data__">__DATA_JSON__</script>
+
+<!-- 2026-05 Phase 2 bootstrap: applies theme + TG.ready synchronously
+     (so page chrome is correct immediately), then fetches initial_data
+     via XHR and runs the existing dashboard init once data arrives.
+     Previously the entire data blob was inlined and the user waited
+     5–7s for the spinner to clear; now they see the dashboard layout
+     in ~500ms (cold) and watch the cards fill in. -->
 <script nonce="__NONCE__">
+(function() {
+  var TG = (window.Telegram && window.Telegram.WebApp) || null;
+  function applyTheme() {
+    var tp = (TG && TG.themeParams) || {};
+    for (var k in tp) {
+      if (tp.hasOwnProperty(k)) {
+        document.documentElement.style.setProperty(
+          '--tg-theme-' + k.replace(/_/g,'-'), tp[k]);
+      }
+    }
+    document.documentElement.dataset.theme = (TG && TG.colorScheme) || 'dark';
+  }
+  applyTheme();
+  if (TG) {
+    try { TG.ready(); } catch(e) {}
+    try { TG.expand(); } catch(e) {}
+    try { TG.onEvent('themeChanged', applyTheme); } catch(e) {}
+  }
+
+  function showShellError() {
+    var el = document.getElementById('shellLoading');
+    if (el) el.style.display = 'none';
+    var err = document.getElementById('shellError');
+    if (err) err.style.display = 'flex';
+  }
+
+  var initData = (TG && TG.initData) || '';
+  if (!initData) { showShellError(); return; }
+
+  var form = new FormData();
+  form.append('initData', initData);
+  form.append('action', 'initial_data');
+  form.append('lang', document.documentElement.lang || 'en');
+  fetch(window.location.pathname, { method: 'POST', body: form })
+    .then(function(r) {
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      return r.json();
+    })
+    .then(function(data) {
+      document.getElementById('__data__').textContent = JSON.stringify(data);
+      var el = document.getElementById('shellLoading');
+      if (el) el.style.display = 'none';
+      if (typeof window.__bootDashboard === 'function') {
+        try { window.__bootDashboard(); }
+        catch(e) { console.error('bootDashboard failed:', e); showShellError(); }
+      }
+    })
+    .catch(function(err) {
+      console.error('initial_data fetch failed:', err);
+      showShellError();
+    });
+})();
+</script>
+
+<script nonce="__NONCE__">
+window.__bootDashboard = function() {
   var TG = (window.Telegram && window.Telegram.WebApp) || null;
   var DATA = JSON.parse(document.getElementById('__data__').textContent);
   var BOT_URL = DATA.bot_url || '';
@@ -2189,5 +2293,6 @@ _DASHBOARD_HTML = r"""<!DOCTYPE html>
   renderSpinner();
   renderOverview(DATA.today_blob);
   renderMeals(DATA.today_blob);
+}; // end window.__bootDashboard — invoked by the Phase 2 bootstrap once XHR data arrives.
 </script>
 </body></html>"""

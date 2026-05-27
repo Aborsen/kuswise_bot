@@ -3132,3 +3132,114 @@ def count_first_meal_logs_today(conn) -> int:
         )
         row = cur.fetchone()
     return int((row[0] if row else 0) or 0)
+
+
+# ---------- Cron-run lifecycle (start / finish bracket) ----------
+# The existing `record_cron_run` writes one row at the end of each cron
+# via `finally:`. That's invisible to crashes: if a fire dies before its
+# finally runs, we see nothing — identical to "Vercel never invoked us".
+#
+# The helpers below split the lifecycle:
+#   * start_cron_run  → INSERT status='running' at top of handler
+#   * finish_cron_run → UPDATE that row with the final outcome
+# A row that stays `running` after 24h is a fire that crashed mid-flight,
+# distinct from "Vercel never invoked" (zero rows). That's the
+# diagnostic.
+#
+# Both helpers are defensive: they swallow their own errors so that
+# observability NEVER blocks the cron's actual work. The worst case is
+# a missing row, not a missing notification.
+
+
+def start_cron_run(conn, cron_name: str) -> Optional[int]:
+    """INSERT a `'running'` row at the top of each cron handler. Returns
+    the new row id, or `None` on any DB error.
+
+    ``None`` is the explicit signal to ``finish_cron_run`` that we lost
+    the start row — observability must never block the actual cron.
+    """
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO cron_runs (cron_name, status) "
+                "VALUES (%s, 'running') RETURNING id",
+                (cron_name,),
+            )
+            row = cur.fetchone()
+        conn.commit()
+        return int(row[0]) if row else None
+    except Exception:
+        return None
+
+
+def finish_cron_run(conn, run_id: Optional[int], status: str,
+                    result: Optional[dict] = None,
+                    error: Optional[str] = None) -> None:
+    """UPDATE the row created by ``start_cron_run`` with the outcome.
+
+    Safe to call unconditionally in a `finally:` block:
+      * ``run_id is None`` (start failed) → falls back to a one-shot
+        ``record_cron_run`` insert with cron_name='<orphan>' so we
+        still leave SOME audit trace.
+      * any DB error during the UPDATE is swallowed — the cron's actual
+        outcome (notifications sent etc.) must never be masked.
+    """
+    if run_id is None:
+        try:
+            record_cron_run(conn, "<orphan>", status, result, error)
+        except Exception:
+            pass
+        return
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """UPDATE cron_runs
+                      SET finished_at = now(),
+                          status = %s,
+                          result_json = %s,
+                          error = %s
+                    WHERE id = %s""",
+                (status,
+                 json.dumps(result) if result is not None else None,
+                 error,
+                 run_id),
+            )
+        conn.commit()
+    except Exception:
+        pass  # observability must never mask the cron outcome
+
+
+def count_cron_runs_24h_by_status(conn, cron_name: str) -> dict:
+    """Per-status breakdown of the last 24h of ``cron_name`` invocations.
+
+    Returns ``{started, finished_ok, errored, running_unfinished}``.
+
+    The ``running_unfinished`` bucket is the diagnostic — rows that
+    inserted at start but never got updated, meaning Vercel killed the
+    function mid-flight (timeout / OOM) or the `finally` block itself
+    crashed. Distinguishes "Vercel didn't invoke" (zero rows) from
+    "function crashed" (rows exist but never finalised).
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT
+              COUNT(*)                                              AS started,
+              COUNT(*) FILTER (WHERE finished_at IS NOT NULL
+                                 AND status = 'ok')                 AS finished_ok,
+              COUNT(*) FILTER (WHERE status = 'error')              AS errored,
+              COUNT(*) FILTER (WHERE finished_at IS NULL
+                                 AND status = 'running')            AS running_unfinished
+            FROM cron_runs
+            WHERE cron_name = %s
+              AND started_at >= NOW() - INTERVAL '24 hours'
+            """,
+            (cron_name,),
+        )
+        row = cur.fetchone()
+    return {
+        "started":            int(row[0] or 0) if row else 0,
+        "finished_ok":        int(row[1] or 0) if row else 0,
+        "errored":            int(row[2] or 0) if row else 0,
+        "running_unfinished": int(row[3] or 0) if row else 0,
+    }

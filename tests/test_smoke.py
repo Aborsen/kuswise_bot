@@ -2988,13 +2988,14 @@ def test_cron_health_monitor_imports_cleanly_and_exposes_handler():
 
 
 def test_cron_health_monitor_registered_in_vercel_json():
-    """vercel.json must schedule the new cron at 09:00 UTC daily."""
+    """vercel.json must schedule the new cron at 06:00 UTC daily
+    (= 09:00 Kyiv summer, 08:00 winter — morning-coffee window)."""
     import os
     here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     with open(os.path.join(here, "vercel.json")) as f:
         cfg_json = json.load(f)
     paths = {c["path"]: c["schedule"] for c in cfg_json["crons"]}
-    assert paths.get("/api/cron_health_monitor") == "0 9 * * *"
+    assert paths.get("/api/cron_health_monitor") == "0 6 * * *"
 
 
 def test_cron_good_morning_uses_per_variant_activation_counters():
@@ -3067,3 +3068,129 @@ def test_health_monitor_check_block_spike_requires_breach_and_magnitude(monkeypa
     out2 = cm._check_block_spike(conn=None)
     assert out2["ok"] is True
     assert out2["alerts"] == []
+
+
+# ---------- Phase A: cron-run lifecycle bracketing ----------
+
+
+def test_start_cron_run_inserts_running_row_returns_id():
+    """`start_cron_run` must INSERT with status='running' (no
+    finished_at), commit, and return the new row's id via RETURNING.
+    The 'running' status is the diagnostic that distinguishes
+    'mid-flight' from 'finished'."""
+    conn = _AdminConn(rows=[(42,)])
+    out = db.start_cron_run(conn, "cron_good_morning")
+    assert out == 42
+    assert conn.commits == 1
+    sql, params = conn.calls[0]
+    assert "INSERT INTO cron_runs" in sql
+    assert "status" in sql
+    assert "'running'" in sql
+    assert "RETURNING id" in sql
+    # `finished_at` must NOT be set at start — the DEFAULT is NULL and
+    # that's the signal for "in-flight".
+    assert "finished_at" not in sql
+    assert params == ("cron_good_morning",)
+
+
+def test_start_cron_run_returns_none_on_db_error():
+    """Defensive: observability MUST NEVER block the cron. If the
+    INSERT fails for any reason, the helper returns None instead of
+    propagating — the caller (cron handler) then runs its actual
+    work unimpeded."""
+    class _BoomConn:
+        def cursor(self): raise RuntimeError("neon asleep")
+        def commit(self): pass
+    out = db.start_cron_run(_BoomConn(), "cron_good_morning")
+    assert out is None
+
+
+def test_finish_cron_run_updates_row_by_id():
+    """`finish_cron_run` must UPDATE the row by id, setting finished_at
+    to now(), status, result_json, error. Targets only one row via
+    WHERE id = %s."""
+    conn = _AdminConn()
+    db.finish_cron_run(conn, run_id=42, status="ok",
+                       result={"sent": 5}, error=None)
+    assert conn.commits == 1
+    sql, params = conn.calls[0]
+    assert "UPDATE cron_runs" in sql
+    assert "finished_at = now()" in sql
+    assert "status = %s" in sql
+    assert "WHERE id = %s" in sql
+    assert params[0] == "ok"
+    assert '"sent": 5' in params[1]
+    assert params[2] is None
+    assert params[3] == 42
+
+
+def test_finish_cron_run_with_none_id_falls_back_to_record():
+    """If start_cron_run returned None (DB error), finish must still
+    leave SOME row via the existing record_cron_run path. The
+    cron_name is stamped '<orphan>' so we can spot them in the
+    admin panel later."""
+    conn = _AdminConn()
+    db.finish_cron_run(conn, run_id=None, status="ok",
+                       result={"sent": 3}, error=None)
+    # Fell through to record_cron_run, which INSERTs a one-shot row.
+    assert conn.commits == 1
+    sql, params = conn.calls[0]
+    assert "INSERT INTO cron_runs" in sql
+    assert params[0] == "<orphan>"
+    assert params[1] == "ok"
+
+
+def test_finish_cron_run_swallows_db_errors():
+    """The cron's actual outcome must never be masked by observability
+    failures. Even if the UPDATE blows up, finish_cron_run returns
+    cleanly so the caller's finally block continues."""
+    class _BoomConn:
+        def cursor(self): raise RuntimeError("neon asleep")
+        def commit(self): pass
+    # Must not raise.
+    db.finish_cron_run(_BoomConn(), run_id=99, status="error",
+                       error="something bad")
+
+
+def test_count_cron_runs_24h_by_status_returns_four_buckets():
+    """Diagnostic helper must split the 24h cohort into 4 disjoint
+    counts: total started, finished_ok, errored, running_unfinished.
+    The running_unfinished bucket is the smoking gun for crashed fires."""
+    conn = _AdminConn(rows=[(24, 12, 2, 10)])
+    out = db.count_cron_runs_24h_by_status(conn, "cron_good_morning")
+    assert out == {
+        "started":            24,
+        "finished_ok":        12,
+        "errored":             2,
+        "running_unfinished": 10,
+    }
+    sql, params = conn.calls[0]
+    assert "FROM cron_runs" in sql
+    assert "INTERVAL '24 hours'" in sql
+    assert "cron_name = %s" in sql
+    # Each bucket has its own FILTER clause.
+    assert "FILTER (WHERE finished_at IS NOT NULL" in sql
+    assert "status = 'ok'" in sql
+    assert "status = 'error'" in sql
+    assert "FILTER (WHERE finished_at IS NULL" in sql
+    assert "status = 'running'" in sql
+    assert params == ("cron_good_morning",)
+
+
+def test_record_cron_run_body_unchanged_phase_a():
+    """Phase A regression guard: `record_cron_run` body MUST stay
+    exactly as today so the admin panel reader + existing callers
+    keep working. New crons get the start/finish bracket; old ones
+    keep this one-shot path."""
+    conn = _AdminConn()
+    db.record_cron_run(conn, "cron_daily_summary", "ok",
+                       result={"sent_summary": 3})
+    sql, _ = conn.calls[0]
+    # Single INSERT with both started_at (DEFAULT) + finished_at (now())
+    # — the pre-Phase-A behaviour.
+    assert "INSERT INTO cron_runs" in sql
+    assert "finished_at" in sql
+    assert "now()" in sql
+    # No UPDATE / no RETURNING — these are the new-style helpers' shape.
+    assert "UPDATE" not in sql
+    assert "RETURNING" not in sql

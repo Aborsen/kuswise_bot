@@ -542,10 +542,19 @@ def delete_user_all_data(conn, user_id: int) -> bool:
 
 
 def reset_onboarding(conn, user_id: int) -> None:
-    """Kick the user back to the start of the onboarding flow."""
+    """Kick the user back to the start of the onboarding flow.
+
+    Step name must match the current Q1 — the 2026-05 reorder moved
+    sex from Q2 to Q1, so this writes ``awaiting_sex``. Drifting from
+    the current Q1 step name silently breaks all restart paths:
+    `reset_onboarding` writes a stale step, the caller sends the
+    correct Q1 prompt, the user taps a button, the callback handler's
+    `step == 'awaiting_sex'` gate rejects with `toast.already_answered`,
+    and the user is stuck.
+    """
     with conn.cursor() as cur:
         cur.execute(
-            "UPDATE user_profiles SET onboarding_step = 'awaiting_age', updated_at = %s "
+            "UPDATE user_profiles SET onboarding_step = 'awaiting_sex', updated_at = %s "
             "WHERE user_id = %s",
             (_now_iso(), user_id),
         )

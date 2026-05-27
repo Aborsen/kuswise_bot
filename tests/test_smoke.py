@@ -3381,6 +3381,83 @@ def test_enter_onboarding_first_question_lands_at_awaiting_sex():
     assert 'i18n_mod.t("onboarding.ask_age"' not in helper_block
 
 
+def test_reset_onboarding_sets_awaiting_sex_after_reorder():
+    """The 2026-05 reorder made sex Q1. `reset_onboarding` must write
+    `awaiting_sex` — any drift (e.g. accidentally back to the
+    pre-reorder `awaiting_age`) breaks every restart path: the caller
+    sends the sex prompt, but `onb:sex:` rejects on the gate
+    `step == 'awaiting_sex'` with `toast.already_answered`, and the
+    user is stuck."""
+    conn = _AdminConn()
+    db.reset_onboarding(conn, user_id=42)
+    sql, params = conn.calls[0]
+    assert "UPDATE user_profiles" in sql
+    assert "onboarding_step = 'awaiting_sex'" in sql
+    # Hard guard against drifting back to the old name.
+    assert "awaiting_age" not in sql
+    assert params[1] == 42
+    assert conn.commits == 1
+
+
+def test_backfill_finish_onboarding_select_query_shape():
+    """The Stage 2 backfill targets exactly the two stuck cohorts —
+    `awaiting_confirm` and `awaiting_custom_cal`. Anything else (the
+    11 mid-question users, the 12 lang_confirm cohort, the done
+    users) must NOT be touched. Idempotency relies on this gate.
+    """
+    import importlib
+    backfill = importlib.import_module("scripts.backfill_finish_onboarding")
+    # The constant must list exactly those two steps.
+    assert set(backfill._STUCK_STEPS) == {
+        "awaiting_confirm", "awaiting_custom_cal",
+    }
+
+
+def test_backfill_finish_onboarding_resolve_target_cal_paths():
+    """Three paths for picking the calorie target, in order:
+       1. `recommended_calorie_target` non-NULL → use it
+       2. NULL → recompute from weight + goal via existing helper
+       3. Neither available → return None (caller skips with warning)
+    """
+    import importlib
+    backfill = importlib.import_module("scripts.backfill_finish_onboarding")
+    # Path 1: rec_cal present.
+    assert backfill._resolve_target_cal(
+        {"rec_cal": 2900, "weight_kg": 80, "goal": "lose"}
+    ) == 2900
+    # Path 2: NULL rec_cal → recompute from weight + goal.
+    out2 = backfill._resolve_target_cal(
+        {"rec_cal": None, "weight_kg": 80, "goal": "maintain"}
+    )
+    assert isinstance(out2, int) and out2 > 0
+    # Path 3: nothing available → None (skip path).
+    assert backfill._resolve_target_cal(
+        {"rec_cal": None, "weight_kg": None, "goal": None}
+    ) is None
+
+
+def test_backfill_finish_onboarding_is_idempotent_on_empty():
+    """When the SELECT returns zero rows, the script's main loop must
+    short-circuit without touching the DB or Telegram. Guarantees
+    re-runs after a successful backfill are no-ops."""
+    import importlib
+    backfill = importlib.import_module("scripts.backfill_finish_onboarding")
+    # Fake conn that returns no stuck rows; cursor implements the
+    # minimal psycopg-like surface.
+    class _FakeCur:
+        def __enter__(self): return self
+        def __exit__(self, *exc): return False
+        def execute(self, sql, params=None): self.last_sql = sql
+        def fetchall(self): return []
+    class _FakeConn:
+        def __init__(self): self.cur = _FakeCur()
+        def cursor(self): return self.cur
+        def commit(self): pass
+        def close(self): pass
+    rows = backfill._select_stuck_users(_FakeConn())
+    assert rows == []
+
+
 def test_onb_sex_callback_advances_to_awaiting_age():
     """The sex callback handler must now transition awaiting_sex →
     awaiting_age (not awaiting_weight). Sex is Q1, age is Q2."""

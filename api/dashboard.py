@@ -1551,11 +1551,21 @@ _DASHBOARD_HTML = r"""<!DOCTYPE html>
   var initData = findInitData();
   if (!initData) { showShellError(); return; }
 
-  var form = new FormData();
-  form.append('initData', initData);
-  form.append('action', 'initial_data');
-  form.append('lang', document.documentElement.lang || 'en');
-  fetch(window.location.pathname, { method: 'POST', body: form })
+  // 2026-05 Phase 2 hotfix #4: URL-encoded body, NOT multipart.
+  // A FormData body makes fetch send `multipart/form-data; boundary=...`
+  // but the POST handler uses `urllib.parse.parse_qs(raw)` which only
+  // understands `application/x-www-form-urlencoded`. On a multipart
+  // body, parse_qs returns an empty `initData` field → server 401 →
+  // "Couldn't load the dashboard." Same fix pattern as scan.py:297
+  // and the `fetchDay` / `request_recap` XHRs below.
+  var body = 'action=initial_data' +
+             '&initData=' + encodeURIComponent(initData) +
+             '&lang=' + encodeURIComponent(document.documentElement.lang || 'en');
+  fetch(window.location.pathname, {
+    method: 'POST',
+    headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+    body: body
+  })
     .then(function(r) {
       if (!r.ok) throw new Error('HTTP ' + r.status);
       return r.json();

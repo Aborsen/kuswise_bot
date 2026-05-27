@@ -3561,13 +3561,53 @@ def test_dashboard_html_contains_bootstrap_and_boot_function():
     src = open(os.path.join(here, "api", "dashboard.py")).read()
     # Bootstrap fires the XHR.
     assert "'initial_data'" in src or '"initial_data"' in src
-    assert "form.append('action', 'initial_data')" in src
+    # Phase 2 hotfix #4: XHR body MUST be URL-encoded, not multipart.
+    # Multipart bodies (from `new FormData()`) can't be parsed by the
+    # server's `urllib.parse.parse_qs(raw)` handler → initData ends up
+    # empty → 401 → "Couldn't load the dashboard." See scan.py:297 for
+    # the same fix pattern + comment block.
+    assert "action=initial_data" in src, (
+        "Phase 2 bootstrap XHR must build a URL-encoded body literal "
+        "'action=initial_data&initData=...' — NOT use new FormData()"
+    )
     # Render function is named + invoked by the bootstrap.
     assert "window.__bootDashboard = function()" in src
     assert "window.__bootDashboard()" in src
     # Full-page overlay markup is present.
     assert 'id="shellLoading"' in src
     assert 'id="shellError"' in src
+
+
+def test_dashboard_initial_data_xhr_uses_urlencoded_not_formdata():
+    """2026-05 Phase 2 hotfix #4 — regression guard.
+
+    The Phase 2 bootstrap XHR MUST send a URL-encoded body, not a
+    multipart body (which is what `new FormData()` produces). The
+    server's POST handler uses `urllib.parse.parse_qs` which only
+    understands URL-encoded — a multipart body returns an empty
+    `initData` field and the auth check 401s.
+
+    History: this bug shipped with the Phase 2 dashboard refactor
+    (commit 6b73de1) and survived four hotfixes (0902824, e07c15b,
+    57b4bbd revert, b4d0a43) because each fix addressed `findInitData()`
+    rather than the body encoding. The fix is identical to the one
+    already deployed in `api/scan.py:297-301` for the same bug class.
+    """
+    import os
+    here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    src = open(os.path.join(here, "api", "dashboard.py")).read()
+    # Hard ban on FormData in the dashboard handler — there is one
+    # working alternative pattern (URL-encoded + explicit Content-Type
+    # header) and the codebase uses it consistently everywhere else.
+    assert "new FormData(" not in src, (
+        "Dashboard XHR must not use `new FormData()` — browsers send "
+        "this as multipart/form-data, which urllib.parse.parse_qs "
+        "can't decode. Use `'Content-Type': "
+        "'application/x-www-form-urlencoded'` with an encodeURIComponent "
+        "body instead (see scan.py:297 + fetchDay in this same file)."
+    )
+    # Phase 2 bootstrap XHR sends Content-Type explicitly.
+    assert "'Content-Type': 'application/x-www-form-urlencoded'" in src
 
 
 def test_dashboard_initial_data_post_action_present():

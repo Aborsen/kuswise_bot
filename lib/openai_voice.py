@@ -10,7 +10,8 @@ _client: OpenAI | None = None
 def _get_client() -> OpenAI:
     global _client
     if _client is None:
-        _client = OpenAI(api_key=OPENAI_API_KEY)
+        # 45s timeout — see lib/openai_vision.py for the rationale.
+        _client = OpenAI(api_key=OPENAI_API_KEY, timeout=45.0)
     return _client
 
 

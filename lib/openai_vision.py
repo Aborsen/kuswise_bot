@@ -118,7 +118,15 @@ _client = None
 def _get_client() -> OpenAI:
     global _client
     if _client is None:
-        _client = OpenAI(api_key=OPENAI_API_KEY)
+        # 45s timeout — Telegram's webhook timeout is ~60s, so a hung
+        # OpenAI call would otherwise cause Telegram to retry the
+        # webhook delivery, which double-processes the update and
+        # ends with `pop_pending_entry` returning None on the second
+        # call → `errors.pending_expired` ("10 minutes passed") sent
+        # to the user even though only seconds have passed. The
+        # OpenAI SDK default is 600s — far too long for a
+        # synchronous-webhook architecture.
+        _client = OpenAI(api_key=OPENAI_API_KEY, timeout=45.0)
     return _client
 
 

@@ -334,12 +334,28 @@ class handler(BaseHTTPRequestHandler):
             self._respond_ok()
             return
 
+        # 2026-05: respond 200 to Telegram BEFORE running process_update.
+        # Telegram's webhook timeout is ~60s; our process_update can run
+        # 30–90s when OpenAI vision is slow on a meal photo (analyze_photo
+        # + getFile + cold-start init_db). When the response is delayed,
+        # Telegram resends the same update — the retry runs the SAME
+        # handler again, which pops `pending_photos` (the first call
+        # already popped it) and ends up emitting `errors.pending_expired`
+        # ("10 minutes passed") even though only seconds elapsed.
+        #
+        # By flushing 200 first, Telegram considers the delivery
+        # successful and never retries. The Vercel function still has
+        # up to 300s to complete the work in the same invocation.
+        self._respond_ok()
+        try:
+            self.wfile.flush()
+        except Exception:
+            pass  # already-closed write end isn't fatal — work continues
+
         try:
             process_update(update)
         except Exception as exc:
             error("webhook_process_update_failed", exc=exc)
-
-        self._respond_ok()
 
     def do_GET(self):
         # The webhook only handles POST from Telegram. Don't leak deployment

@@ -3502,6 +3502,63 @@ def test_backfill_finish_onboarding_resolve_target_cal_paths():
     ) is None
 
 
+def test_openai_clients_have_bounded_timeout():
+    """All OpenAI client factories must set an explicit timeout under
+    Telegram's webhook timeout (~60s). The SDK default is 600s; without
+    an override a single hung OpenAI call causes Telegram to retry the
+    webhook delivery, which double-processes the update and ends with
+    `errors.pending_expired` sent to the user."""
+    import os
+    here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    for mod in ("openai_vision", "openai_chat", "openai_nutrition", "openai_voice"):
+        src = open(os.path.join(here, "lib", f"{mod}.py")).read()
+        # Find the _get_client function body.
+        assert "_get_client" in src
+        block = src.split("def _get_client", 1)[1].split("\n\n", 1)[0]
+        # Must construct OpenAI with timeout= kwarg.
+        assert "OpenAI(" in block, f"{mod}: missing OpenAI client construction"
+        assert "timeout=" in block, (
+            f"{mod}: OpenAI client missing explicit timeout — "
+            f"defaults to 600s, causes Telegram webhook retries"
+        )
+        # Must be at or below 60s.
+        import re
+        m = re.search(r"timeout\s*=\s*([\d.]+)", block)
+        assert m, f"{mod}: timeout kwarg malformed"
+        assert float(m.group(1)) <= 60.0, (
+            f"{mod}: timeout {m.group(1)}s exceeds Telegram's "
+            f"webhook timeout (~60s)"
+        )
+
+
+def test_webhook_responds_200_before_processing():
+    """The webhook handler must send the 200 response to Telegram
+    BEFORE calling process_update. Otherwise a slow process_update
+    (e.g. waiting on OpenAI vision) exceeds Telegram's ~60s webhook
+    timeout, Telegram retries the same update, and the retry
+    double-processes — pop_pending_entry returns None on the second
+    call → `errors.pending_expired` ("10 minutes passed") shown to
+    the user despite only seconds elapsed."""
+    import os
+    here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    src = open(os.path.join(here, "api", "webhook.py")).read()
+    do_post_block = src.split("def do_POST(", 1)[1].split("\n    def ", 1)[0]
+    # The 200 response (_respond_ok) must precede process_update in
+    # textual source order. Both must appear in the block.
+    idx_respond = do_post_block.find("self._respond_ok()")
+    idx_process = do_post_block.find("process_update(update)")
+    assert idx_respond > 0, "do_POST must call self._respond_ok()"
+    assert idx_process > 0, "do_POST must call process_update(update)"
+    assert idx_respond < idx_process, (
+        "self._respond_ok() must execute BEFORE process_update() so "
+        "Telegram receives 200 immediately and doesn't retry the "
+        "webhook when process_update is slow"
+    )
+    # Sanity: the flush must be there (otherwise BaseHTTPRequestHandler
+    # might buffer the response until the handler returns).
+    assert "self.wfile.flush()" in do_post_block
+
+
 def test_moderation_keyboard_layout_accept_is_big_button():
     """2026-05: 3-row layout —
         Row 1: ✅ Accept (alone, full-width = "big")

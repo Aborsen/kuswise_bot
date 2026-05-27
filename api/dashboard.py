@@ -647,6 +647,18 @@ _BOOTSTRAP_HTML = """<!DOCTYPE html>
       try { tg.ready(); } catch(e) {}
       try { tg.expand && tg.expand(); } catch(e) {}
     }
+    // 2026-05 dashboard Phase 2 hotfix #3: carry initData across the
+    // form-submit navigation via sessionStorage. The chat-list /
+    // direct-link entry path delivers tgWebAppData in the URL hash
+    // but form-submit nav clears the hash — so the POST-rendered
+    // shell can't recover initData via the legacy sources. Same-tab
+    // sessionStorage survives the nav and is byte-identical to the
+    // value found here (no Python encoding round-trip risk). The
+    // Phase 2 bootstrap on the POST-rendered shell reads from
+    // sessionStorage first.
+    try {
+      sessionStorage.setItem('__kuswise_initData__', initDataStr);
+    } catch(e) {}
     // Submit a real form POST instead of fetch + document.write. With the
     // strict CSP nonce in place, document.write keeps the original page's
     // CSP active, which has the bootstrap's nonce — not the rendered
@@ -1503,14 +1515,26 @@ _DASHBOARD_HTML = r"""<!DOCTYPE html>
     if (err) err.style.display = 'flex';
   }
 
-  // Two sources for the Telegram auth blob, mirroring the legacy GET
-  // bootstrap's `findInitData()`. The SDK property `tg.initData` works
-  // when Telegram has populated it (most chat-button + menu-button
-  // entries), but for other entry paths (chat-list "Open Mini App",
-  // direct t.me link) the auth arrives via the URL hash as
-  // `#tgWebAppData=...`. Missing the hash fallback caused the
-  // "Couldn't load the dashboard" error on chat-list opens.
+  // Three sources for the Telegram auth blob, preferred in order:
+  //  (1) `sessionStorage.__kuswise_initData__` — written by the GET
+  //      bootstrap before the form-submit navigation. This is the
+  //      most reliable source for chat-list / direct-link entries
+  //      because form-submit nav LOSES the URL hash that initially
+  //      carried tgWebAppData. sessionStorage survives same-tab
+  //      same-origin nav and is byte-identical to the value the
+  //      GET bootstrap read (no Python encoding round-trip risk).
+  //  (2) `tg.initData` — SDK property. Works for in-chat entry
+  //      paths (chat menu button, inline web_app button) where
+  //      Telegram keeps the chat context active.
+  //  (3) `location.hash#tgWebAppData=...` — URL hash. Initial entry
+  //      point for chat-list opens but typically lost after the
+  //      form-submit nav; kept here as defense-in-depth (e.g.
+  //      direct page reload outside the form-submit flow).
   function findInitData() {
+    try {
+      var s = sessionStorage.getItem('__kuswise_initData__');
+      if (s) return s;
+    } catch(e) {}
     if (TG && TG.initData) return TG.initData;
     if (window.location.hash &&
         window.location.hash.indexOf('tgWebAppData') !== -1) {
@@ -1537,6 +1561,10 @@ _DASHBOARD_HTML = r"""<!DOCTYPE html>
       return r.json();
     })
     .then(function(data) {
+      // Drop the carried initData now that the XHR landed —
+      // prevents a stale value from being used on a future load
+      // in the same tab (per plan R3).
+      try { sessionStorage.removeItem('__kuswise_initData__'); } catch(e) {}
       document.getElementById('__data__').textContent = JSON.stringify(data);
       var el = document.getElementById('shellLoading');
       if (el) el.style.display = 'none';

@@ -487,6 +487,21 @@ class handler(BaseHTTPRequestHandler):
             self._send_json(200, {"ok": bool(resp.get("ok"))})
             return
 
+        # 2026-05: JSON endpoint that returns the same data blob the
+        # full HTML render inlines via __DATA_JSON__. Phase 2 of the
+        # dashboard refactor will switch the page to a fast shell HTML
+        # that fires this XHR on load — eliminating the 5–7s spinner
+        # wait between Telegram tapping "Dashboard" and seeing anything.
+        if action == "initial_data":
+            try:
+                data = _load_initial_data(user, locale=locale)
+            except Exception:
+                print("initial_data error:", traceback.format_exc(), flush=True)
+                self._send_json(500, {"error": "internal"})
+                return
+            self._send_json(200, data)
+            return
+
         # JSON endpoint for historical day fetches
         if action == "day_data":
             if not _is_valid_date_in_range(date_param):
@@ -737,13 +752,23 @@ def _sex_label(sex: str | None, locale: str = "en") -> str:
     return _i18n_t(f"dash.sex_{sex}", locale=locale)
 
 
-def _render_dashboard(user: dict, nonce: str = "", locale: str = "en") -> str:
+def _load_initial_data(user: dict, locale: str = "en") -> dict:
+    """Build the full dashboard data blob that the page renders from.
+
+    Returns the JSON-serializable dict that was previously inlined into
+    the HTML via ``__DATA_JSON__``. Used by:
+      * ``_render_dashboard`` (the legacy SSR-everything path) — until
+        Phase 2 of the 2026-05 refactor splits the render into a fast
+        shell + an XHR for this dict.
+      * The ``action=initial_data`` POST endpoint — Phase 2's JSON
+        endpoint that the JS shell will call on load.
+
+    All DB queries for the initial render live here, in one place, so
+    the two consumers stay in lockstep.
+    """
     user_id = user["id"]
-    # Locale-neutral fallback when no first_name is on file. Telegram always
-    # gives us first_name on initData, so this rarely fires.
     first_name = user.get("first_name") or ("friend" if locale == "en" else "друже")  # noqa: i18n
     username = user.get("username") or ""
-
     today = _today_str()
 
     conn = get_conn()
@@ -753,13 +778,10 @@ def _render_dashboard(user: dict, nonce: str = "", locale: str = "en") -> str:
         today_blob = _load_day_blob(conn, user_id, today)
         history_30_rows = get_history(conn, user_id, days=PRELOAD_DAYS)
         water_target = int(get_water_target(conn, user_id) or 2000)
-        adherence = get_adherence_stats(conn, user_id)
-        # REV #2: fetch weight history INSIDE the try block. The previous
-        # implementation called get_weight_history after conn.close() and
-        # the broad except below silently swallowed the resulting error,
-        # leaving goals projection (weeks-to-goal, projected date, status)
-        # permanently empty for every user. One fetch, reused for both
-        # goals_blob math and the new top-level weight_history field.
+        # 2026-05 quick win B: pass profile in so get_adherence_stats
+        # doesn't re-fetch it. Also caps the SELECT to 90 days (quick
+        # win C) so the slowest query on this page stays bounded.
+        adherence = get_adherence_stats(conn, user_id, profile=profile)
         weight_history_rows = get_weight_history(conn, user_id, limit=90)
         streak_row = get_streak(conn, user_id)
         latest_rec = get_latest_recommendation(conn, user_id)
@@ -864,7 +886,7 @@ def _render_dashboard(user: dict, nonce: str = "", locale: str = "en") -> str:
         "water_ml":  water_target,
     }
 
-    data = {
+    return {
         "user":              {"first_name": first_name, "username": username},
         "today":             today,
         "selected_date":     today,
@@ -882,6 +904,17 @@ def _render_dashboard(user: dict, nonce: str = "", locale: str = "en") -> str:
         "sex_ua":            _sex_label(profile.get("sex"), locale=locale),
         "bot_url":           f"https://t.me/{TELEGRAM_BOT_USERNAME}" if TELEGRAM_BOT_USERNAME else "",
     }
+
+
+def _render_dashboard(user: dict, nonce: str = "", locale: str = "en") -> str:
+    """Render the full dashboard HTML with all data inlined.
+
+    2026-05 Phase 1: delegates data fetch to `_load_initial_data` so the
+    same dict can also be served as JSON via the `action=initial_data`
+    endpoint. Phase 2 will replace this function with a shell that lets
+    the client fetch via XHR.
+    """
+    data = _load_initial_data(user, locale=locale)
     body = (
         _DASHBOARD_HTML
         .replace("__DATA_JSON__", _json_for_script(data))

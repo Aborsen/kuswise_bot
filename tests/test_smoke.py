@@ -3502,6 +3502,88 @@ def test_backfill_finish_onboarding_resolve_target_cal_paths():
     ) is None
 
 
+def test_dashboard_initial_data_extracted_to_helper():
+    """2026-05 Phase 1 dashboard refactor: data-loader extracted from
+    `_render_dashboard` into a separate `_load_initial_data` function
+    so the same dict can also be served as JSON via the
+    `action=initial_data` endpoint. Phase 2 will switch the page to
+    a fast shell + XHR; this commit lays the groundwork."""
+    from api import dashboard as ds
+    assert callable(ds._load_initial_data), (
+        "Phase 1 refactor: data-loader must be extracted as a "
+        "callable helper, not inlined into _render_dashboard"
+    )
+    assert callable(ds._render_dashboard), (
+        "Public render entry-point still required"
+    )
+
+
+def test_dashboard_initial_data_post_action_present():
+    """The POST handler must dispatch `action == 'initial_data'`
+    to a JSON response branch (vs. the legacy HTML render path).
+    Source-grep regression so the dispatch can't drift silently."""
+    import os
+    here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    src = open(os.path.join(here, "api", "dashboard.py")).read()
+    assert 'action == "initial_data"' in src, (
+        "POST dispatcher missing initial_data branch"
+    )
+    # Must call _load_initial_data and send JSON, not render HTML.
+    after = src.split('action == "initial_data"', 1)[1].split(
+        "if action ==", 1
+    )[0]
+    assert "_load_initial_data(" in after
+    assert "_send_json(" in after
+
+
+def test_get_adherence_stats_accepts_profile_kwarg():
+    """2026-05 Phase 1 quick win B: `get_adherence_stats` accepts a
+    `profile` kwarg so callers (specifically the dashboard render)
+    that already have the profile can avoid an extra round-trip.
+    Default None preserves the standalone-use contract."""
+    import inspect
+    sig = inspect.signature(db.get_adherence_stats)
+    assert "profile" in sig.parameters, (
+        "get_adherence_stats(profile=...) signature missing"
+    )
+    assert sig.parameters["profile"].default is None
+    assert "days" in sig.parameters, (
+        "get_adherence_stats(days=...) signature missing — 2026-05 quick win C"
+    )
+    assert sig.parameters["days"].default == 90
+
+
+def test_get_adherence_stats_query_capped_to_days_window():
+    """2026-05 Phase 1 quick win C: the SELECT inside
+    get_adherence_stats must filter on the days window so the scan
+    stays bounded as daily_logs grows. Source-grep guard."""
+    import os
+    here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    src = open(os.path.join(here, "lib", "database.py")).read()
+    block = src.split("def get_adherence_stats(", 1)[1].split("\ndef ", 1)[0]
+    assert "CURRENT_DATE - INTERVAL" in block, (
+        "Query missing the days-window CURRENT_DATE filter"
+    )
+    assert "dl.date >=" in block
+
+
+def test_init_db_creates_daily_logs_user_date_index():
+    """2026-05 Phase 1 quick win D: index on daily_logs(user_id, date)
+    must be created via init_db. Helps every dashboard query that
+    filters on user_id. SCHEMA_VERSION must be bumped to trigger the
+    migration on next deploy."""
+    import os
+    here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    src = open(os.path.join(here, "lib", "database.py")).read()
+    assert "idx_daily_logs_user_date" in src
+    assert "ON daily_logs(user_id, date DESC)" in src
+    # SCHEMA_VERSION must be bumped beyond the v1 baseline.
+    assert db.SCHEMA_VERSION != "v2026-05-27-1", (
+        "Schema added a new index — SCHEMA_VERSION must be bumped to "
+        "trigger the migration on next cold start"
+    )
+
+
 def test_schema_version_constant_exists():
     """2026-05: cold-start optimization. `init_db` reads
     `schema_meta.schema_version` first — if it matches `SCHEMA_VERSION`,

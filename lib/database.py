@@ -42,7 +42,7 @@ _SCHEMA_INITIALISED = False
 # servers (the SELECT short-circuits before reaching the DDL). The first
 # code path that needs the column will fail loudly with
 # "column does not exist" — easy to spot in dev/staging.
-SCHEMA_VERSION = "v2026-05-27-1"
+SCHEMA_VERSION = "v2026-05-27-2"
 
 
 def init_db(conn=None, force: bool = False) -> None:
@@ -467,6 +467,15 @@ def init_db(conn=None, force: bool = False) -> None:
         cur.execute(
             "CREATE INDEX IF NOT EXISTS idx_cron_runs_name_time "
             "ON cron_runs(cron_name, started_at DESC)"
+        )
+        # 2026-05: speed up dashboard queries that filter on `daily_logs`
+        # by user_id. Before this index, every dashboard render did
+        # sequential scans for `get_history`, `get_log_for_date`,
+        # `get_adherence_stats`. Index name kept short on purpose
+        # (Postgres caches plan by index name).
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_daily_logs_user_date "
+            "ON daily_logs(user_id, date DESC)"
         )
         # Stamp the version so future cold starts can short-circuit
         # the entire DDL block via the SELECT above. UPSERT in case
@@ -2075,8 +2084,11 @@ def get_history_range(conn, user_id: int, start_date: str, end_date: str) -> lis
     ]
 
 
-def get_adherence_stats(conn, user_id: int) -> dict:
-    """All-time per-macro averages, ``avg_pct`` of goal, and current streak.
+def get_adherence_stats(conn, user_id: int, *,
+                        profile: Optional[dict] = None,
+                        days: int = 90) -> dict:
+    """Per-macro averages over the last ``days`` days, ``avg_pct`` of goal,
+    and current streak.
 
     ``avg_pct`` is the average daily total expressed as a percentage of the
     user's target — sub-100 means undershooting on average, over-100 means
@@ -2086,6 +2098,15 @@ def get_adherence_stats(conn, user_id: int) -> dict:
     in the numeric label.
 
     Counted across days with ``meal_count > 0`` (a logged day).
+
+    2026-05: two perf changes:
+      * ``profile`` accepted as a kwarg — callers that already have it
+        (e.g. dashboard render) skip an extra ``get_profile`` round-trip.
+        Defaults to None → fetch internally for standalone use.
+      * ``days`` window (default 90) limits the scan to recent logs so the
+        query stays bounded as ``daily_logs`` grows. The streak field
+        inside the returned dict becomes a best-effort fallback;
+        ``get_streak`` is the authoritative streak source.
     """
     from datetime import date as _date, timedelta as _td
     from lib.config import (
@@ -2093,7 +2114,8 @@ def get_adherence_stats(conn, user_id: int) -> dict:
         macro_gram_targets_from_profile,
     )
 
-    profile = get_profile(conn, user_id) or {}
+    if profile is None:
+        profile = get_profile(conn, user_id) or {}
     cal_target = int(profile.get("daily_calorie_target") or 2000)
     weight = profile.get("weight_kg")
     goal = profile.get("goal")
@@ -2107,12 +2129,13 @@ def get_adherence_stats(conn, user_id: int) -> dict:
 
     with conn.cursor() as cur:
         cur.execute(
-            """SELECT dl.date, dl.total_calories, dl.total_protein_g,
+            f"""SELECT dl.date, dl.total_calories, dl.total_protein_g,
                       dl.total_carbs_g, dl.total_fat_g,
                       (SELECT COUNT(*) FROM meals m
                        WHERE m.user_id = dl.user_id AND m.date = dl.date) AS mc
                FROM daily_logs dl
                WHERE dl.user_id = %s
+                 AND dl.date >= TO_CHAR(CURRENT_DATE - INTERVAL '{int(days)} days', 'YYYY-MM-DD')
                ORDER BY dl.date DESC""",
             (user_id,),
         )

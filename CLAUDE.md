@@ -267,14 +267,28 @@ from the same dispatcher branch in `api/webhook.py`:
   `test_weight_state_routes_skip_and_abandons_meals` +
   `test_voice_meal_clears_lingering_text_input_state`.
 - **Commit:** TBD (this commit)
+- **Follow-up fix (same scar):** the dispatcher branch only handles
+  `/skip` while the `weight` state is live. But the `/skip` link in
+  the prompt persists in chat history, so the user can tap it after
+  the state was cleared (e.g. once they logged a meal) → it fell to
+  `handle_command`, which had no `/skip` → `errors.unknown_command`.
+  Confirmed via a read-only prod query (`awaiting_input_type` was
+  already `None` for the reporting user). **Fix:** register `/skip`
+  as a global command in `handle_command` — clears any lingering
+  `_TEXT_INPUT_STATES` and replies `weight.checkin_skipped`, so a
+  stale `/skip` link never errors. Test
+  `test_skip_is_a_globally_recognized_command`.
 - **Lesson:** (1) Any cron-pushed `awaiting_input_type` needs an
   abandon path for ALL three input modes (text/photo/voice), or the
   unprompted state traps the user. (2) A `not text.startswith("/")`
   dispatcher guard silently kills any `/command` the prompt tells the
-  user to type — if a prompt advertises `/skip`, the state's branch
-  must route `/skip`, not exclude it. The same `/skip` gap still
-  exists for the user-initiated states (water_target, target_weight,
-  weekly_delta, barcode_*, timezone, health_*) — noted follow-up.
+  user to type. (3) Any `/command` advertised inside a message must be
+  a GLOBAL command (handled in `handle_command`), because the link
+  persists in chat history and gets tapped long after the contextual
+  state is gone — contextual-only handling isn't enough. The same
+  `/skip` gap still exists for the user-initiated states
+  (water_target, target_weight, weekly_delta, barcode_*, timezone,
+  health_*) but `/skip` now no-ops gracefully for all of them.
 
 ### 5.1 — F-17 morning cron dead for 54 hours (2026-05-24)
 

@@ -3101,6 +3101,28 @@ def handle_command(conn, message: dict, text: str, first_name: str | None, profi
     if cmd != "/ask" and (profile or {}).get("awaiting_input_type") == "ask_thread":
         set_awaiting_input(conn, user_id, None)
 
+    # `/skip` is advertised by the weekly weight check-in prompt
+    # ("Or /skip to skip this week"). That command link persists in
+    # chat history, so the user can tap it long after the prompt —
+    # including after the 'weight' state was already cleared (e.g. they
+    # logged a meal, which abandons the prompt). It must ALWAYS resolve
+    # gracefully, never fall through to errors.unknown_command.
+    #   - while the weight branch in process_update is active, '/skip'
+    #     is caught THERE (routes to handle_weight_input) and never
+    #     reaches here;
+    #   - otherwise (stale link / state already cleared) we land here:
+    #     clear any lingering text-input prompt and acknowledge.
+    # (Scar 5.10.)
+    if cmd == "/skip":
+        if (profile or {}).get("awaiting_input_type") in _TEXT_INPUT_STATES:
+            set_awaiting_input(conn, user_id, None)
+        send_message(
+            chat_id,
+            _t("weight.checkin_skipped", profile),
+            reply_markup=main_menu_keyboard(locale=i18n_mod.locale_of(profile)),
+        )
+        return
+
     if cmd == "/help":
         send_message(chat_id, help_message(i18n_mod.locale_of(profile)), reply_markup=main_menu_keyboard(locale=i18n_mod.locale_of(profile)))
         return

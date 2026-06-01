@@ -2785,6 +2785,32 @@ def test_weight_state_routes_skip_and_abandons_meals():
     )
 
 
+def test_skip_is_a_globally_recognized_command():
+    """Scar 5.10 part 2: '/skip' is advertised by the weekly weight
+    check-in prompt and the command link persists in chat history. The
+    user can tap it after the 'weight' state was already cleared (e.g.
+    once they logged a meal). It MUST resolve gracefully in
+    handle_command, not fall through to errors.unknown_command.
+
+    Source-grep guard: handle_command has a `cmd == "/skip"` branch that
+    clears a lingering text-input state and acknowledges."""
+    import inspect
+    from api import webhook
+    src = inspect.getsource(webhook.handle_command)
+    skip_idx = src.find('cmd == "/skip"')
+    assert skip_idx >= 0, (
+        "Scar 5.10: handle_command must recognize '/skip' so the "
+        "advertised command link never returns 'unknown command'."
+    )
+    branch = src[skip_idx:skip_idx + 500]
+    assert "set_awaiting_input(conn, user_id, None)" in branch, (
+        "Scar 5.10: /skip command must clear a lingering text-input state."
+    )
+    assert "weight.checkin_skipped" in branch, (
+        "Scar 5.10: /skip command must acknowledge with checkin_skipped."
+    )
+
+
 def test_voice_meal_clears_lingering_text_input_state():
     """Scar 5.10 consistency: handle_voice logs a voice meal even while a
     text-input prompt (e.g. the weekly 'weight' check-in) is pending. Before

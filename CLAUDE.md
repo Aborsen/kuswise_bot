@@ -238,6 +238,44 @@ Curated list, dated, each with the fix commit hash. **When you hit a
 new bug worth remembering, append an entry here in the same commit as
 the fix.** Convention: one line per scar, then a "Fix" sub-bullet.
 
+### 5.10 — Weekly weight check-in trapped typed meals + dead `/skip` (2026-05-28)
+
+`cron_weekly_weight_checkin` sets `awaiting_input_type='weight'`
+unprompted (the only cron that pushes an input state). Two bugs
+from the same dispatcher branch in `api/webhook.py`:
+
+1. The branch routed **every** non-slash text to
+   `handle_weight_input`, which rejects non-numbers with
+   `weight.not_a_number` **without clearing the state** — so every
+   typed meal ("2 eggs") bounced in a "that's not a number" loop
+   until the user sent a bare number or `/cancel`. Photo (guard at
+   ~`webhook.py:525`) and voice (`handle_voice` never checks
+   `weight`) already escaped; **text had no abandon path.**
+2. The branch was gated `and not text.startswith("/")`, so the
+   `/skip` the prompt advertises (`weight.checkin_prompt`) never
+   reached `handle_weight_input` (which handles it) — it fell to the
+   command dispatcher → "unknown command."
+
+- **Fix:** restructure the weight branch — route
+  `("/skip", "skip")` and `_parse_float`-able bare numbers to
+  `handle_weight_input`; for any other **non-command** text, clear
+  `awaiting_input_type` and fall through to `handle_text_entry`
+  (the canonical typed-meal path); let real slash commands pass
+  through unchanged. Mirror the photo guard in `handle_voice` too
+  (clear a lingering `_TEXT_INPUT_STATES` flag before the meal
+  fallthrough). Regression tests
+  `test_weight_state_routes_skip_and_abandons_meals` +
+  `test_voice_meal_clears_lingering_text_input_state`.
+- **Commit:** TBD (this commit)
+- **Lesson:** (1) Any cron-pushed `awaiting_input_type` needs an
+  abandon path for ALL three input modes (text/photo/voice), or the
+  unprompted state traps the user. (2) A `not text.startswith("/")`
+  dispatcher guard silently kills any `/command` the prompt tells the
+  user to type — if a prompt advertises `/skip`, the state's branch
+  must route `/skip`, not exclude it. The same `/skip` gap still
+  exists for the user-initiated states (water_target, target_weight,
+  weekly_delta, barcode_*, timezone, health_*) — noted follow-up.
+
 ### 5.1 — F-17 morning cron dead for 54 hours (2026-05-24)
 
 Lowercase `callable` builtin used as a type annotation

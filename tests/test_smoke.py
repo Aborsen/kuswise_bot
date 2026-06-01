@@ -2737,6 +2737,73 @@ def test_cancel_handlers_clear_awaiting_input_type():
     )
 
 
+def test_weight_state_routes_skip_and_abandons_meals():
+    """Scar 5.10: the weekly weight check-in sets awaiting_input_type='weight'
+    unprompted. The dispatcher's weight branch must:
+
+      (a) route '/skip' / 'skip' / a bare number to handle_weight_input
+          — the prompt advertises '/skip', so it cannot be gated behind
+          `not text.startswith("/")` (that made '/skip' fall to the
+          command dispatcher → 'unknown command'); and
+      (b) for any other NON-command text, clear awaiting_input_type and
+          fall through to meal logging — otherwise typed meals get stuck
+          in a 'weight.not_a_number' loop.
+
+    Source-grep guard so neither half can silently regress."""
+    import inspect
+    from api import webhook
+    src = inspect.getsource(webhook.process_update)
+
+    # Locate the weight branch.
+    weight_idx = src.find('"awaiting_input_type") == "weight"')
+    assert weight_idx >= 0, "weight awaiting_input_type branch not found"
+    # The branch body is the ~600 chars following the condition.
+    branch = src[weight_idx:weight_idx + 700]
+
+    # (a) '/skip' and 'skip' must route to the weight handler.
+    assert '("/skip", "skip")' in branch, (
+        "Scar 5.10: weight branch must route ('/skip', 'skip') to "
+        "handle_weight_input so the advertised /skip works."
+    )
+    assert "_parse_float(" in branch, (
+        "Scar 5.10: weight branch must use _parse_float to detect a bare "
+        "weight number vs. a meal description."
+    )
+    # (b) non-command text must abandon the prompt (clear the state).
+    assert "set_awaiting_input(conn, user_id, None)" in branch, (
+        "Scar 5.10: weight branch must clear awaiting_input_type for "
+        "non-weight text so typed meals aren't trapped."
+    )
+    # The blanket guard that killed /skip must be gone from the condition
+    # line itself. Check the condition (first ~120 chars) has no
+    # `startswith("/")` gate.
+    condition = src[weight_idx:weight_idx + 120]
+    assert "startswith" not in condition, (
+        "Scar 5.10: the weight branch CONDITION must not be gated on "
+        "`not text.startswith('/')` — that blocks the advertised /skip. "
+        "The slash handling belongs inside the branch body."
+    )
+
+
+def test_voice_meal_clears_lingering_text_input_state():
+    """Scar 5.10 consistency: handle_voice logs a voice meal even while a
+    text-input prompt (e.g. the weekly 'weight' check-in) is pending. Before
+    the final meal fallthrough it must clear a lingering _TEXT_INPUT_STATES
+    flag (mirroring the photo guard) so the flag doesn't trap the user's
+    next typed message."""
+    import inspect
+    from api import webhook
+    src = inspect.getsource(webhook.handle_voice)
+    save_idx = src.find("save_pending_text(conn, user_id, transcript)")
+    assert save_idx >= 0, "voice meal fallthrough (save_pending_text) not found"
+    # The clear must happen in the ~400 chars BEFORE the meal fallthrough.
+    pre = src[max(0, save_idx - 400):save_idx]
+    assert "_TEXT_INPUT_STATES" in pre and "set_awaiting_input(conn, user_id, None)" in pre, (
+        "Scar 5.10: handle_voice must clear a lingering _TEXT_INPUT_STATES "
+        "flag before the meal fallthrough."
+    )
+
+
 def test_main_menu_keyboard_layout_after_scanner_merge():
     """Current layout: row 3 is [profile, scanner]; suggest + recent
     are no longer on the visible keyboard but still dispatch via

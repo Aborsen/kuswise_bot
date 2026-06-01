@@ -571,16 +571,36 @@ def process_update(update: dict) -> None:
                 handle_manual_text_input(conn, message, text, _pending_for_text, profile)
                 return
 
-        # Weight check-in / manual weight edit takes priority over everything
-        # except the /cancel escape hatch (handled further down).
+        # Weight check-in / manual weight edit.
+        #  - "/skip" / "skip" / a bare number → the weight handler (it
+        #    does skip + range validation). We must NOT gate this on
+        #    `not text.startswith("/")`, or the "/skip" the check-in
+        #    prompt advertises never reaches the handler and dies in the
+        #    command dispatcher as "unknown command".
+        #  - any other NON-command text → implicit "abandon the prompt"
+        #    signal: clear the state and fall through to normal meal
+        #    logging, mirroring the photo guard (~line 525) and the
+        #    voice handler (neither traps a non-weight message).
+        #    Without this, the weekly cron's pushed 'weight' state
+        #    turned every typed meal into a "weight.not_a_number" loop
+        #    until the user sent a number or /cancel.
+        #  - a real slash command (/profile, /ask, …) → fall through
+        #    unchanged; weight state preserved.
+        # (Scar 5.10.)
         if (
             user_id
             and profile
             and profile.get("awaiting_input_type") == "weight"
-            and not text.startswith("/")
         ):
-            handle_weight_input(conn, chat_id, user_id, first_name, text, profile)
-            return
+            _cleaned = text.strip()
+            if _cleaned.lower() in ("/skip", "skip") or _parse_float(_cleaned) is not None:
+                handle_weight_input(conn, chat_id, user_id, first_name, text, profile)
+                return
+            if not _cleaned.startswith("/"):
+                set_awaiting_input(conn, user_id, None)
+                profile["awaiting_input_type"] = None
+                # fall through to the meal-logging path below
+            # else: a real command (e.g. /profile) — fall through unchanged
 
         # Manual water-target entry from /profile → Water goal → Custom value.
         if (
@@ -1746,6 +1766,14 @@ def handle_voice(conn, message: dict) -> None:
         profile = get_profile(conn, user_id)
         handle_ask(conn, user_id, chat_id, transcript, profile)
         return
+
+    # Mirror the photo guard (~line 525): a voice message that reaches
+    # the meal fallthrough while a text-input prompt (e.g. the weekly
+    # 'weight' check-in) is pending is an implicit "abandon the prompt"
+    # signal — clear the lingering flag so it doesn't trap the user's
+    # next typed message. (Scar 5.10.)
+    if user_id and (fresh_profile or {}).get("awaiting_input_type") in _TEXT_INPUT_STATES:
+        set_awaiting_input(conn, user_id, None)
 
     # Otherwise reuse the existing text-entry flow: saves as pending and asks meal type.
     save_pending_text(conn, user_id, transcript)

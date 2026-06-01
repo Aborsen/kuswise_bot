@@ -119,7 +119,7 @@ class handler(BaseHTTPRequestHandler):
 # in isolation.
 
 
-def _check_cron_firing(conn) -> dict:
+def _check_cron_firing(conn, *, today_dow: int | None = None) -> dict:
     """Hourly crons should fire ≥20× / day; daily crons ≥1×.
 
     Uses the per-status breakdown (`count_cron_runs_24h_by_status`) so
@@ -138,7 +138,11 @@ def _check_cron_firing(conn) -> dict:
     Weekly check-in is `⏸️ not scheduled today` on non-Mondays —
     monitor doesn't alert outside its scheduled window.
     """
-    today_dow = datetime.now(timezone.utc).weekday()  # Mon=0
+    # `today_dow` is injectable so tests can pin the weekday (the weekly
+    # check-in branch below is day-of-week sensitive); production passes
+    # nothing and we read the real clock. Mon=0.
+    if today_dow is None:
+        today_dow = datetime.now(timezone.utc).weekday()
     specs = [
         ("daily_summary",    "cron_daily_summary",         "hourly", None),
         ("good_morning",     "cron_good_morning",          "hourly", None),

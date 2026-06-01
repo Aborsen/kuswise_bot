@@ -3187,7 +3187,9 @@ def test_health_monitor_check_cron_firing_alerts_on_low_starts(monkeypatch):
     }
     monkeypatch.setattr(cm, "count_cron_runs_24h_by_status",
                         lambda conn, name: breakdowns[name])
-    out = cm._check_cron_firing(conn=None)
+    # Pin a non-Monday so the weekly check-in is "not scheduled today"
+    # and doesn't add a day-dependent alert (see _check_cron_firing).
+    out = cm._check_cron_firing(conn=None, today_dow=2)
     assert out["ok"] is False
     # The alert text must point at Vercel-not-invoking, not function-crashing.
     morning_alert = next(a for a in out["alerts"] if "cron_good_morning" in a)
@@ -3212,7 +3214,7 @@ def test_health_monitor_check_cron_firing_alerts_on_crashes(monkeypatch):
     }
     monkeypatch.setattr(cm, "count_cron_runs_24h_by_status",
                         lambda conn, name: breakdowns[name])
-    out = cm._check_cron_firing(conn=None)
+    out = cm._check_cron_firing(conn=None, today_dow=2)  # pin non-Monday
     assert out["ok"] is False
     morning_alert = next(a for a in out["alerts"] if "cron_good_morning" in a)
     assert "started but never finished" in morning_alert
@@ -3223,20 +3225,63 @@ def test_health_monitor_check_cron_firing_alerts_on_crashes(monkeypatch):
 
 
 def test_health_monitor_check_cron_firing_passes_when_above_floor(monkeypatch):
-    """Healthy: enough starts AND no unfinished → no alerts."""
+    """Healthy: enough starts AND no unfinished → no alerts.
+
+    The weekly check-in branch is day-of-week sensitive (Mon=0), so this
+    test pins `today_dow` explicitly instead of reading the real clock —
+    otherwise it false-fails every Monday, when 0 weekly starts is a
+    legitimate alert (scar 5.10 follow-up: this test was a weekly flake)."""
     import importlib
     cm = importlib.import_module("api.cron_health_monitor")
+
+    # --- Non-Monday: weekly check-in is "not scheduled today", so 0
+    #     weekly starts is fine. Everything healthy → no alerts. ---
     breakdowns = {
         "cron_daily_summary":         _breakdown(started=24, ok=24),
         "cron_good_morning":          _breakdown(started=22, ok=22),  # ≥20
         "cron_midnight_reset":        _breakdown(started=1,  ok=1),
-        "cron_weekly_weight_checkin": _breakdown(),
+        "cron_weekly_weight_checkin": _breakdown(),  # 0 — not scheduled today
     }
     monkeypatch.setattr(cm, "count_cron_runs_24h_by_status",
                         lambda conn, name: breakdowns[name])
-    out = cm._check_cron_firing(conn=None)
+    out = cm._check_cron_firing(conn=None, today_dow=2)  # Wednesday
     assert out["ok"] is True
     assert out["alerts"] == []
+    # The weekly line is present but explicitly marked not-scheduled.
+    assert any("not scheduled today" in ln for ln in out["lines"])
+
+    # --- Monday: the weekly check-in IS scheduled, and here it fired
+    #     (≥1 start) → still healthy, still no alerts. ---
+    breakdowns["cron_weekly_weight_checkin"] = _breakdown(started=1, ok=1)
+    out_mon = cm._check_cron_firing(conn=None, today_dow=0)  # Monday
+    assert out_mon["ok"] is True
+    assert out_mon["alerts"] == []
+
+
+def test_health_monitor_weekly_checkin_missing_on_monday_alerts(monkeypatch):
+    """On Monday, the weekly check-in is scheduled; 0 starts must alert
+    (Vercel didn't invoke it). On any other day, 0 starts is silent.
+    Locks in the day-of-week gating of the weekly branch."""
+    import importlib
+    cm = importlib.import_module("api.cron_health_monitor")
+    breakdowns = {
+        "cron_daily_summary":         _breakdown(started=24, ok=24),
+        "cron_good_morning":          _breakdown(started=22, ok=22),
+        "cron_midnight_reset":        _breakdown(started=1,  ok=1),
+        "cron_weekly_weight_checkin": _breakdown(),  # 0 starts
+    }
+    monkeypatch.setattr(cm, "count_cron_runs_24h_by_status",
+                        lambda conn, name: breakdowns[name])
+
+    # Monday + 0 weekly starts → alert, overall not ok.
+    out_mon = cm._check_cron_firing(conn=None, today_dow=0)
+    assert out_mon["ok"] is False
+    assert any("cron_weekly_weight_checkin" in a for a in out_mon["alerts"])
+
+    # Non-Monday + 0 weekly starts → no weekly alert, overall ok.
+    out_other = cm._check_cron_firing(conn=None, today_dow=3)  # Thursday
+    assert out_other["ok"] is True
+    assert not any("cron_weekly_weight_checkin" in a for a in out_other["alerts"])
 
 
 def test_health_monitor_unfinished_tolerance_one_or_two(monkeypatch):
@@ -3253,7 +3298,7 @@ def test_health_monitor_unfinished_tolerance_one_or_two(monkeypatch):
     }
     monkeypatch.setattr(cm, "count_cron_runs_24h_by_status",
                         lambda conn, name: breakdowns[name])
-    out = cm._check_cron_firing(conn=None)
+    out = cm._check_cron_firing(conn=None, today_dow=2)  # pin non-Monday
     # 2 unfinished is within tolerance → no crash alert.
     assert not any("started but never finished" in a for a in out["alerts"])
 
